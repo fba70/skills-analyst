@@ -1,7 +1,8 @@
 # Skill Foundry — Requirements Specification (Doc 2 of 3)
 
 **Status:** Draft v1.0 · **Date:** 2026-08-27 · **Owner:** TBD
-**Companion documents:** `01-business-concept.md` (vision, incentives, monetization, licensing) · `03-implementation-spec.md` (architecture, platform & interface selection)
+**Companion documents:** `01-business-concept.md` (vision, incentives, monetization, licensing) · `03-implementation-spec.md` (architecture, platform & interface selection) · `04-source-ingestion-analysis.md` (source taxonomy, registry assessments, license chain, Phase-0 waves)
+**Changelog:** v1.1 — R1.1/R1.4/R1.6 sharpened from the source analysis (Doc 4)
 
 > Scope of this document: functional and non-functional requirements for the platform. The *why and the money* live in Doc 1; the *how on our stack* lives in Doc 3. Where a requirement here depends on a commercial decision (tiers, gating) it references Doc 1 rather than restating it.
 
@@ -71,17 +72,17 @@ The **closing of the loop** is a first-class requirement (§7.6), not a byproduc
 
 **P0**
 
-- **R1.1 Source connectors:** Support at minimum (a) arbitrary GitHub repos, (b) awesome-list parsing, (c) GitHub code search discovery for SKILL.md-standard packages, (d) import from at least one existing public registry API. Pluggable connector interface for adding more.
+- **R1.1 Source connectors:** Support at minimum (a) arbitrary GitHub repos, (b) awesome-list parsing, (c) sharded GitHub code-search discovery for SKILL.md-standard packages (resumable shards with a coverage ledger — code search caps results per query), (d) the ClawHub API as the one hosting-registry import. Index registries (skills.sh, SkillsMP, LobeHub) are discovery-and-signal sources only: content is always re-fetched from origin, and popularity/audit signals are used solely via sanctioned interfaces with attribution (source classes and per-registry assessment: Doc 4 §2–3). Pluggable connector interface for adding more.
   - *AC:* Given a configured repo source, when sync runs, then all directory-level skills (SKILL.md + optional scripts/, references/, assets/) are captured as atomic artifacts with commit SHA.
 - **R1.2 Normalization:** Parse heterogeneous formats (Anthropic-standard SKILL.md, Claude plugins, OpenClaw skills, Cursor rules, generic AGENTS.md-style instructions) into one canonical internal schema with a `dialect` field.
   - *AC:* A skill from any supported dialect renders in the UI with the same metadata card; unparseable items land in a triage queue with a parse-error reason, never silently dropped.
 - **R1.3 Provenance record:** Every artifact stores: source URL, repo, path, author(s), license (SPDX where detectable), content hash per file, first-seen/last-seen timestamps, upstream stars/downloads where available.
   - *AC:* No skill can reach "indexed" state with a null provenance record.
-- **R1.4 Deduplication:** Exact-hash dedup plus near-duplicate detection (e.g., MinHash/embedding similarity over SKILL.md body). Duplicates cluster under one canonical entry; all sources remain attributed.
+- **R1.4 Deduplication:** Exact-hash dedup plus near-duplicate detection (e.g., MinHash/embedding similarity over SKILL.md body). Fork filtering happens at discovery time (`fork:false` + parent-repo linkage), since forks are the single largest duplicate class in the open crawl. Duplicates cluster under one canonical entry; all sources remain attributed.
   - *AC:* Given two sources with byte-identical skills, when both sync, then one canonical entry exists showing both origins; given ≥90%-similar bodies, then they are linked as a variant cluster.
 - **R1.5 Revocation & drift:** Detect upstream deletion, force-push, and content change; changed skills re-enter validation; deleted skills are tombstoned (metadata retained, content withdrawn).
   - *AC:* Given an upstream file whose hash changes, when the next sync runs, then the skill status becomes `revalidating` and the prior version stays served until the new one passes.
-- **R1.6 License gating:** Skills without a redistributable license are indexed metadata-only (name, description, link out); full-content mirroring only where the license permits.
+- **R1.6 License gating:** License resolution follows the six-step evidence-recorded chain in Doc 4 §5 (frontmatter SPDX field → nearest in-tree LICENSE file → GitHub Licenses API → ClearlyDefined → ScanCode on the prioritized slice → unresolved). Unresolved or non-redistributable (incl. CC-NC/ND, source-available) ⇒ metadata-only indexing (name, description, link out) — such skills still receive verdicts and count in corpus statistics, but their text is never mirrored nor reproduced in archetype exemplars. Licenses are stored as SPDX expressions per skill version; attribution-required licenses render attribution wherever content is shown.
 
 **P1**
 
