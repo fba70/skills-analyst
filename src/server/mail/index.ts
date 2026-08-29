@@ -10,15 +10,19 @@ export type { MailTransport, OtpEmail, OtpPurpose };
  * One interface, one transport chosen at runtime.
  *
  * Selection, in order:
- *   1. `MAIL_TRANSPORT=resend|console` — an explicit override, for testing delivery
- *      locally or silencing a deploy.
- *   2. a deployed environment (VERCEL_ENV is set) with RESEND_API_KEY — send for real.
- *   3. otherwise the console.
+ *   1. `MAIL_TRANSPORT=console` — never send, print instead.
+ *   2. RESEND_API_KEY present — send for real.
+ *   3. otherwise the console, with a warning if this looks like a deployment.
  *
- * Local development stays on the console by default even when the key is present, so
- * running the app on a laptop cannot quietly email people. A deploy *without* the key
- * falls back to the console and warns loudly, because a silent no-op there means nobody
- * can sign in while nothing looks broken.
+ * Note what this deliberately does NOT depend on: `VERCEL_ENV`. An earlier version keyed
+ * "should we really send?" off that variable, which is a system variable a project can
+ * be configured not to expose — and if it is missing, mail silently downgrades to the
+ * console and nobody can sign in. Presence of the API key is the honest signal. Local
+ * development pins `MAIL_TRANSPORT=console` in .env instead, so a laptop still cannot
+ * quietly email people.
+ *
+ * The chosen transport is logged once, because "which transport is this deployment
+ * using" is the first question when mail does not arrive.
  */
 
 const purposeLabel: Record<OtpPurpose, string> = {
@@ -56,22 +60,27 @@ export function getTransport(): MailTransport {
 
   const apiKey = process.env.RESEND_API_KEY?.trim();
   const override = process.env.MAIL_TRANSPORT?.trim().toLowerCase();
-  const isDeployed = Boolean(process.env.VERCEL_ENV);
 
   if (override === "console") {
+    console.info("[mail] transport=console (MAIL_TRANSPORT=console) — nothing is sent");
     cached = consoleTransport;
-  } else if (override === "resend" || (isDeployed && apiKey)) {
-    if (!apiKey) {
-      throw new Error("MAIL_TRANSPORT=resend but RESEND_API_KEY is not set");
-    }
+  } else if (apiKey) {
+    const from = process.env.MAIL_FROM?.trim();
+    console.info(
+      `[mail] transport=resend from=${from || "onboarding@resend.dev (DEFAULT)"}` +
+        (from
+          ? ""
+          : " — the shared sender only delivers to the Resend account owner's address"),
+    );
     cached = createResendTransport(apiKey);
   } else {
-    if (isDeployed) {
-      console.warn(
-        "[mail] Deployed without RESEND_API_KEY — codes are going to the log, so " +
-          "nobody can sign in. Set RESEND_API_KEY (and MAIL_FROM).",
-      );
+    if (override === "resend") {
+      throw new Error("MAIL_TRANSPORT=resend but RESEND_API_KEY is not set");
     }
+    console.warn(
+      "[mail] transport=console because RESEND_API_KEY is missing — codes go to the " +
+        "log, so nobody can sign in. Set RESEND_API_KEY (and MAIL_FROM).",
+    );
     cached = consoleTransport;
   }
 
