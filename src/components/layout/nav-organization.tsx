@@ -24,9 +24,9 @@ export function NavOrganization({ name, role }: NavOrganizationProps) {
             {name ? initials(name) : <Building2 className="size-4" />}
           </AvatarFallback>
         </Avatar>
-        <div className="grid flex-1 text-left text-sm leading-tight">
-          <span className="truncate font-medium">{name}</span>
-          <span className="text-muted-foreground truncate text-xs capitalize">
+        <div className="grid flex-1 text-left leading-tight">
+          <span className="truncate text-[13px] font-medium">{name}</span>
+          <span className="text-muted-foreground truncate text-[11px] capitalize">
             {role}
           </span>
         </div>

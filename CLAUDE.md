@@ -84,6 +84,27 @@ checks membership itself. Never `"use server"`.
 Sign-in is passwordless: email plus a 6-digit code, same flow for sign-up. Every user
 gets a personal organization on creation, and every new session starts with it active.
 
+### Object storage
+
+One R2 bucket, `skills-foundry` (EU jurisdiction — the S3 endpoint host needs the `.eu`
+part or you get `NoSuchBucket`). Prefixes by trust level: `public/`, `quarantine/`,
+`drafts/`. Keys are content-addressed — `sha256/<hash>/<file>` — so the key *is* the hash
+the verdict covers, and integrity is structural rather than checked.
+
+Every object is private. Access is mediated by the app, so bucket-level access is not the
+security boundary and the three-bucket split in Doc 3 is **not** needed at this stage.
+
+> **NEVER attach a public custom domain to `skills-foundry`.**
+>
+> R2 grants public access per *bucket*, never per prefix. A domain on this bucket would
+> expose `quarantine/` — content we assume is malicious — and `drafts/`, which is private
+> tenant data. Before any CDN-served public serving exists, the public content moves to
+> its own bucket. This is the one storage rule that cannot be worked around later.
+
+Until then, serving bytes is a choice between a proxy route (simple; 4.5 MB response cap
+and Vercel egress) and short-TTL presigned GET URLs (no egress, but the URL is a bearer
+token until it expires — public corpus only, never private-tier).
+
 ### Migrations — the only way the database changes
 
 Every schema change is a committed file in `migrations/`. Nothing is typed at a psql
@@ -116,26 +137,25 @@ migration. Do not hand-tune those columns.
 
 ## Open TODOs carried from the specs
 
-### Tenant isolation, layer 2 (do this with the first org-scoped table)
+### ~~Tenant isolation, layer 2~~ — done (migration 0002)
 
-Doc 3 C4 wants two layers. Layer 1 — the DAL — is built: `src/server/dal/` resolves the
-org from the session and no route handler can reach the database. Layer 2 is the
-database backstop, and it is not built yet, because it has nothing to protect until the
-first table with an `org_id` column exists. Three pieces, all in one migration:
+Both layers are live. Layer 1 is the DAL; layer 2 is Postgres itself:
 
-1. **A least-privilege runtime role.** The app currently connects as `neondb_owner`,
-   which is a superuser-ish role carrying `BYPASSRLS` — policies would simply not apply
-   to it. Create `app_runtime`, grant it DML on the app tables and nothing more, and
-   point the app's `DATABASE_URL` at it. Migrations keep using the owner role.
-2. **`SET LOCAL app.org_id` in every DAL entry point.** Each entry point opens a
-   transaction and sets the current org on it. This only works inside a transaction —
-   which is the reason the stack uses `pg` over TCP instead of Neon's HTTP driver.
-3. **Policies on every org-scoped table:** allow the row when `org_id IS NULL` (public
-   corpus) or `org_id = current_setting('app.org_id')::uuid`.
+- The app connects as **`app_runtime`** (NOSUPERUSER, **NOBYPASSRLS**), not `neondb_owner`
+  — the owner carries BYPASSRLS, so policies written for it would silently do nothing.
+- `src/server/dal/scope.ts` opens a transaction and issues `SET LOCAL app.org_id` on
+  every org-scoped read and write. Use `withOrgScope` / `withPublicScope`;
+  `withExplicitOrgScope` is for background work with no session and stays `server-only`.
+- Policies on all seven corpus tables: `org_id IS NULL` (public) OR
+  `org_id = current_setting('app.org_id', true)`.
 
-Policy coverage on all org-scoped tables is the launch gate for the first private-corpus
-tenant. Ship it with the schema, not after — a backstop bolted on under deadline is not
-a backstop.
+`pnpm db:verify-rls` proves it end to end: anonymous sees only public, org A never sees
+org B, and a cross-org write is refused. Run it after any schema change that adds an
+org-scoped table — **and add the policy in the same migration**, because a new table
+without one is invisible to the app rather than merely unprotected.
+
+The role's password is deliberately **not** in a migration (those get committed).
+`pnpm db:role-password` sets it and rewrites `DATABASE_URL` in `.env`.
 
 ### Smaller ones
 
