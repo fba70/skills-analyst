@@ -80,9 +80,9 @@ export function NavUser({ name, email, image }: NavUserProps) {
                 {initials(user.name || user.email)}
               </AvatarFallback>
             </Avatar>
-            <div className="grid flex-1 text-left text-sm leading-tight">
-              <span className="truncate font-medium">{user.name}</span>
-              <span className="text-muted-foreground truncate text-xs">
+            <div className="grid flex-1 text-left leading-tight">
+              <span className="truncate text-[13px] font-medium">{user.name}</span>
+              <span className="text-muted-foreground truncate text-[11px]">
                 {user.email}
               </span>
             </div>

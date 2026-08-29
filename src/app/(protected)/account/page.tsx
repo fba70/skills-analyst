@@ -54,7 +54,7 @@ export default async function AccountPage() {
                 className="grid gap-1 sm:grid-cols-[12rem_1fr] sm:gap-4"
               >
                 <dt className="text-muted-foreground">{row.label}</dt>
-                <dd className="font-medium break-words">{row.value}</dd>
+                <dd className="font-medium wrap-break-words">{row.value}</dd>
               </div>
             ))}
           </dl>

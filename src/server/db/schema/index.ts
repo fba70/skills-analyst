@@ -1,6 +1,10 @@
 /**
- * Every table in one namespace. App tables (sources, skills, skill_versions,
- * verdicts, archetypes, events, …) get their own files next to `auth.ts` and are
- * re-exported here.
+ * Every table in one namespace.
+ *
+ * Order matters only for readability; Drizzle resolves references by object.
  */
+export * from "./enums";
 export * from "./auth";
+export * from "./corpus";
+export * from "./validation";
+export * from "./events";

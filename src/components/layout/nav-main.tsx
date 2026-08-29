@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, Library, type LucideIcon } from "lucide-react";
 
 import {
   SidebarGroup,
@@ -18,9 +18,10 @@ type NavItem = {
   icon: LucideIcon;
 };
 
-/** The main menu. One entry today; the registry, builder and assistant land here. */
+/** The main menu. Builder and assistant land here next. */
 const items: NavItem[] = [
   { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { title: "Registry", href: "/skills", icon: Library },
 ];
 
 export function NavMain() {
