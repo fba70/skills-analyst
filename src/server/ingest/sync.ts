@@ -4,8 +4,16 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 
 import { githubConnector } from "@/server/connectors/github";
 import type { Connector, SourceConfig } from "@/server/connectors/types";
+import { discoveryPolicy } from "@/server/crawl/policy";
 import { db } from "@/server/db";
-import { events, skills, skillSignals, skillVersions, sources } from "@/server/db/schema";
+import {
+  discoveredRepos,
+  events,
+  skills,
+  skillSignals,
+  skillVersions,
+  sources,
+} from "@/server/db/schema";
 import { resolveLicense } from "@/server/licensing/resolve";
 import { normalizeSkill } from "@/server/skills/normalize";
 import {
@@ -54,6 +62,11 @@ export type SyncOptions = {
   dryRun?: boolean;
   /** Stop after N skills. Useful on a first look at a large repo. */
   limit?: number;
+  /**
+   * Sync a repository that exceeds the marker-count threshold anyway. Off by default and
+   * never set by the automated path — this is for a human who has looked and decided.
+   */
+  allowLargeRepo?: boolean;
   onProgress?: (message: string) => void;
 };
 
@@ -83,6 +96,21 @@ export type SyncReport = {
   unchanged: number;
 };
 
+/**
+ * Sources that have never completed a sync, newest promotions first.
+ *
+ * Kept here rather than in the CLI because the cron dispatcher will need exactly the same
+ * query — the trigger changes, the selection should not.
+ */
+export async function pendingSources(limit = 10) {
+  return db
+    .select({ id: sources.id, url: sources.url, name: sources.name })
+    .from(sources)
+    .where(and(isNull(sources.lastSuccessAt), eq(sources.enabled, true)))
+    .orderBy(sources.createdAt)
+    .limit(limit);
+}
+
 export async function syncSource(options: SyncOptions): Promise<SyncReport> {
   const orgId = options.orgId ?? null;
   const log = options.onProgress ?? (() => {});
@@ -97,6 +125,31 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
   log(`enumerating ${options.sourceUrl}`);
   const enumerated = await connector.enumerate(config, null);
   log(`found ${enumerated.refs.length} skill(s)`);
+
+  /**
+   * Re-check the marker count against the real tree.
+   *
+   * Promotion applies this same threshold to the count code search *sampled*, which is
+   * one shard's worth — `pm-claude-skills` showed 11 markers at discovery and actually
+   * holds 3,551. Discovery guesses; the tree knows. Checking only at discovery let a
+   * clone farm through and turned one source into thousands of file fetches.
+   *
+   * Held for review rather than skipped, and the source is disabled so the queue stops
+   * retrying it — the same posture as promotion, for the same reason: it may still hold
+   * real skills.
+   */
+  if (
+    !options.allowLargeRepo &&
+    !options.dryRun &&
+    enumerated.refs.length > discoveryPolicy.markerCountReviewThreshold
+  ) {
+    await holdForReview(options.sourceUrl, enumerated.refs.length, orgId);
+    throw new Error(
+      `${options.sourceUrl} holds ${enumerated.refs.length} skills, over the ` +
+        `${discoveryPolicy.markerCountReviewThreshold} threshold — held for review, ` +
+        `source disabled. Re-run with allowLargeRepo to sync it anyway.`,
+    );
+  }
 
   const refs = options.limit ? enumerated.refs.slice(0, options.limit) : enumerated.refs;
   const report: SyncReport = {
@@ -197,6 +250,38 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
   }
 
   return report;
+}
+
+/** Disables a source and returns its candidate row to the review queue, with the reason. */
+async function holdForReview(
+  url: string,
+  markerCount: number,
+  orgId: string | null,
+): Promise<void> {
+  const reason = `${markerCount} skills in one repository — over the ${discoveryPolicy.markerCountReviewThreshold} threshold`;
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(sources)
+      .set({ enabled: false, health: "paused", healthDetail: { reason }, updatedAt: new Date() })
+      .where(eq(sources.url, url));
+
+    await tx
+      .update(discoveredRepos)
+      .set({ status: "needs_review", skipReason: reason })
+      .where(eq(discoveredRepos.url, url));
+
+    await tx.insert(events).values({
+      orgId,
+      actorType: "system",
+      actorId: "ingest",
+      kind: "source.held_for_review",
+      subjectType: "sources",
+      subjectId: null,
+      reason,
+      payload: { url, markerCount, threshold: discoveryPolicy.markerCountReviewThreshold },
+    });
+  });
 }
 
 async function upsertSource(

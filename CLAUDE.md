@@ -157,14 +157,94 @@ without one is invisible to the app rather than merely unprotected.
 The role's password is deliberately **not** in a migration (those get committed).
 `pnpm db:role-password` sets it and rewrites `DATABASE_URL` in `.env`.
 
+### System admin
+
+A **system admin** is not an organisation role. Org roles (owner, member) say what
+someone may do inside their own tenant; this says what they may do to the platform — see
+every user, run ingestion, change policy.
+
+- The role lives on `user.role`, the field Better Auth's admin plugin already checks, so
+  the two agree rather than competing. The constant is `src/server/auth/roles.ts`, a leaf
+  module with no imports (the DAL reaches `next/navigation`, and `auth` → `dal/admin` →
+  `dal/session` → `auth` would be a cycle).
+- `ADMIN_EMAILS` grants the role on sign-up, so a fresh deployment has someone who can
+  reach Settings without a hand-edited database. `pnpm admin:grant <email> [--revoke]` is
+  the way back in after a lockout.
+- `/settings` is admin-only three times over: the sidebar only renders the link for
+  admins, the page `notFound()`s for everyone else (a non-admin has no reason to learn the
+  route exists), and **every server action re-checks `requireAdmin()`** — an action is a
+  POST endpoint, so a page guard protects the view, not the operation.
+- Tabs today: **Ingestion** (bounded manual runs of crawl / promote / sync / validate) and
+  **Users** (all users, grant or revoke admin, ban). More tabs go here.
+
+### Admin settings — the knobs must become data, not code
+
+The `/settings` shell exists; the policy still does not live in it. Every decision about
+*what gets fetched and how it is judged* is currently a constant in
+`src/server/crawl/policy.ts` (and the analyzer thresholds in `src/server/validation/`).
+That is deliberate for now — one place to change, easy to reason about — but it is not
+where they belong.
+
+Once ingestion works end to end, the real questions become operational: what can actually
+be fetched, how good is it, how much is duplicated, what is worth analysing. Those are
+answered by tuning, repeatedly, against a live corpus — and tuning through a redeploy is
+too slow to learn anything. Doc 3 already makes this argument for sync cadence
+("cadence is data, not deploys"); it applies to the whole policy surface.
+
+What needs to move into a settings table with an admin UI, audited through `events` like
+any other state change:
+
+- **Discovery:** path exclusions, marker-count cap before review, star/recency floors,
+  which shards to crawl, whether forks are ever included.
+- **Promotion:** auto-promote vs hold-for-review thresholds.
+- **Validation:** analyzer severity thresholds, what blocks vs warns, quality-score
+  weights, re-scan triggers.
+- **Duplicates:** the near-duplicate similarity threshold.
+- **Spend:** per-analyzer model choice and budget caps (RC.2 needs this anyway).
+
+Keep new policy constants in `policy.ts` rather than scattering them, so this becomes a
+migration of one module instead of an archaeology exercise.
+
+### Platform stats on /dashboard — a gap in the specs
+
+Not in Doc 2 or Doc 3, and worth adding after the core features land. The specs cover two
+audiences and miss a third:
+
+- **operators** — source health (R1.7), loop observability (R6.4), and the four dashboards
+  in Doc 3 §Observability;
+- **researchers** — corpus statistics as an API/dataset export (R3.7, P2);
+- **users** — nothing. `/dashboard` is currently empty.
+
+What a user needs from a trust-first registry is the corpus at a glance, and it differs
+from what an operator needs: not queue depth and rate-limit headroom, but *how much is
+here, how good is it, and how much can I actually use*. Roughly:
+
+- skills indexed, and how many sources they came from;
+- how many passed validation, how many are quarantined, quality-score distribution;
+- licence mix — mirrored vs metadata-only, since that changes what a user may do with a
+  result;
+- duplicate clusters, once R1.4 near-duplicate detection exists;
+- freshness: last sync, and corpus staleness against the 24 h target (R7.4).
+
+Every number is already derivable from `skills`, `skill_versions`, `verdicts` and
+`events` — a query and a component, not new plumbing. Keep the aggregates cheap enough to
+compute on request before reaching for a materialised view.
+
 ### Smaller ones
 
 - **Neon backoff.** Wrap DAL queries in exponential backoff with jitter. Neon documents
   this as required for cold starts, not optional.
 - **GitHub OAuth.** Doc 3 wants it as a login path for identity attribution. Additive —
   the `account` table already carries it.
-- **Real mail transport.** `src/server/mail/` prints codes to the terminal. Add a
-  provider transport there and nothing else changes.
+- **Mail reaches only one address in production.** Resend is wired and working, but no
+  domain is verified, so `MAIL_FROM` is unset and sends fall back to the shared
+  `onboarding@resend.dev`, which delivers **only to the Resend account owner**. Anyone
+  else gets a 403 and no email. Fix: verify `send.truffalo.ai` in Resend (subdomain, so
+  the apex Google Workspace MX and GoDaddy SPF-merge record stay untouched), then set
+  `MAIL_FROM` in Vercel. Until then, sign-in works for one address only.
+- **A failed send still shows the user "code sent".** Better Auth runs
+  `sendVerificationOTP` as a background task and swallows the throw, so a delivery failure
+  is visible in the logs (`[mail] …`) but not in the UI.
 - **Orphaned organizations.** Deleting a user cascades their `member` row but leaves an
   organization nobody belongs to. `deleteUser` is disabled, so this is not live yet.
 

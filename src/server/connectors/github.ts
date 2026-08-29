@@ -1,5 +1,6 @@
 import "server-only";
 
+import { ingestPolicy } from "@/server/crawl/policy";
 import { detectSkills } from "@/server/skills/detect";
 
 import type {
@@ -14,8 +15,10 @@ import type {
  * GitHub repository connector.
  *
  * Two API calls per repo, whatever its size: repo metadata, then the recursive git tree.
- * File contents come from raw.githubusercontent.com, which does **not** consume the
- * 5,000/hour API budget — that is what makes syncing a repo with fifty skills cheap.
+ * File contents come from raw.githubusercontent.com, which does not consume the
+ * 5,000/hour *API* budget — but it is not free either. It has its own undocumented
+ * limiting, and a run fetching thousands of files across many repositories earns a 429.
+ * So raw fetches retry with backoff and run at modest concurrency.
  *
  * Every raw fetch is pinned to a commit SHA rather than a branch, so a fetch is
  * reproducible and a force-push cannot silently change what we validated.
@@ -72,7 +75,14 @@ async function api<T>(path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-/** Raw content, pinned to a commit. Cheap: it is not part of the API rate limit. */
+/**
+ * Raw content, pinned to a commit.
+ *
+ * Outside the API rate limit, but not unlimited: sustained fetching returns 429, which
+ * ended four of ten repositories in one run before this retry existed. Backoff is
+ * exponential with jitter — a fixed delay just re-synchronises every worker into the next
+ * wall together.
+ */
 async function rawFile(
   owner: string,
   repo: string,
@@ -80,12 +90,27 @@ async function rawFile(
   path: string,
 ): Promise<Buffer | null> {
   const encoded = path.split("/").map(encodeURIComponent).join("/");
-  const response = await fetch(`${RAW}/${owner}/${repo}/${commitSha}/${encoded}`);
-  if (response.status === 404) return null;
-  if (!response.ok) {
-    throw new Error(`raw fetch ${path} failed: ${response.status}`);
+  const url = `${RAW}/${owner}/${repo}/${commitSha}/${encoded}`;
+
+  for (let attempt = 0; attempt <= ingestPolicy.rawMaxRetries; attempt += 1) {
+    const response = await fetch(url);
+
+    if (response.status === 404) return null;
+    if (response.ok) return Buffer.from(await response.arrayBuffer());
+
+    const retryable = response.status === 429 || response.status >= 500;
+    if (!retryable || attempt === ingestPolicy.rawMaxRetries) {
+      throw new Error(`raw fetch ${path} failed: ${response.status}`);
+    }
+
+    const retryAfter = Number(response.headers.get("retry-after"));
+    const backoff = Number.isFinite(retryAfter) && retryAfter > 0
+      ? retryAfter * 1000
+      : ingestPolicy.rawBackoffBaseMs * 2 ** attempt + Math.random() * 500;
+    await new Promise((resolve) => setTimeout(resolve, backoff));
   }
-  return Buffer.from(await response.arrayBuffer());
+
+  throw new Error(`raw fetch ${path} failed after retries`);
 }
 
 export const githubConnector: Connector = {
@@ -144,25 +169,61 @@ export const githubConnector: Connector = {
     const { owner, repo } = parseRepoUrl(config.url);
     const prefix = ref.path === "" ? "" : `${ref.path}/`;
 
-    const files = [];
-    for (const relative of ref.files) {
-      const content = await rawFile(owner, repo, ref.commitSha, `${prefix}${relative}`);
-      // A file in the tree that 404s on raw is a genuine anomaly, not a skip.
-      if (content === null) {
-        throw new Error(`${prefix}${relative} is in the tree but missing at raw`);
-      }
-      files.push({ path: relative, content });
+    if (ref.files.length > ingestPolicy.maxBundleFiles) {
+      throw new Error(
+        `${ref.path || "<root>"} claims ${ref.files.length} files, over the ` +
+          `${ingestPolicy.maxBundleFiles} cap — detection is treating a project as a skill`,
+      );
     }
 
-    const licenseFiles = [];
-    for (const path of ref.licenseCandidates) {
-      const content = await rawFile(owner, repo, ref.commitSha, path);
-      if (content) licenseFiles.push({ path, content });
-    }
+    // Bounded parallelism: sequential fetching made a 12-file skill take a dozen
+    // round-trips end to end, and a large one minutes.
+    const files = await mapWithConcurrency(
+      ref.files,
+      ingestPolicy.fetchConcurrency,
+      async (relative) => {
+        const content = await rawFile(owner, repo, ref.commitSha, `${prefix}${relative}`);
+        // A file in the tree that 404s on raw is a genuine anomaly, not a skip.
+        if (content === null) {
+          throw new Error(`${prefix}${relative} is in the tree but missing at raw`);
+        }
+        return { path: relative, content };
+      },
+    );
+
+    const fetchedLicenses = await mapWithConcurrency(
+      ref.licenseCandidates,
+      ingestPolicy.fetchConcurrency,
+      async (path) => ({ path, content: await rawFile(owner, repo, ref.commitSha, path) }),
+    );
+    const licenseFiles = fetchedLicenses
+      .filter((entry): entry is { path: string; content: Buffer } => entry.content !== null);
 
     return { ref, files, licenseFiles };
   },
 };
+
+/** Runs `worker` over `items`, at most `limit` at a time, preserving input order. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+
+  async function run(): Promise<void> {
+    while (true) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+  return results;
+}
 
 /** GitHub reports "NOASSERTION" and "other" for things it cannot identify. */
 function normalizeSpdx(spdx: string | null): string | null {

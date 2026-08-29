@@ -1,5 +1,7 @@
 import "server-only";
 
+import { isExcludedPath } from "@/server/crawl/policy";
+
 /**
  * Which directories in a file tree hold a skill, and in which dialect.
  *
@@ -27,6 +29,30 @@ const MARKERS: Array<{ file: string; dialect: SkillDialect }> = [
 const EXCLUDED_SEGMENTS = new Set([".git", "node_modules", "__pycache__", ".venv"]);
 const EXCLUDED_FILES = new Set([".DS_Store"]);
 
+/**
+ * Files that mark a directory as a *project*, not a skill bundle.
+ *
+ * The distinction matters because the two conventions collide: an `AGENTS.md` or
+ * `SKILL.md` sitting beside `package.json` is instructions *for* that project, and its
+ * siblings are the project's source code — not resources belonging to a skill.
+ */
+const PROJECT_MARKERS = new Set([
+  "package.json",
+  "pyproject.toml",
+  "cargo.toml",
+  "go.mod",
+  "pom.xml",
+  "build.gradle",
+  "gemfile",
+  "composer.json",
+  "requirements.txt",
+  "makefile",
+  "dockerfile",
+]);
+
+/** Subdirectories that genuinely belong to a skill (Doc 2 R1.1). */
+const SKILL_SUBDIRS = ["scripts", "references", "assets", "templates", "examples"];
+
 /** Licence files, matched case-insensitively at any level while walking up. */
 const LICENSE_PATTERN = /^(licen[cs]e|copying|notice)(\.[a-z0-9]+)?$/i;
 
@@ -38,7 +64,10 @@ export function isLicenseFile(path: string): boolean {
 function isExcluded(path: string): boolean {
   const segments = path.split("/");
   if (segments.some((segment) => EXCLUDED_SEGMENTS.has(segment))) return true;
-  return EXCLUDED_FILES.has(segments[segments.length - 1] ?? "");
+  if (EXCLUDED_FILES.has(segments[segments.length - 1] ?? "")) return true;
+  // The same list discovery uses. Applying it only at discovery let fixture skills in
+  // through tree enumeration — one policy, both paths.
+  return isExcludedPath(path);
 }
 
 export type DetectedSkill = {
@@ -90,19 +119,51 @@ export function detectSkills(
 
   for (const dir of dirsByDepth) {
     const prefix = dir === "" ? "" : `${dir}/`;
+    const dialect = skillDirs.get(dir)!;
+    const markerFile = MARKERS.find((m) => m.dialect === dialect)?.file;
+
+    /**
+     * How much of the directory the skill actually owns.
+     *
+     * Three cases, learned from real repositories:
+     *   - AGENTS.md is a single-file convention. It is instructions, not a bundle, so it
+     *     never claims siblings.
+     *   - A marker at the repo root, or beside package.json, describes the *project*.
+     *     Claiming its siblings swallowed a whole 4,862-file repository as "one skill"
+     *     and turned a sync into 4,508 sequential fetches.
+     *   - Otherwise it is a real skill directory: marker plus its resources.
+     */
+    const siblingNames = new Set(
+      paths
+        .filter((path) => path.startsWith(prefix) && !path.slice(prefix.length).includes("/"))
+        .map((path) => path.slice(prefix.length).toLowerCase()),
+    );
+    const looksLikeProject =
+      dir === "" || [...siblingNames].some((name) => PROJECT_MARKERS.has(name));
+    const markerOnly = dialect === "agents_md" || looksLikeProject;
+
     const files: string[] = [];
 
     for (const path of paths) {
       if (!path.startsWith(prefix) || claimed.has(path)) continue;
       if (isLicenseFile(path)) continue; // travels separately, not part of the bundle
-      files.push(path.slice(prefix.length));
+
+      const relative = path.slice(prefix.length);
+      if (markerOnly) {
+        // Only the marker itself, plus conventional resource directories when they exist.
+        const isMarker = relative === markerFile;
+        const inSkillSubdir =
+          !looksLikeProject &&
+          SKILL_SUBDIRS.some((subdir) => relative.startsWith(`${subdir}/`));
+        if (!isMarker && !inSkillSubdir) continue;
+      }
+
+      files.push(relative);
       claimed.add(path);
     }
 
     if (files.length === 0) continue;
 
-    const dialect = skillDirs.get(dir)!;
-    const markerFile = MARKERS.find((m) => m.dialect === dialect)?.file;
     files.sort((a, b) => (a === markerFile ? -1 : b === markerFile ? 1 : a.localeCompare(b)));
 
     detected.push({
