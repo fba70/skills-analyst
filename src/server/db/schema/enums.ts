@@ -112,3 +112,30 @@ export const actorType = pgEnum("actor_type", [
   "analyzer",
   "api_key",
 ]);
+
+/**
+ * A shard's place in the crawl.
+ *
+ * `saturated` is the one that matters: GitHub reported more than the 1,000-result cap, so
+ * the shard cannot be read to the end and has been split into children. Recording it
+ * distinctly from `complete` is what stops a partially-read search space from looking
+ * fully covered.
+ */
+export const crawlShardStatus = pgEnum("crawl_shard_status", [
+  "pending",
+  "running",
+  "complete",
+  "saturated",
+  "failed",
+]);
+
+/** What we decided about a repository the crawl turned up. */
+export const discoveredRepoStatus = pgEnum("discovered_repo_status", [
+  "new",
+  /** Metadata fetched, awaiting a promotion decision. */
+  "enriched",
+  "promoted",
+  /** Held for a human: probably a dataset or monorepo, but may hold real skills. */
+  "needs_review",
+  "skipped",
+]);

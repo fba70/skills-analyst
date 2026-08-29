@@ -7,6 +7,7 @@ import { admin, emailOTP, organization } from "better-auth/plugins";
 import { localization } from "better-auth-localization";
 
 import { getServerAppUrl, getTrustedOrigins } from "@/lib/app-url";
+import { ADMIN_ROLE, isBootstrapAdmin } from "./roles";
 import { db, schema } from "@/server/db";
 import { sendOtpEmail } from "@/server/mail";
 
@@ -63,8 +64,13 @@ export const auth = betterAuth({
         // then shows up as a blank sidebar row and a blank greeting. Fill it here once
         // instead of guarding for it in every component.
         before: async (newUser) => {
-          if (newUser.name?.trim()) return;
-          return { data: { ...newUser, name: nameFromEmail(newUser.email) } };
+          const patch: Record<string, unknown> = {};
+          if (!newUser.name?.trim()) patch.name = nameFromEmail(newUser.email);
+          // Bootstrap: a listed email arrives already an admin, so a fresh deployment has
+          // someone who can reach Settings without a manual database edit.
+          if (isBootstrapAdmin(newUser.email)) patch.role = ADMIN_ROLE;
+          if (Object.keys(patch).length === 0) return;
+          return { data: { ...newUser, ...patch } };
         },
         after: async (createdUser) => {
           await ensurePersonalOrganization({

@@ -1,6 +1,6 @@
 import "dotenv/config";
 
-import { syncSource } from "../src/server/ingest/sync";
+import { pendingSources, syncSource } from "../src/server/ingest/sync";
 
 /**
  * Runs one sync pass from the command line.
@@ -14,6 +14,36 @@ import { syncSource } from "../src/server/ingest/sync";
  */
 
 const args = process.argv.slice(2);
+
+/**
+ * `--pending N` syncs sources that have never completed a sync — the ones the crawl
+ * promoted. Same code path as a single URL; only the selection differs.
+ */
+if (args.includes("--pending")) {
+  const limit = Number(args[args.indexOf("--pending") + 1]) || 5;
+  const targets = await pendingSources(limit);
+  console.info(`${targets.length} source(s) never synced\n`);
+
+  let created = 0;
+  let failed = 0;
+  for (const target of targets) {
+    process.stdout.write(`  ${target.name.padEnd(46)} `);
+    try {
+      const report = await syncSource({ sourceUrl: target.url });
+      created += report.created;
+      console.info(
+        `${report.skills.length} skill(s), ${report.created} new, ` +
+          `${report.skills.filter((s) => s.contentStored).length} mirrored`,
+      );
+    } catch (error) {
+      failed += 1;
+      console.info(`failed: ${(error as Error).message.slice(0, 90)}`);
+    }
+  }
+  console.info(`\n${created} skill version(s) created across ${targets.length} source(s), ${failed} failed\n`);
+  process.exit(0);
+}
+
 const url = args.find((arg) => !arg.startsWith("--"));
 
 if (!url) {

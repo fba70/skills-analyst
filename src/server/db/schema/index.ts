@@ -7,4 +7,5 @@ export * from "./enums";
 export * from "./auth";
 export * from "./corpus";
 export * from "./validation";
+export * from "./crawl";
 export * from "./events";

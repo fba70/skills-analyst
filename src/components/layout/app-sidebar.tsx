@@ -19,6 +19,8 @@ import {
 export type AppSidebarProps = {
   user: NavUserProps;
   organization: { name: string; role: string } | null;
+  /** System admin, resolved on the server. Gates the Administration group. */
+  isAdmin?: boolean;
 };
 
 /**
@@ -26,7 +28,7 @@ export type AppSidebarProps = {
  * the sidebar renders complete on first paint. Only the interactive rows below are
  * client components.
  */
-export function AppSidebar({ user, organization }: AppSidebarProps) {
+export function AppSidebar({ user, organization, isAdmin = false }: AppSidebarProps) {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
@@ -46,7 +48,7 @@ export function AppSidebar({ user, organization }: AppSidebarProps) {
       </SidebarHeader>
 
       <SidebarContent>
-        <NavMain />
+        <NavMain isAdmin={isAdmin} />
       </SidebarContent>
 
       <SidebarFooter>

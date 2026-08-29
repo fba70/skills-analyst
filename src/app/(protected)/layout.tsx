@@ -4,6 +4,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
+import { isAdmin } from "@/server/dal/admin";
 import { getActiveOrganization } from "@/server/dal/organizations";
 import { requireSession } from "@/server/dal/session";
 
@@ -16,7 +17,7 @@ import { requireSession } from "@/server/dal/session";
  */
 export default async function ProtectedLayout({ children }: LayoutProps<"/">) {
   const session = await requireSession();
-  const organization = await getActiveOrganization();
+  const [organization, admin] = await Promise.all([getActiveOrganization(), isAdmin()]);
 
   return (
     <SidebarProvider>
@@ -29,6 +30,7 @@ export default async function ProtectedLayout({ children }: LayoutProps<"/">) {
         organization={
           organization ? { name: organization.name, role: organization.role } : null
         }
+        isAdmin={admin}
       />
       <SidebarInset className="min-w-0">
         {/* Breadcrumbs land here once there is more than one page to point at. */}
