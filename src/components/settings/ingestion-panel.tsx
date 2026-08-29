@@ -5,8 +5,10 @@ import { Loader2, Play } from "lucide-react";
 import { toast } from "sonner";
 
 import {
+  clusterAction,
   promoteAction,
   runCrawlAction,
+  signaturesAction,
   syncPendingAction,
   validateAction,
   type ActionResult,
@@ -74,6 +76,26 @@ const STAGES: Stage[] = [
     amount: 50,
     run: validateAction,
   },
+  {
+    key: "signatures",
+    title: "5 · Fingerprint",
+    description:
+      "Reads each validated bundle once and stores a MinHash signature. The expensive half of duplicate detection, and resumable.",
+    cta: "Build signatures",
+    amountLabel: "versions",
+    amount: 200,
+    run: signaturesAction,
+  },
+  {
+    key: "cluster",
+    title: "6 · Cluster duplicates",
+    description:
+      "Finds candidates from stored LSH bands, then re-reads each candidate's text to confirm it with an exact similarity rather than an estimate.",
+    cta: "Cluster",
+    amountLabel: "pairs",
+    amount: 300,
+    run: clusterAction,
+  },
 ];
 
 export function IngestionPanel() {
@@ -115,15 +137,21 @@ function StageCard({ stage }: { stage: Stage }) {
       </CardHeader>
       <CardContent className="grid gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <input
-            type="number"
-            min={1}
-            value={amount}
-            onChange={(event) => setAmount(Number(event.target.value) || 1)}
-            aria-label={`${stage.title} — ${stage.amountLabel}`}
-            className="border-input bg-background focus-visible:ring-ring h-9 w-20 rounded-md border px-3 text-sm outline-hidden focus-visible:ring-2"
-          />
-          <span className="text-muted-foreground text-sm">{stage.amountLabel}</span>
+          {stage.amountLabel ? (
+            <>
+              <input
+                type="number"
+                min={1}
+                value={amount}
+                onChange={(event) => setAmount(Number(event.target.value) || 1)}
+                aria-label={`${stage.title} — ${stage.amountLabel}`}
+                className="border-input bg-background focus-visible:ring-ring h-9 w-20 rounded-md border px-3 text-sm outline-hidden focus-visible:ring-2"
+              />
+              <span className="text-muted-foreground text-sm">{stage.amountLabel}</span>
+            </>
+          ) : (
+            <span className="text-muted-foreground text-sm">whole corpus</span>
+          )}
           <Button onClick={trigger} disabled={isPending} size="sm" className="ml-auto">
             {isPending ? (
               <Loader2 className="size-4 animate-spin" />

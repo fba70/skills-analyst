@@ -94,6 +94,12 @@ export default async function RegistryPage(props: PageProps<"/skills">) {
                           redistribution={skill.redistribution}
                           spdx={skill.licenseSpdx}
                         />
+                        {skill.variantCount > 0 ? (
+                          <Badge variant="outline" className="text-muted-foreground text-xs">
+                            +{skill.variantCount} near-duplicate
+                            {skill.variantCount === 1 ? "" : "s"}
+                          </Badge>
+                        ) : null}
                         {skill.stars !== null ? (
                           <span className="text-muted-foreground text-xs">
                             ★ {skill.stars.toLocaleString()}

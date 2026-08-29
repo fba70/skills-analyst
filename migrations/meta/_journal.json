@@ -36,6 +36,13 @@
       "when": 1788009757564,
       "tag": "0004_small_hex",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788021195759,
+      "tag": "0005_real_deathbird",
+      "breakpoints": true
     }
   ]
 }
