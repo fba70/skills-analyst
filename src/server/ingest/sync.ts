@@ -252,6 +252,29 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
   return report;
 }
 
+/** First free slug: `name`, then `name-2`, `name-3`, … within the same corpus. */
+async function uniqueSlug(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  base: string,
+  orgId: string | null,
+): Promise<string> {
+  for (let attempt = 1; attempt < 500; attempt += 1) {
+    const candidate = attempt === 1 ? base : `${base}-${attempt}`;
+    const [taken] = await tx
+      .select({ id: skills.id })
+      .from(skills)
+      .where(
+        and(
+          eq(skills.slug, candidate),
+          orgId === null ? isNull(skills.orgId) : eq(skills.orgId, orgId),
+        ),
+      )
+      .limit(1);
+    if (!taken) return candidate;
+  }
+  return `${base}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
 /** Disables a source and returns its candidate row to the review queue, with the reason. */
 async function holdForReview(
   url: string,
@@ -377,13 +400,22 @@ async function writeSkillVersion(input: WriteInput): Promise<"created" | "unchan
         })
         .where(eq(skills.id, skillId));
     } else {
+      /**
+       * Slugs must identify exactly one skill.
+       *
+       * The unique index is `(org_id, slug)` and Postgres treats NULLs as distinct, so
+       * nothing stopped 66 public skills all being `agent-hiring-panel` — and
+       * `/skills/agent-hiring-panel` then resolved to an arbitrary one. Suffix on
+       * collision so the URL stays readable and unambiguous.
+       */
+      const slug = await uniqueSlug(tx, normalized.slug, orgId);
       const [created] = await tx
         .insert(skills)
         .values({
           orgId,
           dialect: normalized.dialect,
           name: normalized.name,
-          slug: normalized.slug,
+          slug,
           summary: normalized.summary,
           status: "pending",
         })

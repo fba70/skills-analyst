@@ -50,11 +50,18 @@ next-env.d.ts
 # swc
 /.swc
 
-# assets
+# assets and specs
 /assets
+/specs
 
 # testing
 /coverage
+
+# scripts
+/scripts
+
+# DB migrations
+/migrations
 
 # claude code
 .claude/settings.local.json

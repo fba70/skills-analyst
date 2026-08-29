@@ -131,6 +131,65 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
         </CardContent>
       </Card>
 
+      {skill.canonicalOf ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Clustered under another entry</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm">
+            <p className="text-muted-foreground">
+              This skill is {(skill.canonicalOf.similarity * 100).toFixed(1)}% identical to{" "}
+              <Link
+                href={`/skills/${skill.canonicalOf.slug}`}
+                className="text-foreground underline underline-offset-4"
+              >
+                {skill.canonicalOf.name}
+              </Link>
+              , which is served as the canonical entry. This copy keeps its own provenance
+              and attribution.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {skill.variants.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              {skill.variants.length} near-duplicate
+              {skill.variants.length === 1 ? "" : "s"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-2">
+            <p className="text-muted-foreground text-sm">
+              Other copies of this skill found across sources. Each keeps its own origin and
+              attribution; only this entry is listed in search.
+            </p>
+            <ul className="grid gap-1 text-sm">
+              {skill.variants.slice(0, 25).map((variant) => (
+                <li key={variant.id} className="flex flex-wrap items-baseline gap-2">
+                  <span className="text-muted-foreground font-mono text-xs tabular-nums">
+                    {(variant.similarity * 100).toFixed(1)}%
+                  </span>
+                  <Link
+                    href={`/skills/${variant.slug}`}
+                    className="underline underline-offset-4"
+                  >
+                    {variant.name}
+                  </Link>
+                  <span className="text-muted-foreground text-xs">{variant.sourceName}</span>
+                </li>
+              ))}
+            </ul>
+            {skill.variants.length > 25 ? (
+              <p className="text-muted-foreground text-xs">
+                and {skill.variants.length - 25} more
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <ProvenanceCard
         sourceName={skill.sourceName}
         sourceUrl={skill.sourceUrl}

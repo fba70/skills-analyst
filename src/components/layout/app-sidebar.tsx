@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { Logo } from "@/components/brand";
-import { NavMain } from "@/components/layout/nav-main";
+import { NavAdmin, NavMain } from "@/components/layout/nav-main";
 import { NavOrganization } from "@/components/layout/nav-organization";
 import { NavUser, type NavUserProps } from "@/components/layout/nav-user";
 import { ThemeToggleMenuItem } from "@/components/theme-toggle";
@@ -48,7 +48,8 @@ export function AppSidebar({ user, organization, isAdmin = false }: AppSidebarPr
       </SidebarHeader>
 
       <SidebarContent>
-        <NavMain isAdmin={isAdmin} />
+        <NavMain />
+        {isAdmin ? <NavAdmin /> : null}
       </SidebarContent>
 
       <SidebarFooter>

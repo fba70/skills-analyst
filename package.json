@@ -20,7 +20,9 @@
     "mail:check": "tsx --conditions=react-server scripts/mail-check.mts",
     "crawl": "tsx --conditions=react-server scripts/crawl.mts",
     "promote": "tsx --conditions=react-server scripts/promote.mts",
-    "admin:grant": "tsx --conditions=react-server scripts/grant-admin.mts"
+    "admin:grant": "tsx --conditions=react-server scripts/grant-admin.mts",
+    "duplicates": "tsx --conditions=react-server scripts/dedupe.mts",
+    "fix:slugs": "tsx --conditions=react-server scripts/fix-slugs.mts"
   },
   "dependencies": {
     "aws4fetch": "1.0.20",

@@ -8,4 +8,5 @@ export * from "./auth";
 export * from "./corpus";
 export * from "./validation";
 export * from "./crawl";
+export * from "./analytics";
 export * from "./events";

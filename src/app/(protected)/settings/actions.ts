@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
+import { buildSignatures, clusterDuplicates } from "@/server/analytics/dedupe";
 import { runCrawl, ensureSeedShards } from "@/server/crawl/run";
 import { decideCandidates, enrichCandidates } from "@/server/crawl/promote";
 import { requireAdmin, setUserBanned, setUserRole } from "@/server/dal/admin";
@@ -106,6 +107,48 @@ export async function validateAction(limit: number): Promise<ActionResult> {
     return {
       ok: true,
       message: `${outcomes.length} validated: ${indexed} indexed, ${outcomes.length - indexed} quarantined`,
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Deduplication, as two triggers rather than one.
+ *
+ * Signatures read every validated bundle; clustering re-reads only the bundles of
+ * candidate pairs, to confirm each with an exact Jaccard rather than a MinHash estimate.
+ * Both therefore need bounding, and both are resumable.
+ */
+export async function signaturesAction(limit: number): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+    const report = await buildSignatures({ limit: Math.min(Math.max(1, limit), 500) });
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      message: `${report.processed} signature(s) built · ${report.skipped} skipped (no text) · ${report.failed} failed`,
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function clusterAction(maxPairs: number): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+    const report = await clusterDuplicates({
+      maxPairs: Math.min(Math.max(1, maxPairs), 2000),
+    });
+    revalidatePath("/settings");
+    revalidatePath("/skills");
+    return {
+      ok: true,
+      message:
+        `${report.candidatePairs} candidate(s) · ${report.confirmed} confirmed · ` +
+        `${report.rejectedByDescription} rejected as template siblings · ` +
+        `${report.variantsMarked} variant(s) in ${report.clusters} cluster(s)` +
+        (report.stoppedEarly ? " — pair budget spent, run again to continue" : ""),
     };
   } catch (error) {
     return failure(error);
