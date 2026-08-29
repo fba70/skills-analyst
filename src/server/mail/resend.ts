@@ -50,13 +50,26 @@ export function createResendTransport(apiKey: string): MailTransport {
         }),
       });
 
+      const body = await response.text().catch(() => "");
+
       if (!response.ok) {
-        const detail = await response.text().catch(() => "");
         // The recipient is safe to log; the code is not, and is never included.
         throw new Error(
-          `Resend rejected the message to ${mail.to}: ${response.status} ${detail.slice(0, 300)}`,
+          `Resend rejected the message to ${mail.to} from "${from}": ` +
+            `${response.status} ${body.slice(0, 300)}`,
         );
       }
+
+      // Log the accepted id. A 200 only means Resend took the message — it can still be
+      // dropped afterwards (unverified sender, suppression list), and the id is what you
+      // search for in the Resend dashboard to find out which.
+      let id = "unknown";
+      try {
+        id = (JSON.parse(body) as { id?: string }).id ?? "unknown";
+      } catch {
+        /* keep "unknown" */
+      }
+      console.info(`[mail] resend accepted id=${id} to=${mail.to} from="${from}"`);
     },
   };
 }
