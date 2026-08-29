@@ -7,6 +7,8 @@ import {
   organizationClient,
 } from "better-auth/client/plugins";
 
+import { getAppUrl } from "@/lib/app-url";
+
 /**
  * Browser-side client. The plugin list mirrors the server in
  * `src/server/auth/index.ts` — they must stay in step, or client calls hit routes that
@@ -19,7 +21,7 @@ import {
  * rewrites error messages before they reach the browser — nothing is lost here.
  */
 export const authClient = createAuthClient({
-  baseURL: process.env.NEXT_PUBLIC_APP_URL,
+  baseURL: getAppUrl(),
   plugins: [emailOTPClient(), adminClient(), organizationClient()],
 });
 

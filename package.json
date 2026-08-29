@@ -16,7 +16,8 @@
     "storage:verify": "tsx --conditions=react-server scripts/verify-storage.mts",
     "sync": "tsx --conditions=react-server scripts/sync-source.mts",
     "validate": "tsx --conditions=react-server scripts/validate.mts",
-    "validate:verify": "tsx --conditions=react-server scripts/verify-analyzers.mts"
+    "validate:verify": "tsx --conditions=react-server scripts/verify-analyzers.mts",
+    "mail:check": "tsx --conditions=react-server scripts/mail-check.mts"
   },
   "dependencies": {
     "aws4fetch": "1.0.20",

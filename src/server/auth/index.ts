@@ -6,6 +6,7 @@ import { nextCookies } from "better-auth/next-js";
 import { admin, emailOTP, organization } from "better-auth/plugins";
 import { localization } from "better-auth-localization";
 
+import { getServerAppUrl, getTrustedOrigins } from "@/lib/app-url";
 import { db, schema } from "@/server/db";
 import { sendOtpEmail } from "@/server/mail";
 
@@ -28,9 +29,15 @@ function nameFromEmail(email: string): string {
   return words.join(" ") || local || "New user";
 }
 
+/** Single source of truth: the plugin and the email copy must not drift apart. */
+const OTP_EXPIRY_SECONDS = 60 * 10;
+
 export const auth = betterAuth({
   appName: "Skill Foundry",
-  baseURL: process.env.BETTER_AUTH_URL,
+  // Derived, not pinned: every Vercel preview deployment has its own hostname, and a
+  // baseURL fixed to production makes Better Auth reject preview requests.
+  baseURL: getServerAppUrl(),
+  trustedOrigins: getTrustedOrigins(),
   secret: process.env.BETTER_AUTH_SECRET,
 
   database: drizzleAdapter(db, {
@@ -84,14 +91,19 @@ export const auth = betterAuth({
   plugins: [
     emailOTP({
       otpLength: 6,
-      expiresIn: 60 * 10, // 10 minutes
+      expiresIn: OTP_EXPIRY_SECONDS,
       allowedAttempts: 3,
       storeOTP: "hashed",
       // false = an unknown email signs up on first successful code
       disableSignUp: false,
       overrideDefaultEmailVerification: true,
       sendVerificationOTP: async ({ email, otp, type }) => {
-        await sendOtpEmail({ to: email, code: otp, purpose: type });
+        await sendOtpEmail({
+          to: email,
+          code: otp,
+          purpose: type,
+          expiresInMinutes: OTP_EXPIRY_SECONDS / 60,
+        });
       },
     }),
     admin(),
