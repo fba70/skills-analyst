@@ -121,6 +121,17 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
     includePaths: options.includePaths,
   };
 
+  // A curator approval is stored on the source, not passed by the caller — so the
+  // scheduled path honours it too, not just a hand-run command.
+  const [sourceRow] = await db
+    .select({ config: sources.config })
+    .from(sources)
+    .where(eq(sources.url, options.sourceUrl))
+    .limit(1);
+  const approvedLarge =
+    ((sourceRow?.config as Record<string, unknown> | undefined)?.allowLargeRepo as boolean) ===
+    true;
+
   const connector = CONNECTORS.github_repo;
   log(`enumerating ${options.sourceUrl}`);
   const enumerated = await connector.enumerate(config, null);
@@ -140,6 +151,7 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
    */
   if (
     !options.allowLargeRepo &&
+    !approvedLarge &&
     !options.dryRun &&
     enumerated.refs.length > discoveryPolicy.markerCountReviewThreshold
   ) {

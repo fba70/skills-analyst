@@ -3,7 +3,7 @@ import Link from "next/link";
 
 import { LicenseBadge } from "@/components/registry/license-badge";
 import { RegistryFilters } from "@/components/registry/registry-filters";
-import { RegistryPagination } from "@/components/registry/registry-pagination";
+import { Paginator } from "@/components/common/paginator";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -122,9 +122,10 @@ export default async function RegistryPage(props: PageProps<"/skills">) {
             ))}
           </ul>
 
-          <RegistryPagination
+          <Paginator
             page={result.page}
             pageCount={result.pageCount}
+            basePath="/skills"
             searchParams={params}
           />
         </>

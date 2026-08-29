@@ -9,28 +9,35 @@ import {
 } from "@/components/ui/pagination";
 
 /**
- * Server-rendered pagination: plain links, so it works before hydration and each page is
- * a real URL. The current filters ride along in the query string.
+ * Server-rendered pagination for any list.
+ *
+ * Plain links, so it works before hydration and every page is a real, shareable URL.
+ * Shared between the registry and the admin queues rather than duplicated — the two had
+ * identical needs, and a second copy is where they quietly diverge.
  */
-export function RegistryPagination({
+export function Paginator({
   page,
   pageCount,
+  basePath,
   searchParams,
+  pageParam = "page",
 }: {
   page: number;
   pageCount: number;
+  basePath: string;
   searchParams: Record<string, string | string[] | undefined>;
+  pageParam?: string;
 }) {
   if (pageCount <= 1) return null;
 
   const href = (target: number) => {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(searchParams)) {
-      if (key === "page" || value === undefined) continue;
+      if (key === pageParam || value === undefined) continue;
       params.set(key, Array.isArray(value) ? value[0] : value);
     }
-    if (target > 1) params.set("page", String(target));
-    return params.toString() ? `/skills?${params}` : "/skills";
+    if (target > 1) params.set(pageParam, String(target));
+    return params.toString() ? `${basePath}?${params}` : basePath;
   };
 
   return (
