@@ -230,6 +230,23 @@ Every number is already derivable from `skills`, `skill_versions`, `verdicts` an
 `events` — a query and a component, not new plumbing. Keep the aggregates cheap enough to
 compute on request before reaching for a materialised view.
 
+### Giant repositories need the tarball path
+
+`GET /git/trees/{sha}?recursive=1` truncates above ~100k entries, and the connector throws
+rather than proceeding — silence there would mean a partial corpus that looks complete.
+
+That is correct, but it means a curator can approve a monorepo and the sync still fails:
+`liferay/liferay-portal` is approved and holds real Cursor skills, and cannot currently be
+fetched. Two ways out, neither built yet:
+
+- **Tarball** — `GET /repos/{o}/{r}/tarball/{ref}` is one call for the whole repository and
+  has no entry limit. Costs bandwidth and needs a tar reader.
+- **`includePaths` at approval time** — let the curator narrow to `workspaces/` and reuse
+  the existing tree call. Cheaper, and the review UI already shows the sample paths that
+  would tell them what to type.
+
+The second is the smaller change and probably the right first move.
+
 ### Smaller ones
 
 - **Neon backoff.** Wrap DAL queries in exponential backoff with jitter. Neon documents

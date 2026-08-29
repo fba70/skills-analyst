@@ -6,6 +6,11 @@ import { buildSignatures, clusterDuplicates } from "@/server/analytics/dedupe";
 import { runCrawl, ensureSeedShards } from "@/server/crawl/run";
 import { decideCandidates, enrichCandidates } from "@/server/crawl/promote";
 import { requireAdmin, setUserBanned, setUserRole } from "@/server/dal/admin";
+import {
+  approveRepo,
+  rejectRepo,
+  releaseFromQuarantine,
+} from "@/server/dal/curation";
 import { pendingSources, syncSource } from "@/server/ingest/sync";
 import { validatePending } from "@/server/validation/run";
 
@@ -150,6 +155,43 @@ export async function clusterAction(maxPairs: number): Promise<ActionResult> {
         `${report.variantsMarked} variant(s) in ${report.clusters} cluster(s)` +
         (report.stoppedEarly ? " — pair budget spent, run again to continue" : ""),
     };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function approveRepoAction(repoId: string): Promise<ActionResult> {
+  try {
+    await approveRepo(repoId);
+    revalidatePath("/settings");
+    return { ok: true, message: "Approved — it will sync on the next run." };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function rejectRepoAction(
+  repoId: string,
+  reason: string,
+): Promise<ActionResult> {
+  try {
+    await rejectRepo(repoId, reason);
+    revalidatePath("/settings");
+    return { ok: true, message: "Rejected and recorded." };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function releaseAction(
+  versionId: string,
+  reason: string,
+): Promise<ActionResult> {
+  try {
+    await releaseFromQuarantine(versionId, reason);
+    revalidatePath("/settings");
+    revalidatePath("/skills");
+    return { ok: true, message: "Released — the original verdicts are kept as history." };
   } catch (error) {
     return failure(error);
   }

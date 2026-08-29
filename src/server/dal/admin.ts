@@ -5,6 +5,7 @@ import { desc, eq, sql } from "drizzle-orm";
 import { db } from "@/server/db";
 import { events, organization, user } from "@/server/db/schema";
 import { ADMIN_ROLE } from "@/server/auth/roles";
+import { pageWindow, type Paged } from "@/server/dal/paging";
 import { getSession, requireSession } from "@/server/dal/session";
 
 /**
@@ -58,10 +59,15 @@ export type PlatformUser = {
 };
 
 /** Every user on the platform. Admin-only, and deliberately not org-scoped. */
-export async function listPlatformUsers(): Promise<PlatformUser[]> {
+export async function listPlatformUsers(
+  query: { page?: number; pageSize?: number } = {},
+): Promise<Paged<PlatformUser>> {
   await requireAdmin();
 
-  return db
+  const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(user);
+  const window = pageWindow(total, query.page, query.pageSize);
+
+  const items = await db
     .select({
       id: user.id,
       name: user.name,
@@ -81,7 +87,11 @@ export async function listPlatformUsers(): Promise<PlatformUser[]> {
       )`,
     })
     .from(user)
-    .orderBy(desc(user.createdAt));
+    .orderBy(desc(user.createdAt))
+    .limit(window.pageSize)
+    .offset(window.offset);
+
+  return { items, total, page: window.page, pageSize: window.pageSize, pageCount: window.pageCount };
 }
 
 /** Grants or revokes the system-admin role, with an audit trail. */
