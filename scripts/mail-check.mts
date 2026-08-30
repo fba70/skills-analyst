@@ -26,7 +26,7 @@ for (const [key, value] of Object.entries(config)) {
 if (config.transport === "console") {
   console.info(
     "\n  Console transport: codes print to this terminal, nothing is emailed.\n" +
-      "  Force a real send with MAIL_TRANSPORT=resend.\n",
+      "  Force a real send with MAIL_TRANSPORT=nylas.\n",
   );
 }
 
@@ -47,4 +47,7 @@ await sendOtpEmail({
   purpose: "sign-in",
   expiresInMinutes: 10,
 });
-console.info("  Sent. If it does not arrive, check the Resend dashboard for the event.\n");
+console.info(
+  "  Sent. If it does not arrive, search the Nylas dashboard for the request_id logged\n" +
+    "  above — a 200 means Nylas accepted the message, not that the provider delivered it.\n",
+);

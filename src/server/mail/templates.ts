@@ -6,11 +6,23 @@ import type { OtpPurpose } from "./types";
  * The OTP email.
  *
  * Written for mail clients, not browsers: inline styles only, no external CSS, no web
- * fonts, no images. A plain-text alternative always ships alongside — some clients show
- * it, and a code that only exists inside HTML is a code some people cannot read.
+ * fonts, no images.
  *
- * The code is never placed in the subject line: subjects show in notification previews
- * and sync to devices that may not be the recipient's.
+ * ## There is no plain-text alternative any more, and that is load-bearing
+ *
+ * There used to be an `otpText` shipped as the `text/plain` part alongside the HTML. The
+ * Nylas v3 send endpoint takes a **single** body with an `is_plaintext` flag, so a
+ * multipart alternative is not expressible and the function was removed rather than kept
+ * as decoration.
+ *
+ * What that costs is carried here instead: the code must stay **real text in the markup**
+ * — letter-spaced digits in a styled element, never an image, never a CSS background —
+ * so a client that strips the HTML, or a screen reader walking it, still yields a readable
+ * code. Rendering the digits as an image would look better and would make the message
+ * unreadable for the people most likely to need the fallback.
+ *
+ * The code is never placed in the subject line: subjects show in notification previews and
+ * sync to devices that may not be the recipient's.
  */
 
 const SUBJECTS: Record<OtpPurpose, string> = {
@@ -29,19 +41,6 @@ const INTROS: Record<OtpPurpose, string> = {
 
 export function otpSubject(purpose: OtpPurpose): string {
   return SUBJECTS[purpose] ?? SUBJECTS["sign-in"];
-}
-
-export function otpText(code: string, purpose: OtpPurpose, minutes: number): string {
-  return [
-    INTROS[purpose] ?? INTROS["sign-in"],
-    "",
-    `    ${code}`,
-    "",
-    `The code expires in ${minutes} minutes and can be used once.`,
-    "If you did not request it, you can ignore this email — nothing has changed.",
-    "",
-    "Skill Foundry",
-  ].join("\n");
 }
 
 export function otpHtml(code: string, purpose: OtpPurpose, minutes: number): string {

@@ -994,17 +994,60 @@ no longer urgent.
   this as required for cold starts, not optional.
 - **GitHub OAuth.** Doc 3 wants it as a login path for identity attribution. Additive —
   the `account` table already carries it.
-- **Mail reaches only one address in production.** Resend is wired and working, but no
-  domain is verified, so `MAIL_FROM` is unset and sends fall back to the shared
-  `onboarding@resend.dev`, which delivers **only to the Resend account owner**. Anyone
-  else gets a 403 and no email. Fix: verify `send.truffalo.ai` in Resend (subdomain, so
-  the apex Google Workspace MX and GoDaddy SPF-merge record stay untouched), then set
-  `MAIL_FROM` in Vercel. Until then, sign-in works for one address only.
+- **Mail goes out through Nylas** (`src/server/mail/nylas.ts`), which replaced Resend
+  entirely — `resend.ts` is gone and `RESEND_API_KEY` is unused, so drop it from `.env`
+  and from Vercel. `NYLAS_API_KEY`, `NYLAS_GRANT_ID` and `NYLAS_API_URI` are the three
+  variables, and **all three still need adding to Vercel before a deploy**.
+  `MAIL_TRANSPORT=console` is pinned locally, so a laptop cannot quietly email people;
+  `MAIL_TRANSPORT=nylas` forces a real send for a test.
 - **A failed send still shows the user "code sent".** Better Auth runs
   `sendVerificationOTP` as a background task and swallows the throw, so a delivery failure
   is visible in the logs (`[mail] …`) but not in the UI.
 - **Orphaned organizations.** Deleting a user cascades their `member` row but leaves an
   organization nobody belongs to. `deleteUser` is disabled, so this is not live yet.
+
+### Nylas, and three things the API taught us on the first send
+
+The switch was worth making for one reason: **Nylas sends from a mailbox, not from a
+domain.** Resend needs a verified sending domain before it delivers to anyone but the
+account owner, which is why sign-in worked for exactly one address. A grant is an
+already-authenticated mailbox, so mail leaves under its existing SPF and DKIM — nothing to
+verify, and no shared sender quietly reaching one inbox.
+
+`MAIL_FROM` changed meaning with it: it is now an **override**, not the sender. Unset, mail
+goes as the grant's mailbox, which is the safe default. Set, it must be a configured
+send-as alias or the provider refuses it.
+
+Three findings, each from a real 4xx rather than from reading docs:
+
+1. **`tracking_options` is omitted, never set to false.** A trial account rejects the
+   *field itself* — `Tracking options are not allowed for trial accounts` — whatever the
+   values are, so `{ opens: false }` fails the send outright. Absence says the same thing
+   on every plan. We do not want open or link tracking on a passcode anyway: it rewrites
+   the message with a pixel and redirect URLs.
+2. **No `Idempotency-Key`.** The first version hashed one from recipient, purpose and code
+   to stop a retry sending a duplicate. Nylas remembers the key, so two identical 6-digit
+   codes to the same address collide about once in a million sends — and on collision it
+   **delivers nothing, silently**, to someone waiting to sign in. A random key per call is
+   unique by construction and provides no idempotency at all, so there is no middle
+   ground. What it guarded is hypothetical too: Better Auth swallows the throw and does
+   not retry. A duplicate code is a far better failure than no code.
+3. **The `MAIL_FROM` hint in the error is conditional.** It fired on every failure at
+   first, so the very first real error — about tracking options — blamed a correctly
+   configured sender and pointed at the wrong file.
+
+> **There is no plain-text alternative any more.** The v3 send endpoint takes a single
+> `body` with an `is_plaintext` flag: HTML *or* text, never multipart. `otpText` was
+> removed rather than kept as decoration. That makes one property of the template
+> load-bearing rather than cosmetic — **the code must stay real text in the markup**,
+> letter-spaced digits in a styled element, never an image and never a CSS background, so
+> a stripped-HTML client or a screen reader still yields a readable code. `templates.ts`
+> says so where someone would otherwise "improve" it.
+
+Verified end to end: `MAIL_TRANSPORT=nylas pnpm mail:check --send <you@example.com>` sends
+through the same `sendOtpEmail` that Better Auth calls, and logs the `request_id` — which
+is what the Nylas dashboard is searched by, because a 200 means Nylas accepted the message,
+not that the provider delivered it.
 
 ## Commands
 
