@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { capabilityBlurb, capabilityLabel } from "@/lib/capabilities";
 import { cn } from "@/lib/utils";
 
 /**
@@ -20,12 +21,16 @@ import { cn } from "@/lib/utils";
  * description-behaviour consistency check.
  */
 
-const CAPABILITIES: Record<string, { icon: LucideIcon; label: string; blurb: string }> = {
-  network: { icon: Globe, label: "Network", blurb: "Makes outbound network requests" },
-  fs_read: { icon: FileDown, label: "File read", blurb: "Reads files from disk" },
-  fs_write: { icon: FileUp, label: "File write", blurb: "Creates, changes or deletes files" },
-  shell: { icon: Terminal, label: "Shell", blurb: "Runs shell commands or subprocesses" },
-  credentials: { icon: KeyRound, label: "Credentials", blurb: "Reads environment variables or credential stores" },
+/**
+ * Icons only. The words come from `@/lib/capabilities`, shared with the registry filter —
+ * the two used to carry separate copies and had already drifted apart.
+ */
+const ICONS: Record<string, LucideIcon> = {
+  network: Globe,
+  fs_read: FileDown,
+  fs_write: FileUp,
+  shell: Terminal,
+  credentials: KeyRound,
 };
 
 export function CapabilitySurface({
@@ -48,12 +53,8 @@ export function CapabilitySurface({
   return (
     <ul className="grid gap-3">
       {present.map(([key, value]) => {
-        const meta = CAPABILITIES[key] ?? {
-          icon: ShieldQuestion,
-          label: key,
-          blurb: "Detected capability",
-        };
-        const Icon = meta.icon;
+        const meta = { label: capabilityLabel(key), blurb: capabilityBlurb(key) };
+        const Icon = ICONS[key] ?? ShieldQuestion;
         const isUndocumented = undocumented.includes(key);
 
         return (

@@ -11,6 +11,13 @@ import { Client } from "pg";
  *   pnpm db:verify-rls
  *
  * Leaves nothing behind: every write happens in a transaction that is rolled back.
+ *
+ * Fixtures carry a run-unique prefix and are matched on exactly that. An earlier version
+ * matched `slug like '%-skill-%'`, which quietly started failing the moment the corpus
+ * ingested real skills called `make-me-a-skill-2` and `which-skill-2` — they are public,
+ * so they showed up as extra public rows and three assertions went red while RLS itself
+ * was working perfectly. A test whose fixtures can collide with production data reports
+ * the corpus, not the policy.
  */
 
 const OWNER = process.env.DATABASE_URL_UNPOOLED;
@@ -24,9 +31,12 @@ async function main() {
   const owner = new Client({ connectionString: OWNER });
   await owner.connect();
 
-  // Two throwaway orgs to scope the fixtures.
-  const orgA = `rls-test-a-${Date.now()}`;
-  const orgB = `rls-test-b-${Date.now()}`;
+  // Two throwaway orgs to scope the fixtures, and one prefix that cannot collide with a
+  // real slug: `rlsfix` is not a word, and the run id keeps concurrent runs apart too.
+  const runId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  const prefix = `rlsfix-${runId}`;
+  const orgA = `rls-test-a-${runId}`;
+  const orgB = `rls-test-b-${runId}`;
 
   await owner.query("begin");
   try {
@@ -45,14 +55,14 @@ async function main() {
     );
     const sourceId = source.rows[0].id;
 
-    for (const [org, slug] of [
-      [null, "public-skill"],
-      [orgA, "org-a-secret"],
-      [orgB, "org-b-secret"],
+    for (const [org, label] of [
+      [null, "public"],
+      [orgA, "org-a"],
+      [orgB, "org-b"],
     ] as Array<[string | null, string]>) {
       await owner.query(
         `insert into skills (org_id, dialect, name, slug, status) values ($1, 'anthropic_skill', $2, $2, 'indexed')`,
-        [org, `${slug}-${Date.now()}`],
+        [org, `${prefix}-${label}`],
       );
     }
     void sourceId;
@@ -75,7 +85,8 @@ async function main() {
       await runtime.query("select set_config('app.org_id', $1, true)", [orgId]);
     }
     const { rows } = await runtime.query<{ slug: string; org_id: string | null }>(
-      "select slug, org_id from skills where slug like '%-skill-%' or slug like '%-secret-%'",
+      "select slug, org_id from skills where slug like $1",
+      [`${prefix}-%`],
     );
     await runtime.query("rollback");
     return rows.map((r) => (r.org_id === null ? "public" : r.org_id === orgA ? "A" : "B")).sort();
@@ -113,7 +124,7 @@ async function main() {
   try {
     await runtime.query(
       `insert into skills (org_id, dialect, name, slug) values ($1, 'anthropic_skill', 'smuggled', $2)`,
-      [orgB, `smuggled-${Date.now()}`],
+      [orgB, `${prefix}-smuggled`],
     );
   } catch {
     crossOrgWriteBlocked = true;
@@ -130,7 +141,7 @@ async function main() {
 
   // Clean up the fixtures with the owner connection.
   await owner.query("delete from organization where id = any($1)", [[orgA, orgB]]);
-  await owner.query("delete from skills where org_id is null and slug like 'public-skill-%'");
+  await owner.query("delete from skills where slug like $1", [`${prefix}-%`]);
   await owner.query("delete from sources where url like 'https://example.invalid/rls-%'");
   await owner.end();
 

@@ -38,7 +38,34 @@ type RepoMeta = {
   license: { spdx_id: string | null } | null;
 };
 
-type TreeEntry = { path: string; type: "blob" | "tree"; size?: number };
+type TreeEntry = {
+  path: string;
+  type: "blob" | "tree";
+  size?: number;
+  /** Git file mode. `120000` is a symlink — see `isSymlink`. */
+  mode?: string;
+};
+
+/**
+ * Git stores a symlink as a blob whose *content is the target path*.
+ *
+ * Fetched over raw.githubusercontent.com that is exactly what comes back: the string
+ * `../../../.config/agents/rules/panda-css.md`, not the file it points at. Treated as a
+ * regular blob it becomes a 40-byte "skill" whose entire body is a path.
+ *
+ * That is not hypothetical — 217 of the 245 skills quarantined for "no frontmatter block"
+ * were symlinks. They landed in quarantine, which was the right outcome for the wrong
+ * reason: the verdict said `missing-name` when the truth was that we had ingested a
+ * pointer instead of a document, hashed it, and stored it.
+ *
+ * Skipped rather than resolved. Nearly all of them point *outside* the skill directory
+ * (`../../../…`) at files the crawl reaches on their own terms anyway, and following
+ * arbitrary relative paths out of a bundle is a directory-traversal problem we would be
+ * choosing to have.
+ */
+function isSymlink(entry: TreeEntry): boolean {
+  return entry.mode === "120000";
+}
 
 export function parseRepoUrl(url: string): { owner: string; repo: string } {
   const match = url
@@ -113,6 +140,79 @@ async function rawFile(
   throw new Error(`raw fetch ${path} failed after retries`);
 }
 
+/**
+ * Every blob path at a commit, optionally scoped to a set of prefixes.
+ *
+ * The scoped path exists because the unscoped one has a hard ceiling: `?recursive=1`
+ * truncates above ~100k entries, and a truncated tree is refused rather than used — a
+ * partial corpus that looks complete is worse than an error. That ceiling is what stops
+ * `liferay/liferay-portal` from syncing even though it holds real skills.
+ *
+ * `includePaths` is the way out, and it only works if it is applied *before* the call
+ * rather than as a filter afterwards. GitHub's tree endpoint accepts a path-scoped SHA in
+ * `{commit}:{path}` form, so each prefix is read as its own subtree and the repository
+ * root is never listed at all. Costs one API call per prefix instead of one per repo,
+ * which is the trade a curator is making when they name the prefixes.
+ *
+ * A subtree that truncates on its own still throws: the same reasoning applies one level
+ * down, and the answer is a narrower prefix.
+ */
+async function listBlobPaths(
+  owner: string,
+  repo: string,
+  commitSha: string,
+  includePaths: string[] | undefined,
+): Promise<string[]> {
+  const prefixes = (includePaths ?? [])
+    .map((prefix) => prefix.replace(/^\/+|\/+$/g, ""))
+    .filter(Boolean);
+
+  if (prefixes.length === 0) {
+    const tree = await api<{ tree: TreeEntry[]; truncated: boolean }>(
+      `/repos/${owner}/${repo}/git/trees/${commitSha}?recursive=1`,
+    );
+    if (tree.truncated) {
+      throw new Error(
+        `Tree for ${owner}/${repo} is truncated — too large for one call. ` +
+          `Narrow it with includePaths, or use the tarball path (Phase 2).`,
+      );
+    }
+    return tree.tree
+      .filter((entry) => entry.type === "blob" && !isSymlink(entry))
+      .map((entry) => entry.path);
+  }
+
+  const paths: string[] = [];
+  for (const prefix of prefixes) {
+    let subtree: { tree: TreeEntry[]; truncated: boolean };
+    try {
+      subtree = await api<{ tree: TreeEntry[]; truncated: boolean }>(
+        `/repos/${owner}/${repo}/git/trees/${commitSha}:${encodeURIComponent(prefix)}?recursive=1`,
+      );
+    } catch (error) {
+      // A prefix that does not exist is a curator typo, and naming it is more useful
+      // than failing the whole repository with a generic 404.
+      throw new Error(
+        `Include path "${prefix}" could not be read in ${owner}/${repo}: ${(error as Error).message}`,
+      );
+    }
+
+    if (subtree.truncated) {
+      throw new Error(
+        `Subtree "${prefix}" in ${owner}/${repo} is itself truncated — narrow it further.`,
+      );
+    }
+
+    // Subtree paths are relative to the prefix; re-qualify so detection and every later
+    // raw fetch see repository-relative paths, as they would from an unscoped tree.
+    for (const entry of subtree.tree) {
+      if (entry.type === "blob" && !isSymlink(entry)) paths.push(`${prefix}/${entry.path}`);
+    }
+  }
+
+  return paths;
+}
+
 export const githubConnector: Connector = {
   kind: "github_repo",
 
@@ -132,18 +232,7 @@ export const githubConnector: Connector = {
       throw new Error(`Could not resolve ${owner}/${repo}@${ref} to a commit`);
     }
 
-    const tree = await api<{ tree: TreeEntry[]; truncated: boolean }>(
-      `/repos/${owner}/${repo}/git/trees/${commitSha}?recursive=1`,
-    );
-    if (tree.truncated) {
-      // Silence here would mean a partial corpus that looks complete.
-      throw new Error(
-        `Tree for ${owner}/${repo} is truncated — too large for one call. ` +
-          `Narrow it with includePaths, or use the tarball path (Phase 2).`,
-      );
-    }
-
-    const paths = tree.tree.filter((entry) => entry.type === "blob").map((entry) => entry.path);
+    const paths = await listBlobPaths(owner, repo, commitSha, config.includePaths);
     const detected = detectSkills(paths, { includePaths: config.includePaths });
 
     return {

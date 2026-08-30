@@ -7,10 +7,14 @@ import { ListControls, SettingsTabs } from "@/components/settings/list-controls"
 import { QuarantinePanel } from "@/components/settings/quarantine-panel";
 import { ReviewPanel } from "@/components/settings/review-panel";
 import { SourcesPanel } from "@/components/settings/sources-panel";
+import { SubmitPanel } from "@/components/settings/submit-panel";
+import { TaxonomyPanel } from "@/components/settings/taxonomy-panel";
 import { UsersPanel } from "@/components/settings/users-panel";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { discoveryPolicy } from "@/server/crawl/policy";
 import { crawlCoverage } from "@/server/crawl/run";
+import { sourceDiversity } from "@/server/analytics/templates";
 import { isAdmin, listPlatformUsers, platformCounts } from "@/server/dal/admin";
 import {
   curationCounts,
@@ -20,10 +24,20 @@ import {
 } from "@/server/dal/curation";
 import { ADMIN_PAGE_SIZES } from "@/server/dal/paging";
 import { requireSession } from "@/server/dal/session";
+import { MAX_BATCH } from "@/server/taxonomy/classify";
+import { ARCHETYPE_THRESHOLD, reviewQueue, taxonomySummary } from "@/server/taxonomy/run";
 
 export const metadata: Metadata = { title: "Settings" };
 
-const TABS = ["ingestion", "review", "quarantine", "sources", "users"] as const;
+const TABS = [
+  "ingestion",
+  "submit",
+  "taxonomy",
+  "review",
+  "quarantine",
+  "sources",
+  "users",
+] as const;
 type Tab = (typeof TABS)[number];
 
 /**
@@ -64,11 +78,14 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users] = await Promise.all([
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity] = await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
     tab === "sources" ? listSourceHealth(query) : null,
     tab === "users" ? listPlatformUsers(query) : null,
+    tab === "taxonomy" ? taxonomySummary() : null,
+    tab === "taxonomy" ? reviewQueue(20) : null,
+    tab === "submit" ? sourceDiversity(12) : null,
   ]);
 
   // Every tab except Ingestion is a paginated list.
@@ -107,6 +124,8 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
         active={tab}
         tabs={[
           { value: "ingestion", label: "Ingestion" },
+          { value: "submit", label: "Add source" },
+          { value: "taxonomy", label: "Taxonomy" },
           { value: "review", label: `Review (${curation.held})` },
           { value: "quarantine", label: `Quarantine (${curation.quarantined})` },
           { value: "sources", label: "Sources" },
@@ -126,6 +145,22 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
         ) : null}
 
         {tab === "ingestion" ? <IngestionPanel /> : null}
+        {tab === "submit" ? (
+          <SubmitPanel
+            diversity={diversity ?? []}
+            minDiversityPercent={discoveryPolicy.minStructuralDiversityPercent}
+          />
+        ) : null}
+        {tab === "taxonomy" && taxonomy && queue ? (
+          <TaxonomyPanel
+            coverage={taxonomy.counts}
+            queue={queue}
+            totals={taxonomy.totals}
+            remaining={taxonomy.remaining}
+            archetypeThreshold={ARCHETYPE_THRESHOLD}
+            maxBatch={MAX_BATCH}
+          />
+        ) : null}
         {tab === "review" && held ? <ReviewPanel repos={held.items} /> : null}
         {tab === "quarantine" && quarantined ? (
           <QuarantinePanel versions={quarantined.items} />

@@ -5,7 +5,7 @@ import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/server/db";
 import { discoveredRepos, events, sources } from "@/server/db/schema";
 
-import { decidePromotion, isExcludedPath, type PromotionDecision } from "./policy";
+import { decidePromotion, discoveryPolicy, isExcludedPath, type PromotionDecision } from "./policy";
 
 /**
  * Turning discovered repositories into things we actually sync.
@@ -138,6 +138,9 @@ export async function decideCandidates(options: { limit?: number } = {}): Promis
       archived: candidate.archived,
       stars: candidate.stars,
       pushedAt: candidate.pushedAt,
+      // hitCount 0 with a submitter means a curated list named it rather than the crawl
+      // counting markers in it — different evidence, and the policy weighs it differently.
+      fromCuratedList: candidate.hitCount === 0 && candidate.submittedBy !== null,
     });
 
     report.byReason[decision.reason] = (report.byReason[decision.reason] ?? 0) + 1;
@@ -231,6 +234,104 @@ export async function reapplyPathExclusions(): Promise<number> {
     changed += 1;
   }
   return changed;
+}
+
+/**
+ * Re-judges sources paused for holding too many markers, after the threshold moves.
+ *
+ * The sibling of `reapplyPathExclusions`, and the same reasoning: a policy constant that
+ * changes is worthless if the rows it already decided keep the old answer forever. A paused
+ * source is `enabled = false`, so `pendingSources` skips it — without this, raising the
+ * threshold would apply to repositories discovered *next* and silently leave the 32 already
+ * held sitting there, which looks exactly like the change not working.
+ *
+ * Offline and re-runnable: no network, so it costs nothing to run after every threshold
+ * change, in either direction. Sources carrying an explicit `allowLargeRepo` approval are
+ * left alone — a curator already decided those, and a policy sweep must not overwrite a
+ * human decision.
+ */
+export async function reapplyMarkerThreshold(): Promise<{
+  reEnabled: number;
+  stillHeld: number;
+}> {
+  const paused = await db
+    .select({
+      id: sources.id,
+      url: sources.url,
+      config: sources.config,
+      detail: sources.healthDetail,
+    })
+    .from(sources)
+    .where(and(eq(sources.enabled, false), eq(sources.health, "paused")));
+
+  let reEnabled = 0;
+  let stillHeld = 0;
+
+  for (const row of paused) {
+    const config = (row.config ?? {}) as Record<string, unknown>;
+    if (config.allowLargeRepo === true) continue;
+
+    const detail = (row.detail ?? {}) as Record<string, unknown>;
+    let markerCount = typeof detail.markerCount === "number" ? detail.markerCount : null;
+
+    if (markerCount === null && typeof detail.reason === "string") {
+      // Rows paused before the count was stored structurally still carry it in the reason
+      // sentence: "3551 skills in one repository — over the 50 threshold".
+      const parsed = detail.reason.match(/^(\d+)\s+skills\b/);
+      if (parsed) markerCount = Number(parsed[1]);
+    }
+
+    /**
+     * Deliberately NOT falling back to `discovered_repos.hit_count`.
+     *
+     * It looks like the same number and is not. `hit_count` is how many markers *code
+     * search* reported, which is capped and sampled; the pause records how many a full
+     * enumeration found. Using one for the other let a repository whose enumeration found
+     * 3,551 markers past a 500 threshold because code search had only seen a handful of
+     * them. The sync re-pauses it on the next pass, so nothing is fetched — but the
+     * re-apply then reports "0 still held" when two were, which is a lie in the one place
+     * you are looking to check whether the change did what you meant.
+     */
+    if (markerCount === null) {
+      stillHeld += 1;
+      continue;
+    }
+
+    if (markerCount > discoveryPolicy.markerCountReviewThreshold) {
+      stillHeld += 1;
+      continue;
+    }
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(sources)
+        .set({
+          enabled: true,
+          health: "unknown",
+          healthDetail: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(sources.id, row.id));
+
+      await tx
+        .update(discoveredRepos)
+        .set({ status: "promoted", skipReason: null })
+        .where(eq(discoveredRepos.url, row.url));
+
+      await tx.insert(events).values({
+        actorType: "system",
+        actorId: "crawl.policy",
+        kind: "source.threshold_reapplied",
+        subjectType: "sources",
+        subjectId: row.id,
+        reason: `${markerCount} markers now under the ${discoveryPolicy.markerCountReviewThreshold} threshold`,
+        payload: { url: row.url, markerCount },
+      });
+    });
+    reEnabled += 1;
+  }
+
+  return { reEnabled, stillHeld };
 }
 
 export async function promotionSummary() {

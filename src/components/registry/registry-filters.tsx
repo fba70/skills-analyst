@@ -93,11 +93,47 @@ export function RegistryFilters({ options, pageSizes, sorts }: RegistryFiltersPr
     label: string;
     items: FilterOptions["sources"];
   }> = [
+    /**
+     * Function first, deliberately.
+     *
+     * It is the axis that says what a skill *does*, which is what someone browsing a
+     * registry is usually after — and it is the axis archetypes are mined on, so the two
+     * stay consistent. Domain follows. Source, licence, capability and dialect are
+     * operator-shaped facets and sit after both.
+     *
+     * Both category selects write the same `category` parameter, carrying `axis:value`.
+     * That means picking a domain replaces a function rather than intersecting with it,
+     * which is the honest behaviour for one parameter; a real AND across axes needs two,
+     * and is worth adding once coverage makes it useful.
+     */
+    { key: "category", label: "Any function", items: options.functions },
+    { key: "category", label: "Any domain", items: options.domains },
     { key: "source", label: "All sources", items: options.sources },
     { key: "posture", label: "Any licence", items: options.postures },
     { key: "capability", label: "Any capability", items: options.capabilities },
     { key: "dialect", label: "Any dialect", items: options.dialects },
-  ];
+  ].filter((facet) => {
+    /**
+     * Hide a facet that cannot change the result set.
+     *
+     * Two cases, and the distinction matters. An **exhaustive** facet assigns every skill
+     * exactly one value — dialect does — so when it has a single option covering the whole
+     * corpus, choosing it returns precisely what no filter returns. That is what `dialect`
+     * had become: every `agents_md` skill is currently quarantined or pending, so the only
+     * option was "Anthropic skill" against all 2,556 results. A control whose sole setting
+     * is a no-op reads as broken.
+     *
+     * A **partial** facet — capability — is different. Only 119 of 2,556 skills touch any
+     * capability at all, so even one option genuinely narrows, and it stays.
+     *
+     * Comparing the option's count against the total is what tells the two apart, and it
+     * self-corrects: the moment an `agents_md` skill passes validation, the dialect filter
+     * comes back on its own.
+     */
+    if (facet.items.length === 0) return false;
+    if (facet.items.length === 1 && facet.items[0].count >= options.total) return false;
+    return true;
+  });
 
   const active = facets.filter((facet) => params.get(facet.key));
   const hasFilters = active.length > 0 || Boolean(params.get("q"));
@@ -116,7 +152,7 @@ export function RegistryFilters({ options, pageSizes, sorts }: RegistryFiltersPr
 
         {facets.map((facet) => (
           <Select
-            key={facet.key}
+            key={`${facet.key}-${facet.label}`}
             value={params.get(facet.key) ?? ALL}
             onValueChange={(value) => apply({ [facet.key]: value })}
           >

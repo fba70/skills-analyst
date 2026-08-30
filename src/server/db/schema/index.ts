@@ -9,4 +9,6 @@ export * from "./corpus";
 export * from "./validation";
 export * from "./crawl";
 export * from "./analytics";
+export * from "./structure";
+export * from "./taxonomy";
 export * from "./events";

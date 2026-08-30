@@ -4,6 +4,7 @@ import {
   decideCandidates,
   enrichCandidates,
   promotionSummary,
+  reapplyMarkerThreshold,
   reapplyPathExclusions,
 } from "../src/server/crawl/promote";
 
@@ -13,6 +14,7 @@ import {
  *   pnpm promote --status            # counts only
  *   pnpm promote --enrich 50         # fetch metadata for 50 candidates
  *   pnpm promote --decide            # apply the policy (offline, re-runnable)
+ *   pnpm promote --reapply           # re-judge held rows after a policy threshold changed
  */
 
 const args = process.argv.slice(2);
@@ -46,6 +48,14 @@ if (args.includes("--status")) {
 
 const reapplied = await reapplyPathExclusions();
 if (reapplied > 0) console.info(`re-applied path exclusions to ${reapplied} candidate(s)`);
+
+if (args.includes("--reapply")) {
+  // Offline and free, so it is safe to run after any threshold change in either direction.
+  const marker = await reapplyMarkerThreshold();
+  console.info(
+    `marker threshold: re-enabled ${marker.reEnabled} source(s), ${marker.stillHeld} still held`,
+  );
+}
 
 if (args.includes("--enrich")) {
   const report = await enrichCandidates(value("enrich") ?? 50);

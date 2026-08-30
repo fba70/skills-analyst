@@ -4,6 +4,8 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { CapabilitySurface } from "@/components/registry/capability-surface";
+import { ConsistencyCard } from "@/components/registry/consistency-card";
+import { DownloadCard } from "@/components/registry/download-card";
 import { ProvenanceCard } from "@/components/registry/provenance-card";
 import {
   OverallVerdict,
@@ -14,7 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getSkillBySlug } from "@/server/dal/skills";
-import { requireSession } from "@/server/dal/session";
+import { labelFor } from "@/server/taxonomy/vocabulary";
 
 export async function generateMetadata(
   props: PageProps<"/skills/[slug]">,
@@ -25,7 +27,8 @@ export async function generateMetadata(
 }
 
 export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
-  await requireSession();
+  // Public (R8.1): provenance, licence and verdicts are the trust surfaces, and gating
+  // them behind an account defeats the point of publishing them.
   const { slug } = await props.params;
   const skill = await getSkillBySlug(slug);
   if (!skill) notFound();
@@ -58,7 +61,41 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
             </Badge>
           ) : null}
         </div>
+
+        {skill.categories.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Linked, not decorative: a category on a skill page should be a way into the
+                rest of that category, which is most of what a taxonomy is for. */}
+            {skill.categories.map((category) => (
+              <Link
+                key={`${category.axis}:${category.value}`}
+                href={`/skills?category=${category.axis}:${category.value}`}
+              >
+                <Badge
+                  variant={category.axis === "function" ? "secondary" : "outline"}
+                  className="hover:bg-accent transition-colors"
+                >
+                  {labelFor(category.axis as "function" | "domain", category.value)}
+                </Badge>
+              </Link>
+            ))}
+          </div>
+        ) : null}
       </header>
+
+      <ConsistencyCard verdicts={skill.verdicts} />
+
+      <DownloadCard
+        slug={skill.slug}
+        status={skill.status}
+        redistribution={skill.redistribution}
+        contentStored={skill.contentStored}
+        licenseSpdx={skill.licenseSpdx}
+        originUrl={
+          (skill.provenance as { sourceUrl?: string })?.sourceUrl ?? skill.sourceUrl ?? null
+        }
+        fileCount={skill.fileCount}
+      />
 
       <Card>
         <CardHeader>

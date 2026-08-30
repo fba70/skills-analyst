@@ -36,6 +36,10 @@ export default async function HomePage() {
           <Wordmark nameClassName="hidden min-[360px]:inline" />
         </Link>
         <nav className="flex shrink-0 items-center gap-1 sm:gap-2">
+          {/* The registry is public (R8.1), so it is offered before the account is. */}
+          <Button asChild variant="ghost" className="hidden sm:inline-flex">
+            <Link href="/skills">Browse skills</Link>
+          </Button>
           <ThemeToggleButton />
           {session ? (
             <Button asChild>
@@ -74,19 +78,25 @@ export default async function HomePage() {
             Registries collect skills. Wizards generate them. Nothing carries what the
             corpus proves works back into creation. Skill Foundry closes that loop.
           </p>
-          {!session ? (
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <Button asChild size="lg">
-                <Link href="/sign-up">
-                  Get started
-                  <ArrowRight className="size-4" />
-                </Link>
-              </Button>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            {/*
+              Browsing leads, and it leads for everyone. Every verdict, licence and
+              provenance record is readable without an account — asking someone to sign up
+              before they can see whether the corpus is any good inverts the argument the
+              product is making.
+            */}
+            <Button asChild size="lg">
+              <Link href="/skills">
+                Browse the registry
+                <ArrowRight className="size-4" />
+              </Link>
+            </Button>
+            {!session ? (
               <Button asChild size="lg" variant="outline">
-                <Link href="/sign-in">I have an account</Link>
+                <Link href="/sign-up">Create an account</Link>
               </Button>
-            </div>
-          ) : null}
+            ) : null}
+          </div>
         </section>
 
         {/* Subgrid is what keeps the three columns honest: icon, heading and body each

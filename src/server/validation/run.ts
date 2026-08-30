@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 
 import { db } from "@/server/db";
 import {
@@ -13,6 +13,7 @@ import {
 import { splitFrontmatter } from "@/server/skills/normalize";
 
 import { capabilitySurface } from "./analyzers/capability-surface";
+import { consistencyCheck, hasAuditableCode } from "./analyzers/consistency";
 import { injectionScan } from "./analyzers/injection-scan";
 import { secretScan } from "./analyzers/secret-scan";
 import { structuralLint } from "./analyzers/structural-lint";
@@ -34,7 +35,45 @@ import { blocks, worstSeverity, type Analyzer, type AnalyzerOutput } from "./typ
  *     not editing history
  */
 
+/**
+ * Free, deterministic, always run.
+ */
 const ANALYZERS: Analyzer[] = [structuralLint, secretScan, injectionScan, capabilitySurface];
+
+/**
+ * Costly, opt-in. R2.3 needs a model per skill, so it is never part of the default pass —
+ * a validate run has to stay something you can trigger without thinking about the bill.
+ */
+const COSTLY_ANALYZERS: Analyzer[] = [consistencyCheck];
+
+/**
+ * Version ids whose bundle carries executable code, per the structural fingerprint.
+ *
+ * The targeting query for an R2.3 campaign. Running the consistency check across the whole
+ * corpus would pay for ~3,000 model calls to learn that ~93% of skills have no code to be
+ * inconsistent with; this asks the fingerprints which ones are worth the call. `hasScripts`
+ * is the fingerprint's own flag, so no bundle is re-read to answer it.
+ *
+ * Ordered by file count descending: the bundles with the most code are the ones where a
+ * documentation gap is most likely and most consequential.
+ */
+export async function versionsWithCode(limit = 25): Promise<string[]> {
+  const rows = await db.execute(sql`
+    select st.skill_version_id as id
+    from skill_structures st
+    join skill_versions sv on sv.id = st.skill_version_id
+    where st.has_scripts
+      and sv.status in ('indexed', 'quarantined')
+      and not exists (
+        select 1 from verdicts v
+        where v.skill_version_id = sv.id
+          and v.analyzer = 'description-consistency'
+      )
+    order by st.file_count desc
+    limit ${limit}
+  `);
+  return (rows.rows as Array<{ id: string }>).map((row) => row.id);
+}
 
 export type ValidationOutcome = {
   skillVersionId: string;
@@ -51,6 +90,13 @@ export type ValidateOptions = {
   versionIds?: string[];
   /** Re-judge versions that already have verdicts (a re-scan campaign). */
   revalidate?: boolean;
+  /**
+   * Include the LLM-assisted analyzers (R2.3). **Costs money per skill with bundled code.**
+   *
+   * Off by default and named for what it does rather than a vague `full` flag, because the
+   * caller should have to say the expensive thing out loud.
+   */
+  includeCostly?: boolean;
   limit?: number;
   onProgress?: (message: string) => void;
 };
@@ -70,6 +116,9 @@ export async function validatePending(
       orgId: skillVersions.orgId,
       skillId: skillVersions.skillId,
       slug: skills.slug,
+      dialect: skills.dialect,
+      name: skills.name,
+      summary: skills.summary,
       contentHash: skillVersions.contentHash,
       contentStored: skillVersions.contentStored,
       provenance: skillVersions.provenance,
@@ -87,7 +136,7 @@ export async function validatePending(
 
   for (const row of rows) {
     log(`validating ${row.slug}`);
-    outcomes.push(await validateOne(row));
+    outcomes.push(await validateOne(row, options.includeCostly ?? false));
   }
 
   return outcomes;
@@ -98,12 +147,18 @@ type VersionRow = {
   orgId: string | null;
   skillId: string;
   slug: string;
+  dialect: string;
+  name: string;
+  summary: string | null;
   contentHash: string;
   contentStored: boolean;
   provenance: unknown;
 };
 
-async function validateOne(row: VersionRow): Promise<ValidationOutcome> {
+async function validateOne(
+  row: VersionRow,
+  includeCostly: boolean,
+): Promise<ValidationOutcome> {
   const provenance = row.provenance as VersionProvenance;
 
   const { files, origin } = await loadBundle({
@@ -115,13 +170,37 @@ async function validateOne(row: VersionRow): Promise<ValidationOutcome> {
 
   const marker =
     files.find((file) => /^(SKILL|AGENTS)\.md$/i.test(file.path)) ?? files[0];
-  const { frontmatter, body } = splitFrontmatter(marker.content.toString("utf8"));
-  const input = { files, body, frontmatter, markerPath: marker.path };
+  const { frontmatter, body, error: parseError } = splitFrontmatter(
+    marker.content.toString("utf8"),
+  );
+  const input = {
+    files,
+    body,
+    frontmatter,
+    markerPath: marker.path,
+    dialect: row.dialect,
+    // Identity as the normalizer resolved it at ingest — frontmatter, then the leading
+    // heading, then the directory name. An analyzer asking "does this have a name" should
+    // get the answer for the dialect in front of it, not for one specific dialect's YAML.
+    resolvedName: row.name || null,
+    resolvedSummary: row.summary,
+    // "no frontmatter block" is not an error for a dialect that has none, so the analyzer
+    // decides what it means rather than the parser.
+    parseError,
+  };
+
+  // The costly pass is skipped entirely for a bundle with no executable content: there is
+  // nothing for a consistency check to compare against, so it would be a paid call with a
+  // foregone answer.
+  const analyzers = [
+    ...ANALYZERS,
+    ...(includeCostly && hasAuditableCode(files) ? COSTLY_ANALYZERS : []),
+  ];
 
   const results: Array<{ analyzer: Analyzer; output: AnalyzerOutput }> = [];
-  for (const analyzer of ANALYZERS) {
+  for (const analyzer of analyzers) {
     try {
-      results.push({ analyzer, output: analyzer.run(input) });
+      results.push({ analyzer, output: await analyzer.run(input) });
     } catch (error) {
       // A crashed analyzer has not cleared the skill. Treating it as a pass is exactly
       // how a validation pipeline quietly stops being one.
@@ -193,13 +272,47 @@ async function validateOne(row: VersionRow): Promise<ValidationOutcome> {
       .set({ status, quarantineReasons: reasons.length > 0 ? reasons : null })
       .where(eq(skillVersions.id, row.id));
 
+    /**
+     * Which version the registry serves after this verdict (R1.5).
+     *
+     * A pass serves the new version. A failure must **not** blank the pointer: the skill
+     * may already have an indexed version that passed, and R1.5 is explicit that the prior
+     * version stays served until a new one passes. Setting `null` here meant one bad
+     * upstream push withdrew a good skill from the registry entirely — the upstream author
+     * could break our listing without touching anything that had ever been validated.
+     *
+     * So on failure we fall back to the newest still-indexed version of the same skill,
+     * and only null out when there genuinely is none.
+     */
+    let servedVersionId: string | null = row.id;
+    let servedStatus: "indexed" | "quarantined" = status;
+
+    if (status !== "indexed") {
+      const [fallback] = await tx
+        .select({ id: skillVersions.id })
+        .from(skillVersions)
+        .where(
+          and(
+            eq(skillVersions.skillId, row.skillId),
+            eq(skillVersions.status, "indexed"),
+            ne(skillVersions.id, row.id),
+          ),
+        )
+        .orderBy(desc(skillVersions.syncedAt))
+        .limit(1);
+
+      servedVersionId = fallback?.id ?? null;
+      // The skill stays listed while a good version backs it; the failing version is
+      // quarantined on its own row either way, so nothing unvalidated is served.
+      servedStatus = fallback ? "indexed" : "quarantined";
+    }
+
     await tx
       .update(skills)
       .set({
-        status,
+        status: servedStatus,
         qualityScore,
-        // Only a passing version is ever served.
-        currentVersionId: status === "indexed" ? row.id : null,
+        currentVersionId: servedVersionId,
         updatedAt: new Date(),
       })
       .where(eq(skills.id, row.skillId));
