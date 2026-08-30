@@ -57,11 +57,13 @@ next-env.d.ts
 # testing
 /coverage
 
-# scripts
-/scripts
-
-# DB migrations
-/migrations
+# scripts and migrations are NOT ignored — both were, and it broke the repo.
+#
+# `package.json` wires every pipeline command to `scripts/*.mts`, and CLAUDE.md states that
+# every schema change is a committed file in `migrations/`. With both directories ignored,
+# a fresh clone could neither run `pnpm sync` nor rebuild the schema — and migration 0005
+# had already been applied to the database while sitting untracked, which is the exact
+# failure the migrations-only rule exists to prevent.
 
 # claude code
 .claude/settings.local.json

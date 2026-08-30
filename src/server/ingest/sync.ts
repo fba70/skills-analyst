@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 
 import { githubConnector } from "@/server/connectors/github";
 import type { Connector, SourceConfig } from "@/server/connectors/types";
@@ -94,6 +94,8 @@ export type SyncReport = {
   signals: Record<string, number>;
   created: number;
   unchanged: number;
+  /** Skills withdrawn because they are gone upstream (R1.5). */
+  tombstoned: number;
 };
 
 /**
@@ -106,7 +108,18 @@ export async function pendingSources(limit = 10) {
   return db
     .select({ id: sources.id, url: sources.url, name: sources.name })
     .from(sources)
-    .where(and(isNull(sources.lastSuccessAt), eq(sources.enabled, true)))
+    .where(
+      and(
+        isNull(sources.lastSuccessAt),
+        eq(sources.enabled, true),
+        // A curated list is a *discovery* source, not a content source: it is read for the
+        // repository links inside it, by `expandList`, and it holds no skills of its own.
+        // Syncing one would either find nothing or — worse — ingest the list repository's
+        // own README as a skill. Expanding it is the equivalent operation, and it belongs
+        // to the crawl, not to the fetch pipeline.
+        ne(sources.kind, "awesome_list"),
+      ),
+    )
     .orderBy(sources.createdAt)
     .limit(limit);
 }
@@ -115,22 +128,38 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
   const orgId = options.orgId ?? null;
   const log = options.onProgress ?? (() => {});
 
-  const config: SourceConfig = {
-    url: options.sourceUrl,
-    ref: options.ref,
-    includePaths: options.includePaths,
-  };
-
-  // A curator approval is stored on the source, not passed by the caller — so the
-  // scheduled path honours it too, not just a hand-run command.
+  /**
+   * Curator decisions live on the source, not in the caller's arguments — so the scheduled
+   * path honours them too, not just a hand-run command with the right flags.
+   *
+   * `allowLargeRepo` already worked this way. `includePaths` did not, and that was a silent
+   * hole: narrowing `liferay/liferay-portal` to `workspaces/` was recorded on the source
+   * and then ignored by every sync that did not re-type `--include`, so the tree call kept
+   * truncating and the sync kept failing for a reason the curator had already fixed.
+   */
   const [sourceRow] = await db
     .select({ config: sources.config })
     .from(sources)
     .where(eq(sources.url, options.sourceUrl))
     .limit(1);
-  const approvedLarge =
-    ((sourceRow?.config as Record<string, unknown> | undefined)?.allowLargeRepo as boolean) ===
-    true;
+  const sourceConfig = (sourceRow?.config ?? {}) as Record<string, unknown>;
+
+  const approvedLarge = sourceConfig.allowLargeRepo === true;
+  const storedIncludePaths = Array.isArray(sourceConfig.includePaths)
+    ? (sourceConfig.includePaths as unknown[]).filter(
+        (value): value is string => typeof value === "string" && value.length > 0,
+      )
+    : [];
+
+  // An explicit argument wins — a one-off run should be able to look somewhere else
+  // without rewriting the source's stored configuration.
+  const includePaths = options.includePaths?.length ? options.includePaths : storedIncludePaths;
+
+  const config: SourceConfig = {
+    url: options.sourceUrl,
+    ref: options.ref,
+    includePaths: includePaths.length > 0 ? includePaths : undefined,
+  };
 
   const connector = CONNECTORS.github_repo;
   log(`enumerating ${options.sourceUrl}`);
@@ -164,6 +193,16 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
   }
 
   const refs = options.limit ? enumerated.refs.slice(0, options.limit) : enumerated.refs;
+
+  /**
+   * Was this a complete view of the repository?
+   *
+   * Only then can "absent from the enumeration" mean "deleted upstream". A `--limit`, a
+   * dry run, or an `includePaths` narrowing each produce a partial view, and treating any
+   * of them as authoritative would tombstone everything the run did not look at.
+   */
+  const completeEnumeration =
+    !options.limit && !options.dryRun && includePaths.length === 0;
   const report: SyncReport = {
     sourceUrl: options.sourceUrl,
     commitSha: refs[0]?.commitSha ?? null,
@@ -173,6 +212,7 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
     ) as Record<string, number>,
     created: 0,
     unchanged: 0,
+    tombstoned: 0,
   };
 
   const sourceId = options.dryRun
@@ -254,6 +294,20 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
     log(`  ${entry.outcome.padEnd(9)} ${ref.path || "."} — ${entry.redistribution}`);
   }
 
+  // Withdraw anything this source used to have and no longer does (R1.5). Guarded on a
+  // complete enumeration — see `tombstoneMissing`.
+  if (completeEnumeration && sourceId) {
+    report.tombstoned = await tombstoneMissing({
+      sourceId,
+      orgId,
+      seenPaths: enumerated.refs.map((ref) => ref.path),
+      sourceUrl: options.sourceUrl,
+    });
+    if (report.tombstoned > 0) {
+      log(`  tombstoned ${report.tombstoned} skill(s) no longer present upstream`);
+    }
+  }
+
   if (!options.dryRun && sourceId) {
     await db
       .update(sources)
@@ -298,7 +352,19 @@ async function holdForReview(
   await db.transaction(async (tx) => {
     await tx
       .update(sources)
-      .set({ enabled: false, health: "paused", healthDetail: { reason }, updatedAt: new Date() })
+      // Structured, not just a sentence: `reapplyMarkerThreshold` has to re-judge this
+      // decision after the threshold moves, and parsing a number back out of prose is how
+      // a re-evaluation quietly starts skipping rows it cannot read.
+      .set({
+        enabled: false,
+        health: "paused",
+        healthDetail: {
+          reason,
+          markerCount,
+          threshold: discoveryPolicy.markerCountReviewThreshold,
+        },
+        updatedAt: new Date(),
+      })
       .where(eq(sources.url, url));
 
     await tx
@@ -345,6 +411,104 @@ async function upsertSource(
     .returning({ id: sources.id });
 
   return row.id;
+}
+
+
+/**
+ * Tombstones skills that have disappeared upstream (R1.5).
+ *
+ * Identity is `(source, path)`, the same key the write path uses. Anything this source
+ * previously produced whose path is absent from a *complete* enumeration is gone upstream —
+ * deleted, renamed, or moved out of the crawled prefixes.
+ *
+ * Tombstoning keeps the metadata and withdraws the content: the row, its provenance and its
+ * verdicts stay, so a link to it can still explain what it was and why it is no longer
+ * served. Deleting would erase the audit trail for a skill somebody may have installed.
+ *
+ * ## The guard is the important part
+ *
+ * This only runs on a full enumeration. A `--limit`ed run, a dry run, or a run narrowed by
+ * `includePaths` all produce a partial view of the repository, and treating a partial view
+ * as authoritative would tombstone every skill the run simply did not look at. That failure
+ * would be silent, would look like successful upstream deletions, and would empty the
+ * corpus one truncated sync at a time. The caller passes `complete: false` whenever the
+ * enumeration was bounded for any reason.
+ */
+export async function tombstoneMissing(input: {
+  sourceId: string;
+  orgId: string | null;
+  seenPaths: string[];
+  sourceUrl: string;
+}): Promise<number> {
+  const { sourceId, orgId, seenPaths, sourceUrl } = input;
+
+  const live = await db
+    .select({
+      id: skillVersions.id,
+      skillId: skillVersions.skillId,
+      path: sql<string>`${skillVersions.provenance}->>'path'`,
+    })
+    .from(skillVersions)
+    .where(
+      and(
+        eq(skillVersions.sourceId, sourceId),
+        inArray(skillVersions.status, ["indexed", "quarantined", "pending", "revalidating"]),
+      ),
+    );
+
+  const seen = new Set(seenPaths);
+  const gone = live.filter((row) => row.path !== null && !seen.has(row.path));
+  if (gone.length === 0) return 0;
+
+  await db.transaction(async (tx) => {
+    if (orgId) {
+      await tx.execute(sql`select set_config('app.org_id', ${orgId}, true)`);
+    }
+
+    for (const row of gone) {
+      await tx
+        .update(skillVersions)
+        .set({ status: "tombstoned", contentStored: false, storageKey: null })
+        .where(eq(skillVersions.id, row.id));
+
+      // Only un-list the skill if this was the version being served. A skill whose newer
+      // version vanished but whose older one is still indexed stays listed on the older.
+      const [remaining] = await tx
+        .select({ id: skillVersions.id })
+        .from(skillVersions)
+        .where(
+          and(
+            eq(skillVersions.skillId, row.skillId),
+            eq(skillVersions.status, "indexed"),
+            ne(skillVersions.id, row.id),
+          ),
+        )
+        .orderBy(desc(skillVersions.syncedAt))
+        .limit(1);
+
+      await tx
+        .update(skills)
+        .set({
+          status: remaining ? "indexed" : "tombstoned",
+          currentVersionId: remaining?.id ?? null,
+          updatedAt: new Date(),
+        })
+        .where(eq(skills.id, row.skillId));
+
+      await tx.insert(events).values({
+        orgId,
+        actorType: "system",
+        actorId: "ingest",
+        kind: "skill_version.tombstoned",
+        subjectType: "skill_versions",
+        subjectId: row.id,
+        reason: "no longer present upstream",
+        payload: { path: row.path, sourceUrl },
+      });
+    }
+  });
+
+  return gone.length;
 }
 
 type WriteInput = {
@@ -461,7 +625,17 @@ async function writeSkillVersion(input: WriteInput): Promise<"created" | "unchan
         licenseEvidence: license.evidence,
         redistribution: license.posture,
         upstreamRef: ref.commitSha,
-        status: "pending",
+        /**
+         * `revalidating` when this skill already had a version, `pending` when it is new
+         * (R1.5).
+         *
+         * Both are unserved and both queue for validation, so the distinction is not about
+         * gating — it is about being able to tell the two situations apart afterwards.
+         * "Upstream changed under us" and "we have never seen this" need different
+         * operational responses, and a single `pending` bucket cannot express which
+         * happened.
+         */
+        status: existing ? "revalidating" : "pending",
       })
       .returning({ id: skillVersions.id });
 
@@ -498,3 +672,12 @@ async function writeSkillVersion(input: WriteInput): Promise<"created" | "unchan
     return "created" as const;
   });
 }
+
+/**
+ * Test seam for `verify-revocation.mts`.
+ *
+ * Named rather than exporting the internal directly so the verification script's dependency
+ * on it is explicit — this is the one caller outside the sync path, and it exists so the
+ * R1.5 rules can be proven without staging a real upstream deletion on GitHub.
+ */
+export const tombstoneForTest = tombstoneMissing;

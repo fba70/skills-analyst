@@ -6,6 +6,8 @@ import { toast } from "sonner";
 
 import {
   clusterAction,
+  consistencyAction,
+  extractStructuresAction,
   promoteAction,
   runCrawlAction,
   signaturesAction,
@@ -95,6 +97,26 @@ const STAGES: Stage[] = [
     amountLabel: "pairs",
     amount: 300,
     run: clusterAction,
+  },
+  {
+    key: "structures",
+    title: "7 · Extract structure",
+    description:
+      "Reads each validated bundle and records its shape — heading roles, body metrics, resource layout, description conventions. Rule-based and free; this is the evidence archetype mining reads.",
+    cta: "Fingerprint structure",
+    amountLabel: "versions",
+    amount: 200,
+    run: extractStructuresAction,
+  },
+  {
+    key: "consistency",
+    title: "8 · Audit documentation",
+    description:
+      "R2.3: asks a model whether each skill's documentation honestly describes its bundled code — the gap the rule-based analyzers cannot see. Only skills that ship code are audited. COSTS MONEY per skill; capped at 25 a run.",
+    cta: "Run audit",
+    amountLabel: "skills",
+    amount: 10,
+    run: consistencyAction,
   },
 ];
 

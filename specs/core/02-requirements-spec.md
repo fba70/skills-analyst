@@ -2,7 +2,7 @@
 
 **Status:** Draft v1.0 · **Date:** 2026-08-27 · **Owner:** TBD
 **Companion documents:** `01-business-concept.md` (vision, incentives, monetization, licensing) · `03-implementation-spec.md` (architecture, platform & interface selection) · `04-source-ingestion-analysis.md` (source taxonomy, registry assessments, license chain, Phase-0 waves)
-**Changelog:** v1.1 — R1.1/R1.4/R1.6 sharpened from the source analysis (Doc 4)
+**Changelog:** v1.1 — R1.1/R1.4/R1.6 sharpened from the source analysis (Doc 4) · v1.2 — §7.7 Distribution & Access added (public registry, export, install compatibility); R1.5 and R2.6 acceptance criteria sharpened; §7.3 R3.2 evidence rule and §10 phasing note added — all from the Phase-1 implementation review
 
 > Scope of this document: functional and non-functional requirements for the platform. The *why and the money* live in Doc 1; the *how on our stack* lives in Doc 3. Where a requirement here depends on a commercial decision (tiers, gating) it references Doc 1 rather than restating it.
 
@@ -82,6 +82,13 @@ The **closing of the loop** is a first-class requirement (§7.6), not a byproduc
   - *AC:* Given two sources with byte-identical skills, when both sync, then one canonical entry exists showing both origins; given ≥90%-similar bodies, then they are linked as a variant cluster.
 - **R1.5 Revocation & drift:** Detect upstream deletion, force-push, and content change; changed skills re-enter validation; deleted skills are tombstoned (metadata retained, content withdrawn).
   - *AC:* Given an upstream file whose hash changes, when the next sync runs, then the skill status becomes `revalidating` and the prior version stays served until the new one passes.
+  - *AC (added v1.2):* Given a new version that **fails** validation, the previously indexed
+    version remains the served version and the skill stays listed. A failing upstream push
+    must never withdraw an already-validated skill — otherwise an upstream author can
+    de-list a skill in our registry without touching anything we ever approved.
+  - *AC (added v1.2):* Deletion detection acts only on a **complete** enumeration of a
+    source. A limited, dry, or path-narrowed sync produces a partial view and must never be
+    treated as authoritative about absence, or a truncated run silently empties the corpus.
 - **R1.6 License gating:** License resolution follows the six-step evidence-recorded chain in Doc 4 §5 (frontmatter SPDX field → nearest in-tree LICENSE file → GitHub Licenses API → ClearlyDefined → ScanCode on the prioritized slice → unresolved). Unresolved or non-redistributable (incl. CC-NC/ND, source-available) ⇒ metadata-only indexing (name, description, link out) — such skills still receive verdicts and count in corpus statistics, but their text is never mirrored nor reproduced in archetype exemplars. Licenses are stored as SPDX expressions per skill version; attribution-required licenses render attribution wherever content is shown.
 
 **P1**
@@ -107,7 +114,7 @@ Design principle: **validation is layered, evidence-producing, and fail-closed.*
   - *AC:* A skill described as "formats markdown" whose script also opens network sockets receives `undocumented-capability: network` and cannot be listed above quarantine tier.
 - **R2.4 Composition-risk metadata:** Record each skill's *capability surface* (file read/write, network, shell, credentials touched) as structured metadata so downstream consumers/agents can reason about risk when combining skills. (Full chain-analysis is P2; capturing the per-skill surface is P0.)
 - **R2.5 Quarantine workflow:** Fail-closed. Any failed check → `quarantined` with machine-readable reasons; quarantined skills are invisible to search/build/assist but visible to curators. Re-validation on upstream fix. Community flagging feeds the same queue.
-- **R2.6 Integrity:** Content-hash lockfile semantics — what a consumer exports/installs is bit-identical to what was validated. Any served bundle carries its validation report hash.
+- **R2.6 Integrity:** Content-hash lockfile semantics — what a consumer exports/installs is bit-identical to what was validated. Any served bundle carries its validation report hash. *(Depends on R8.2: until an export path exists this guarantee is unexercised.)*
 
 **P0 — Quality layers**
 
@@ -140,6 +147,16 @@ Design principle: **validation is layered, evidence-producing, and fail-closed.*
   - **anti-patterns** correlated with low quality scores or validation failures.
   - Output: a versioned **Archetype** object per category `{skeleton, section descriptions, exemplar skill IDs, statistics, anti-patterns}`.
   - *AC:* For each category with ≥50 validated skills, an archetype exists, is regenerated weekly, and every element is traceable to the corpus evidence that produced it (exemplar IDs, frequency stats).
+  - *AC (added v1.2):* The ≥50 threshold counts **distinct document structures**, not skills,
+    and requires ≥10 distinct sources. Measured on the real corpus, one repository supplied
+    2,067 of 2,329 skills and 1,985 of those shared a single generated skeleton — enough to
+    clear a raw-count threshold alone and produce an "archetype" that describes one
+    generator. Near-duplicate detection (R1.4) does not catch this: the text genuinely
+    differs, only the shape is cloned.
+  - *AC (added v1.2):* An archetype is stated as the **contrast** between the top and bottom
+    quality bands of its category, not the average of the category. A section present in 90%
+    of good skills and 90% of weak ones is not guidance; a section present in 80% of good and
+    30% of weak ones is. Averaging reproduces the median skill and teaches nothing.
 - **R3.3 Exemplar selection:** Per category, maintain 3–10 high-quality, license-clean exemplar skills usable as in-context references by the builder/assistant.
 - **R3.4 Attribution surfacing:** Category pages and archetypes credit the skills/authors they were derived from.
 
@@ -200,6 +217,50 @@ Design principle: **validation is layered, evidence-producing, and fail-closed.*
 
 - **R6.6 A/B archetype evaluation:** Serve candidate vs. current archetype to a fraction of builder sessions; promote on measured first-pass-validation and author-acceptance improvement.
 
+### 7.7 Distribution & Access — added v1.2
+
+*Added after Phase-1 implementation review. These were assumed rather than specified, and
+the gap only became visible once the corpus was real: the registry could be browsed by an
+authenticated operator and by nobody else, and no skill could be obtained from it at all.
+A trust-first registry that cannot hand over the artifact it vouched for is half a product,
+and R2.6's integrity guarantee is untestable without a delivery path.*
+
+**P0**
+
+- **R8.1 Public read-only registry** *(delivered)*: Browse, search, and per-skill detail — including
+  provenance, licence, verdicts, quality score and quarantine status — are reachable
+  without an account. Doc 1 makes these trust surfaces un-paywallable (RC.1); this makes
+  them un-gated as well. Authentication is required only to *act* (submit, build, publish).
+  - *AC:* An anonymous request to a skill's detail page returns its verdicts and provenance;
+    the same page for a quarantined skill returns its quarantine reasons and is excluded
+    from search results.
+- **R8.2 Skill export / download** *(delivered)*: A user can obtain any servable skill as a bundle. The
+  bundle is bit-identical to what was validated (R2.6) and carries its provenance and
+  validation-report hash. Licence posture governs what may be served: `mirror_allowed` and
+  `attribution_required` serve content (the latter rendering attribution), while
+  `metadata_only` and `unresolved` serve a link to origin and never the bytes.
+  - *AC:* Downloading a skill twice yields identical bytes with a hash matching the verdict
+    it was validated under; a `metadata_only` skill offers no download path at all.
+- **R8.3 Install-path compatibility** *(delivered for the directory layout; hosted resolution endpoint still P1)*: Exported bundles are consumable by the tools people
+  actually use — at minimum the `SKILL.md` directory layout, so a bundle can be dropped into
+  `.claude/skills/` unchanged. A hosted resolution endpoint (`npx skills`-style) is P1.
+
+**P1**
+
+- **R8.4 Per-skill permalink & citation:** A stable URL per skill and per skill *version*,
+  so a verdict can be cited and an archetype's exemplar list stays resolvable after the
+  upstream repo moves.
+- **R8.5 Corpus statistics on the landing surface:** Skills indexed, sources, validation
+  pass rate, licence mix, quality distribution, freshness against the R7.4 target. Doc 2
+  covers operators (R1.7, R6.4) and researchers (R3.7) and specifies nothing for the ordinary
+  user; this is that.
+- **R8.6 Bulk / API access to metadata** for the public corpus, rate-limited and
+  licence-respecting. Distinct from R3.7, which is the research dataset export.
+
+**P2**
+
+- **R8.7 Webhook/subscription** on corpus changes for downstream registries.
+
 ## 8. Cross-Cutting Requirements
 
 - **R7.1 Auditability (P0):** Every state transition (indexed, quarantined, verified, archetype-updated) is an immutable event with actor, reason, and analyzer/model versions.
@@ -230,12 +291,25 @@ Design principle: **validation is layered, evidence-producing, and fail-closed.*
 
 *(Architecture homes for each phase are assigned in Doc 3 §Proposed design and §Rollout.)*
 
-- **Phase 1 (foundation):** Ingestion (R1.1–1.6) + Validation P0 (R2.1–2.9) + basic taxonomy (R3.1) + search/browse. *Ship a trustworthy registry first — everything else depends on a clean corpus.*
+- **Phase 1 (foundation):** Ingestion (R1.1–1.6) + Validation P0 (R2.1–2.9) + basic taxonomy (R3.1) + search/browse + **distribution (R8.1–8.3)**. *Ship a trustworthy registry first — everything else depends on a clean corpus.*
+  - *(v1.2)* R8.1–8.3 moved into Phase 1: a registry nobody can read without an account and
+    nothing can be downloaded from is not shippable as a registry, and R2.6's integrity
+    guarantee cannot be exercised without an export path.
 - **Phase 2 (intelligence):** Archetype extraction (R3.2–3.4) + Builder (R4.1–4.5).
 - **Phase 3 (assistant + loop):** Assistant (R5.1–5.5) + closing the loop (R6.1–6.5).
 - **Phase 4 (hardening & scale):** Sandbox behavioral testing (R2.10), eval harness (R2.11), composition analysis (R2.13), A/B archetypes (R6.6), verified tier.
 
 Dependency note: R3.2 needs ≥50 validated skills/category → Phase 1 corpus volume gates Phase 2 quality. R6.x needs builder telemetry → Phase 3 by definition.
+
+*(v1.2)* Corpus volume is a **source-count** problem, not a skill-count one, and the
+discovery channels are not interchangeable. GitHub code search reports ~382k SKILL.md files
+and caps every query at 1,000 results; sharding by file size saturates — 38 shards over the
+cap with no further split available on that axis — so channel R1.1(c) cannot complete and
+has no notion of value, since byte ranges are arbitrary with respect to quality. The
+curated channels are what produce a quality-biased corpus: a 130k-star MIT repository with
+59 skills was reached by neither the crawl nor any of the four major awesome-lists, and only
+the hand-picked seed list found it. Sequence discovery as seed list → curated lists →
+crawl, not the reverse.
 
 ## 10a. Commercial & Entitlement Requirements (bridge to Doc 1)
 

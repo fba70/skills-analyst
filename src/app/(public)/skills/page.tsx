@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { LicenseBadge } from "@/components/registry/license-badge";
+import { labelFor } from "@/server/taxonomy/vocabulary";
 import { RegistryFilters } from "@/components/registry/registry-filters";
 import { Paginator } from "@/components/common/paginator";
 import { Badge } from "@/components/ui/badge";
@@ -14,7 +15,6 @@ import {
   type PageSize,
   type SortKey,
 } from "@/server/dal/skills";
-import { requireSession } from "@/server/dal/session";
 
 export const metadata: Metadata = { title: "Registry" };
 
@@ -23,7 +23,8 @@ export const metadata: Metadata = { title: "Registry" };
  * all query-string in, SQL out. Nothing here fetches a row it does not render.
  */
 export default async function RegistryPage(props: PageProps<"/skills">) {
-  await requireSession();
+  // No session check: the registry is public (R8.1). The DAL resolves scope on its own —
+  // an anonymous request lands on the public corpus with RLS enforcing it.
   const params = await props.searchParams;
 
   const single = (key: string) => {
@@ -44,6 +45,7 @@ export default async function RegistryPage(props: PageProps<"/skills">) {
     dialect: single("dialect"),
     posture: single("posture"),
     capability: single("capability"),
+    category: single("category"),
     sort,
     page: Number(single("page")) || 1,
     pageSize,
@@ -94,6 +96,22 @@ export default async function RegistryPage(props: PageProps<"/skills">) {
                           redistribution={skill.redistribution}
                           spdx={skill.licenseSpdx}
                         />
+                        {skill.categories
+                          .filter((c) => c.axis === "function")
+                          .slice(0, 1)
+                          .map((c) => (
+                            <Badge key={c.value} variant="secondary">
+                              {labelFor("function", c.value)}
+                            </Badge>
+                          ))}
+                        {skill.categories
+                          .filter((c) => c.axis === "domain")
+                          .slice(0, 1)
+                          .map((c) => (
+                            <Badge key={c.value} variant="outline">
+                              {labelFor("domain", c.value)}
+                            </Badge>
+                          ))}
                         {skill.variantCount > 0 ? (
                           <Badge variant="outline" className="text-muted-foreground text-xs">
                             +{skill.variantCount} near-duplicate

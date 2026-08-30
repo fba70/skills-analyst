@@ -67,6 +67,23 @@ export const sources = pgTable(
   },
   (t) => [
     uniqueIndex("sources_org_url_uq").on(t.orgId, t.url),
+    /**
+     * One public source per URL — the constraint everyone assumed the line above was
+     * already enforcing.
+     *
+     * It was not. Postgres treats NULLs as **distinct** in a unique index, and `org_id` is
+     * NULL for every public source, so `(NULL, url)` never collided with `(NULL, url)`.
+     * The whole public corpus was unconstrained: `VoltAgent/awesome-agent-skills` reached
+     * three rows, and `promote()` had grown a hand-rolled select-then-insert to work
+     * around a guarantee that did not exist.
+     *
+     * A partial index rather than `NULLS NOT DISTINCT` because this drizzle version cannot
+     * express the latter, and because the partial form states the rule in the terms the
+     * codebase actually uses: `org_id IS NULL` *is* the public corpus.
+     */
+    uniqueIndex("sources_public_url_uq")
+      .on(t.url)
+      .where(sql`${t.orgId} is null`),
     index("sources_enabled_idx").on(t.enabled, t.health),
   ],
 );

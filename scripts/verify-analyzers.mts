@@ -20,7 +20,12 @@ import type { Analyzer, AnalyzerInput } from "../src/server/validation/types";
 
 const file = (path: string, content: string) => ({ path, content: Buffer.from(content) });
 
-function input(files: Array<{ path: string; content: Buffer }>, markerText: string): AnalyzerInput {
+function input(
+  files: Array<{ path: string; content: Buffer }>,
+  markerText: string,
+  /** Defaults to the SKILL.md contract; AGENTS.md cases override it. */
+  overrides: Partial<AnalyzerInput> = {},
+): AnalyzerInput {
   const match = markerText.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
   const body = match ? markerText.slice(match[0].length) : markerText;
   const frontmatter: Record<string, unknown> = {};
@@ -30,8 +35,42 @@ function input(files: Array<{ path: string; content: Buffer }>, markerText: stri
       if (kv) frontmatter[kv[1]] = kv[2].replace(/^["']|["']$/g, "");
     }
   }
-  return { files, body, frontmatter, markerPath: "SKILL.md" };
+  return {
+    files,
+    body,
+    frontmatter,
+    markerPath: "SKILL.md",
+    dialect: "anthropic_skill",
+    // What the normalizer would have resolved for a SKILL.md: frontmatter, then heading.
+    resolvedName:
+      (typeof frontmatter.name === "string" ? frontmatter.name : null) ??
+      body.match(/^\s*#\s+(.+)$/m)?.[1]?.trim() ??
+      null,
+    resolvedSummary:
+      (typeof frontmatter.description === "string" ? frontmatter.description : null) ?? null,
+    parseError: match ? null : "no frontmatter block",
+    ...overrides,
+  } as AnalyzerInput;
 }
+
+/** A heading-style SKILL.md — the `## Description` convention, no YAML block. */
+const HEADING_MARKER = `# pandas
+
+## Description
+Python pandas data analysis. Returns DataFrame previews.
+
+## Parameters
+- code: pandas code string to execute
+`;
+
+/** A real-shaped AGENTS.md: plain markdown, no frontmatter block at all. */
+const AGENTS_MARKER = `# Frontend (Svelte 5)
+
+Coding patterns for the Svelte frontend.
+
+- **Coding patterns**: MUST use the \`svelte-frontend\` skill when writing Svelte code
+- **Validation**: run \`pnpm check\` before committing
+`;
 
 const GOOD_MARKER = `---
 name: csv-summariser
@@ -62,6 +101,8 @@ type Case = {
   marker: string;
   expectReason: string | null;
   expectBlocks: boolean;
+  /** Dialect and resolved identity, for cases that are not a SKILL.md. */
+  overrides?: Partial<AnalyzerInput>;
 };
 
 const CASES: Case[] = [
@@ -141,7 +182,14 @@ const CASES: Case[] = [
     expectBlocks: true,
   },
   {
-    name: "missing name",
+    /**
+     * Frontmatter present, `name` omitted, and a heading to fall back on.
+     *
+     * Warns rather than blocks now, for the same reason the heading-style case does: the
+     * skill is identifiable, and hiding real content over a fixable omission is a quality
+     * decision dressed as a safety one. It still costs quality points and still says so.
+     */
+    name: "missing name, derivable from the heading",
     analyzer: structuralLint,
     marker: "---\ndescription: Does a thing that is described at some reasonable length here.\n---\n\n# X\n",
     files: [
@@ -151,7 +199,7 @@ const CASES: Case[] = [
       ),
     ],
     expectReason: "missing-name",
-    expectBlocks: true,
+    expectBlocks: false,
   },
   {
     name: "network capability the docs never mention",
@@ -228,13 +276,101 @@ Tidies headings and tables. Nothing else.
     expectReason: null,
     expectBlocks: false,
   },
+
+  /**
+   * AGENTS.md has no frontmatter — that is the format, not a defect.
+   *
+   * These two cases exist because the corpus proved the point: 121 of 121 AGENTS.md files
+   * were quarantined for `missing-name` and `missing-description`, both blocking, because
+   * the SKILL.md frontmatter contract was applied to a dialect that does not have one. The
+   * files were fine; the rule was wrong about what it was reading.
+   */
+  {
+    name: "AGENTS.md without frontmatter is not quarantined",
+    analyzer: structuralLint,
+    marker: AGENTS_MARKER,
+    files: [file("AGENTS.md", AGENTS_MARKER)],
+    expectReason: null,
+    expectBlocks: false,
+    overrides: {
+      markerPath: "AGENTS.md",
+      dialect: "agents_md",
+      resolvedName: "Frontend (Svelte 5)",
+      resolvedSummary: "Coding patterns for the Svelte frontend.",
+    },
+  },
+  {
+    name: "AGENTS.md with no derivable identity still blocks",
+    analyzer: structuralLint,
+    marker: "",
+    files: [file("AGENTS.md", "")],
+    expectReason: "missing-name",
+    expectBlocks: true,
+    overrides: {
+      markerPath: "AGENTS.md",
+      dialect: "agents_md",
+      resolvedName: null,
+      resolvedSummary: null,
+    },
+  },
+  {
+    name: "malformed frontmatter reports a parse error, not a missing field",
+    analyzer: structuralLint,
+    // A colon inside an unquoted value — YAML reads `[REPLACE: TOPIC]` as a nested
+    // mapping and rejects the document. The author's fields are all present.
+    marker: "---\nname: digest\ndescription: Digest of posts on [REPLACE: TOPIC] daily\n---\n\n# Digest\n",
+    files: [
+      file(
+        "SKILL.md",
+        "---\nname: digest\ndescription: Digest of posts on [REPLACE: TOPIC] daily\n---\n\n# Digest\n",
+      ),
+    ],
+    expectReason: "invalid-frontmatter",
+    expectBlocks: true,
+    overrides: {
+      // What `splitFrontmatter` actually returns on a YAML failure: no keys, and an error.
+      frontmatter: {},
+      parseError: "invalid YAML: Nested mappings are not allowed",
+      resolvedName: null,
+    },
+  },
+  {
+    /**
+     * Heading-style SKILL.md: real content, no YAML. Twenty-eight of these were hidden
+     * from the registry over a convention. It warns now, and does not block.
+     */
+    name: "heading-style SKILL.md warns but is not quarantined",
+    analyzer: structuralLint,
+    marker: HEADING_MARKER,
+    files: [file("SKILL.md", HEADING_MARKER)],
+    expectReason: "frontmatter-absent",
+    expectBlocks: false,
+    overrides: {
+      resolvedName: "pandas",
+      resolvedSummary: "Python pandas data analysis. Returns DataFrame previews.",
+    },
+  },
+  {
+    name: "SKILL.md with nothing identifiable still blocks",
+    analyzer: structuralLint,
+    marker: "just some prose, no heading\n",
+    files: [file("SKILL.md", "just some prose, no heading\n")],
+    expectReason: "missing-name",
+    expectBlocks: true,
+    overrides: { resolvedName: null, resolvedSummary: null },
+  },
 ];
 
 let failures = 0;
 const width = Math.max(...CASES.map((c) => c.name.length));
 
 for (const testCase of CASES) {
-  const output = testCase.analyzer.run(input(testCase.files, testCase.marker));
+  // `run` may be async now (R2.3 needs a model). Every analyzer under test here is
+  // rule-based and synchronous, but awaiting is correct for both and keeps this honest if
+  // a costly one is ever added to CASES.
+  const output = await testCase.analyzer.run(
+    input(testCase.files, testCase.marker, testCase.overrides ?? {}),
+  );
   const reasons = output.findings.map((f) => f.reason);
 
   // "expected clean" must mean NO findings at all. An assertion that cannot fail is

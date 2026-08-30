@@ -39,7 +39,16 @@ export function VerdictBadge({
   );
 }
 
-/** Overall standing: quarantined if anything blocks, otherwise the worst non-pass. */
+/**
+ * Overall standing.
+ *
+ * Every non-served status is named explicitly, and the default branch is only reached by a
+ * skill that is genuinely indexed. The earlier version tested for `quarantined` alone and
+ * fell through for everything else — so once R1.5 started writing `tombstoned`, a skill
+ * withdrawn upstream rendered as "Passed all checks". A status this component does not
+ * recognise is now surfaced rather than silently treated as a pass, which is the direction
+ * a trust badge should fail in.
+ */
 export function OverallVerdict({
   verdicts,
   status,
@@ -48,6 +57,14 @@ export function OverallVerdict({
   status: string;
 }) {
   if (status === "quarantined") return <VerdictBadge result="fail" label="Quarantined" />;
+  if (status === "tombstoned") {
+    return <VerdictBadge result="fail" label="Withdrawn upstream" />;
+  }
+  if (status === "revalidating") {
+    return <VerdictBadge result="warn" label="Re-validating" />;
+  }
+  if (status === "pending") return <VerdictBadge result="warn" label="Awaiting validation" />;
+  if (status !== "indexed") return <VerdictBadge result="warn" label={status} />;
   const hasWarn = verdicts.some((verdict) => verdict.result === "warn");
   return (
     <VerdictBadge

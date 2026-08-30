@@ -3,6 +3,9 @@
 import { revalidatePath } from "next/cache";
 
 import { buildSignatures, clusterDuplicates } from "@/server/analytics/dedupe";
+import { extractStructures } from "@/server/analytics/structure-run";
+import { expandList, applySeedRepos } from "@/server/crawl/seed-run";
+import { normalizeRepoInput, submitRepository } from "@/server/crawl/submit";
 import { runCrawl, ensureSeedShards } from "@/server/crawl/run";
 import { decideCandidates, enrichCandidates } from "@/server/crawl/promote";
 import { requireAdmin, setUserBanned, setUserRole } from "@/server/dal/admin";
@@ -12,7 +15,9 @@ import {
   releaseFromQuarantine,
 } from "@/server/dal/curation";
 import { pendingSources, syncSource } from "@/server/ingest/sync";
-import { validatePending } from "@/server/validation/run";
+import { MAX_BATCH } from "@/server/taxonomy/classify";
+import { classifySample, reviewCategory, type SampleStrategy } from "@/server/taxonomy/run";
+import { validatePending, versionsWithCode } from "@/server/validation/run";
 
 /**
  * Admin operations.
@@ -212,6 +217,205 @@ export async function setBannedAction(userId: string, banned: boolean): Promise<
     await setUserBanned(userId, banned);
     revalidatePath("/settings");
     return { ok: true, message: banned ? "User banned." : "User unbanned." };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+
+/**
+ * Structural fingerprints (R3.2).
+ *
+ * Rule-based and free, so the only bound that matters is the request timeout — hence a
+ * slice size rather than "everything", same as the other stages.
+ */
+export async function extractStructuresAction(limit: number): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+    const report = await extractStructures({
+      limit: Math.min(Math.max(1, limit), 500),
+    });
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      message:
+        `fingerprinted ${report.extracted}, failed ${report.failed} · ` +
+        `${report.remaining} remaining · ` +
+        `${report.unresolvedHeadings.length} unrecognised heading string(s)`,
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Category classification (R3.1) — **the one action that spends money.**
+ *
+ * Capped twice: `MAX_BATCH` in the classifier, and again here. An admin action is a POST
+ * endpoint like any other, so the UI's number input is not a limit — this is. The cap is
+ * deliberately low enough that a mis-click costs cents, and a wider run is a CLI decision
+ * taken with the corpus in front of you.
+ */
+export async function classifySampleAction(
+  limit: number,
+  strategy: SampleStrategy,
+): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+    const report = await classifySample({
+      limit: Math.min(Math.max(1, limit), MAX_BATCH),
+      strategy,
+    });
+    revalidatePath("/settings");
+    revalidatePath("/skills");
+    return {
+      ok: true,
+      message:
+        `classified ${report.classified}/${report.requested}, failed ${report.failed} · ` +
+        `${report.assignments} assignment(s), ${report.held} held for review · ` +
+        `${report.remaining} unlabelled` +
+        (report.errors.length > 0 ? ` · ${report.errors[0]}` : ""),
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** A curator's verdict on one low-confidence assignment. */
+export async function reviewCategoryAction(
+  categoryId: string,
+  decision: "confirm" | "reject",
+): Promise<ActionResult> {
+  try {
+    const admin = await requireAdmin();
+    await reviewCategory(categoryId, decision, admin.email);
+    revalidatePath("/settings");
+    revalidatePath("/skills");
+    return {
+      ok: true,
+      message: decision === "confirm" ? "Confirmed." : "Removed from this skill.",
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Admin repository submission (R1.8).
+ *
+ * `autoPromote: true` because an admin submitting a repository *is* the promotion
+ * decision — the policy in `policy.ts` exists to judge repositories nobody looked at. The
+ * public half of R1.8 will call the same function with `false` and land in the review
+ * queue instead; nothing else changes.
+ */
+export async function submitRepoAction(
+  url: string,
+  includePaths: string,
+): Promise<ActionResult> {
+  try {
+    const admin = await requireAdmin();
+    const outcome = await submitRepository(url, {
+      submittedBy: admin.email,
+      autoPromote: true,
+      includePaths: includePaths
+        .split(/[,\n]/)
+        .map((p) => p.trim())
+        .filter(Boolean),
+    });
+
+    if (!outcome.ok) return { ok: false, message: outcome.reason };
+
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      message:
+        `${outcome.owner}/${outcome.repo}: ${outcome.skillsFound} skill(s) found, ` +
+        `licence ${outcome.licenseSpdx ?? "unresolved"}` +
+        (outcome.alreadyKnown ? ` — already known, updated` : "") +
+        ` · run Sync to fetch them`,
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+
+/**
+ * Expand a curated list into candidates (R1.1b).
+ *
+ * The list is not fetched for content — only for the repository links inside it. Every
+ * candidate then goes through the ordinary enrich → decide → sync → validate path, so
+ * this cannot put an unvalidated skill in front of anyone. It is a discovery action.
+ */
+export async function expandListAction(url: string): Promise<ActionResult> {
+  try {
+    const admin = await requireAdmin();
+    const parsed = normalizeRepoInput(url);
+    const report = await expandList(
+      { owner: parsed.owner, repo: parsed.repo },
+      { submittedBy: admin.email },
+    );
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      message:
+        `${report.list}: ${report.candidates} candidate(s) from ${report.linksSeen} link(s) · ` +
+        `${report.inserted} new, ${report.alreadyKnown} already known · ` +
+        `run Promote to enrich and decide on them`,
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** Applies the whole curated seed allow-list. Bounded by the list's own length. */
+export async function applySeedsAction(): Promise<ActionResult> {
+  try {
+    const admin = await requireAdmin();
+    const report = await applySeedRepos({ submittedBy: admin.email });
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      message:
+        `${report.added} added, ${report.alreadyKnown} already known, ${report.failed} failed · ` +
+        `${report.skillsFound} skill(s) reachable · run Sync to fetch them`,
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+
+/**
+ * R2.3 description-consistency — **the second action that spends money.**
+ *
+ * Targets only bundles that contain code, because a skill with no code cannot misrepresent
+ * its code. Capped here as well as in the CLI: an admin action is a POST endpoint, so the
+ * UI's number input is a suggestion and this is the limit.
+ */
+export async function consistencyAction(limit: number): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+    const bounded = Math.min(Math.max(1, limit), 25);
+    const versionIds = await versionsWithCode(bounded);
+
+    if (versionIds.length === 0) {
+      return { ok: true, message: "No un-audited skills with bundled code. Nothing to do." };
+    }
+
+    const outcomes = await validatePending({
+      versionIds,
+      includeCostly: true,
+      revalidate: true,
+    });
+
+    const flagged = outcomes.filter((o) => o.reasons.length > 0).length;
+    revalidatePath("/settings");
+    revalidatePath("/skills");
+    return {
+      ok: true,
+      message: `audited ${outcomes.length} skill(s) with bundled code · ${flagged} with findings`,
+    };
   } catch (error) {
     return failure(error);
   }

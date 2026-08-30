@@ -4,13 +4,16 @@ import { and, asc, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from "d
 
 import {
   capabilitySurfaces,
+  skillCategories,
   skillDuplicates,
   skills,
   skillVersions,
   sources,
   verdicts,
 } from "@/server/db/schema";
+import { capabilityLabel } from "@/lib/capabilities";
 import { withOrgScope } from "@/server/dal/scope";
+import { labelFor, REVIEW_FLOOR, type CategoryAxis } from "@/server/taxonomy/vocabulary";
 
 /**
  * Reads for the registry.
@@ -51,6 +54,8 @@ export type SkillFilters = {
   posture?: string;
   /** Only skills whose bundled code touches this capability. */
   capability?: string;
+  /** A category slug from either axis (R3.1) — `function:review`, `domain:marketing`. */
+  category?: string;
   sort?: SortKey;
   page?: number;
   pageSize?: PageSize;
@@ -70,6 +75,8 @@ export type SkillListItem = {
   stars: number | null;
   /** Near-duplicates clustered under this entry. */
   variantCount: number;
+  /** Servable category assignments, both axes (R3.1). */
+  categories: Array<{ axis: string; value: string }>;
 };
 
 export type SkillListPage = {
@@ -85,6 +92,9 @@ export type FilterOptions = {
   dialects: Array<{ value: string; label: string; count: number }>;
   postures: Array<{ value: string; label: string; count: number }>;
   capabilities: Array<{ value: string; label: string; count: number }>;
+  /** Both axes, each entry keyed `axis:value` so one control can serve both. */
+  functions: Array<{ value: string; label: string; count: number }>;
+  domains: Array<{ value: string; label: string; count: number }>;
   total: number;
   mirrored: number;
 };
@@ -154,6 +164,22 @@ function whereFor(filters: SkillFilters): SQL | undefined {
       ),
     );
   }
+  if (filters.category) {
+    // `axis:value`, so one query parameter serves both axes without a second control.
+    // Only *servable* assignments filter: a held low-confidence guess should not silently
+    // decide what a user sees, which is the whole reason the review floor exists.
+    const [axis, ...rest] = filters.category.split(":");
+    const value = rest.join(":");
+    if (axis && value) {
+      clauses.push(sql`exists (
+        select 1 from ${skillCategories} sc
+        where sc.skill_id = ${skills.id}
+          and sc.axis = ${axis}
+          and sc.value = ${value}
+          and (sc.confidence >= ${REVIEW_FLOOR} or sc.reviewed_at is not null)
+      )`);
+    }
+  }
   if (filters.capability) {
     // The surface is jsonb: `{ network: { present: true, evidence: [...] }, ... }`.
     clauses.push(sql`exists (
@@ -222,7 +248,48 @@ export async function listSkills(filters: SkillFilters = {}): Promise<SkillListP
       .limit(pageSize)
       .offset((page - 1) * pageSize);
 
-    return { items, total, page, pageSize, pageCount };
+    /**
+     * Categories for the visible page only.
+     *
+     * One extra query keyed on the ids just fetched, rather than a join on the main
+     * select: a skill carries up to five assignments across two axes, and joining would
+     * multiply every row by that and break the `limit`. Ten rows in, ten rows out.
+     */
+    const categoryRows =
+      items.length === 0
+        ? []
+        : await tx
+            .select({
+              skillId: skillCategories.skillId,
+              axis: skillCategories.axis,
+              value: skillCategories.value,
+            })
+            .from(skillCategories)
+            .where(
+              and(
+                inArray(
+                  skillCategories.skillId,
+                  items.map((item) => item.id),
+                ),
+                sql`(${skillCategories.confidence} >= ${REVIEW_FLOOR} or ${skillCategories.reviewedAt} is not null)`,
+              ),
+            )
+            .orderBy(desc(skillCategories.confidence));
+
+    const bySkill = new Map<string, Array<{ axis: string; value: string }>>();
+    for (const row of categoryRows) {
+      const list = bySkill.get(row.skillId) ?? [];
+      list.push({ axis: row.axis, value: row.value });
+      bySkill.set(row.skillId, list);
+    }
+
+    return {
+      items: items.map((item) => ({ ...item, categories: bySkill.get(item.id) ?? [] })),
+      total,
+      page,
+      pageSize,
+      pageCount,
+    };
   });
 }
 
@@ -273,6 +340,39 @@ export async function getFilterOptions(): Promise<FilterOptions> {
         ),
       );
 
+    /**
+     * Category facets, per axis (R3.1).
+     *
+     * Counted from servable assignments only — a held low-confidence guess must not
+     * advertise a category in the sidebar and then return a different set of results.
+     */
+    const categoryRows = await tx
+      .select({
+        axis: skillCategories.axis,
+        value: skillCategories.value,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(skillCategories)
+      .innerJoin(skills, eq(skills.id, skillCategories.skillId))
+      .where(
+        and(
+          eq(skills.status, "indexed"),
+          isNull(skills.canonicalSkillId),
+          sql`(${skillCategories.confidence} >= ${REVIEW_FLOOR} or ${skillCategories.reviewedAt} is not null)`,
+        ),
+      )
+      .groupBy(skillCategories.axis, skillCategories.value)
+      .orderBy(desc(sql`count(*)`));
+
+    const facet = (axis: CategoryAxis) =>
+      categoryRows
+        .filter((row) => row.axis === axis)
+        .map((row) => ({
+          value: `${axis}:${row.value}`,
+          label: labelFor(axis, row.value),
+          count: row.count,
+        }));
+
     const capabilityCounts = new Map<string, number>();
     for (const row of capabilityRows) {
       const surface = (row.surface ?? {}) as Record<string, { present?: boolean }>;
@@ -297,8 +397,12 @@ export async function getFilterOptions(): Promise<FilterOptions> {
         .map(([value, count]) => ({ value, label: label(value), count }))
         .sort((a, b) => b.count - a.count),
       capabilities: [...capabilityCounts.entries()]
-        .map(([value, count]) => ({ value, label: label(value), count }))
+        // Shared with the detail page's capability card, so the registry filter and the
+        // skill page cannot disagree about what `fs_read` is called.
+        .map(([value, count]) => ({ value, label: capabilityLabel(value), count }))
         .sort((a, b) => b.count - a.count),
+      functions: facet("function"),
+      domains: facet("domain"),
       total: rows.length,
       mirrored: rows.filter((row) => row.contentStored).length,
     };
@@ -330,6 +434,15 @@ export type SkillDetail = SkillListItem & {
       line?: number;
       excerpt?: string;
     }>;
+    /**
+     * The analyzer's structured output — capability surface, consistency score, and
+     * whatever a later analyzer chooses to record.
+     *
+     * Carried through rather than flattened because each analyzer's payload has its own
+     * shape, and the renderer that understands one should read it directly instead of the
+     * DAL guessing a common denominator.
+     */
+    data: Record<string, unknown>;
   }>;
   capabilities: string[];
   undocumented: string[];
@@ -449,6 +562,20 @@ export async function getSkillBySlug(slug: string): Promise<SkillDetail | null> 
       .orderBy(desc(skillDuplicates.similarity))
       .limit(50);
 
+    // Servable category assignments, both axes (R3.1). Held low-confidence guesses are
+    // excluded: a category nobody has confirmed should not be presented as a fact about
+    // the skill on its own page.
+    const categoryRows = await tx
+      .select({ axis: skillCategories.axis, value: skillCategories.value })
+      .from(skillCategories)
+      .where(
+        and(
+          eq(skillCategories.skillId, row.id),
+          sql`(${skillCategories.confidence} >= ${REVIEW_FLOOR} or ${skillCategories.reviewedAt} is not null)`,
+        ),
+      )
+      .orderBy(desc(skillCategories.confidence));
+
     // When this skill is itself a variant, point at the entry it was clustered under.
     let canonicalOf: SkillDetail["canonicalOf"] = null;
     if (row.canonicalSkillId) {
@@ -478,7 +605,13 @@ export async function getSkillBySlug(slug: string): Promise<SkillDetail | null> 
         findings:
           ((verdict.evidence as Record<string, unknown>)
             ?.findings as SkillDetail["verdicts"][number]["findings"]) ?? [],
+        data:
+          ((verdict.evidence as Record<string, unknown>)?.data as Record<
+            string,
+            unknown
+          >) ?? {},
       })),
+      categories: categoryRows.map((c) => ({ axis: c.axis, value: c.value })),
       capabilities: Object.entries(surface)
         .filter(([, value]) => value?.present)
         .map(([key]) => key),

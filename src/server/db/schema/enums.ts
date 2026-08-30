@@ -139,3 +139,21 @@ export const discoveredRepoStatus = pgEnum("discovered_repo_status", [
   "needs_review",
   "skipped",
 ]);
+
+/**
+ * Which axis a category assignment sits on (Doc 2 R3.1).
+ *
+ * `domain` is the field served, `function` is what the skill does. Structure correlates
+ * with function, so archetypes are mined per function; domain drives browse and filter.
+ * Keeping them apart in the type means a query can never accidentally average a rubric
+ * together with a template.
+ */
+export const categoryAxis = pgEnum("category_axis", ["domain", "function"]);
+
+/** Who decided a category. A curator's answer outranks a classifier's and is never re-run. */
+export const categoryAssignedBy = pgEnum("category_assigned_by", [
+  "classifier",
+  "curator",
+  /** Derived from a deterministic rule rather than a model — cheap and explainable. */
+  "heuristic",
+]);

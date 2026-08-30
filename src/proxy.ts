@@ -21,5 +21,7 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/account/:path*", "/skills/:path*", "/settings/:path*"],
+  // `/skills` is deliberately absent: the registry is public (R8.1). Adding it back would
+  // redirect anonymous visitors away from the pages that exist to be read by anyone.
+  matcher: ["/dashboard/:path*", "/account/:path*", "/settings/:path*"],
 };

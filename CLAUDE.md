@@ -41,8 +41,10 @@ src/
   app/
     page.tsx                  public home
     (auth)/                   sign-in, sign-up — bounces a live session to /dashboard
+    (public)/                 registry — readable with no account (R8.1)
     (protected)/              server-guarded group: layout calls requireSession()
     api/auth/[...all]/        Better Auth handler — the only DB-touching route
+    api/skills/[slug]/download/  skill export (R8.2) — calls src/server, never the db
   components/
     ui/                       shadcn, vendored, ours to edit
     layout/                   app sidebar and its rows
@@ -177,6 +179,373 @@ every user, run ingestion, change policy.
 - Tabs today: **Ingestion** (bounded manual runs of crawl / promote / sync / validate) and
   **Users** (all users, grant or revoke admin, ban). More tabs go here.
 
+### The marker threshold, and re-applying a policy change
+
+`markerCountReviewThreshold` is **500** (was 50). At 50 it paused 32 sources in one go —
+61, 66, 84, 90, 102, 120, 193 markers — which are ordinary large collections, not datasets,
+and exactly the mass categorical and structural analysis needs. The gate exists to stop the
+crawl quietly ingesting a monorepo nobody looked at; it was instead capping the corpus.
+
+Size was also standing in for a property it does not measure. Structural monoculture is what
+damages archetype mining, and `minStructuralDiversityPercent` measures that directly now, so
+the size gate only has to catch the genuinely enormous — where the mass fetch is itself the
+risk.
+
+**A threshold change is not finished until the already-decided rows are re-judged.** A
+paused source is `enabled = false`, so `pendingSources` skips it forever; raising the number
+would silently apply only to repositories discovered *next*. `reapplyMarkerThreshold()` is
+the sweep, sibling to `reapplyPathExclusions()` — offline, free, re-runnable in either
+direction, and it leaves `allowLargeRepo` sources alone because a curator already decided
+those.
+
+> `discovered_repos.hit_count` is **not** the marker count. It is what *code search*
+> reported — capped and sampled — while the pause records what a full enumeration found.
+> Using one as a fallback for the other let a repository whose enumeration found 3,551
+> markers past a 500 threshold, because code search had seen only a handful. The sync
+> re-pauses it, so nothing is fetched, but the sweep then reports "0 still held" when two
+> were — a lie in the one number you are reading to check the change worked.
+
+### The registry is public, and downloads are real
+
+**`(public)` vs `(protected)` is the whole boundary.** `(public)/layout.tsx` calls
+`getSession()` — which returns null — where `(protected)/layout.tsx` calls
+`requireSession()`, which redirects. A signed-in visitor gets the full sidebar chrome; an
+anonymous one gets a plain header. Same registry underneath. `/skills` is deliberately
+**absent from the `proxy.ts` matcher**; putting it back would redirect anonymous visitors
+away from the pages that exist to be read by anyone.
+
+Nothing extra was needed in the DAL: `withOrgScope` resolves no org for an anonymous
+request, which lands on exactly the public corpus (`org_id IS NULL`) with RLS enforcing it
+rather than a `where` clause someone can forget.
+
+**Export (R8.2) is the delivery half of R2.6.** Content-hash lockfile semantics were a
+claim until something handed a consumer bytes. `pnpm verify:export` proves the contract
+(10 checks); the properties that matter:
+
+- the archive is assembled from the objects at `sha256/<hash>/…`, so the key *is* the hash
+  the verdict covers;
+- it carries `SKILL-FOUNDRY.json` with the content hash, the **validation report hash**, and
+  the verdicts that hash covers — both recomputable from the archive alone;
+- **two downloads are byte-identical.** This cost a design change: the receipt originally
+  embedded `exportedAt`, which made every download differ and destroyed the one property a
+  consumer can actually check. `syncedAt` is the timestamp with information in it. ZIP
+  mtimes are pinned to 1980-01-01 for the same reason (the format cannot encode the epoch).
+- the licence gate runs **before any object is read**. `metadata_only` and `unresolved`
+  skills have no stored copy at all — analysed in memory, verdict kept, text never written
+  down — so the refusal is a fact about the licence, and it returns 451 with a link to
+  origin rather than a redirect that would look like a successful download.
+
+**Why the download is a route handler.** Queries belong in `src/server/**` called from
+server components and actions, and route handlers get no database — both hold: the route
+imports `@/server/skills/export`, touches no `@/server/db`, `drizzle-orm` or `pg`, and scope
+is still resolved in the DAL. A file download cannot be a server component (renders HTML) or
+an action (returns a serialisable value), so this is the exception the rule anticipates. The
+reasoning is in the route file so nobody has to rediscover it.
+
+> `export.ts` is split into `buildBundle` (takes facts, assembles) and `exportSkill` (looks
+> facts up through the DAL) because the DAL reaches `next/navigation` and cannot load in a
+> plain node script. Assembly is the part with rules worth testing.
+
+### Validation — what runs by default, and what does not
+
+`validatePending()` runs four **free, deterministic** analyzers: structural-lint,
+secret-scan, injection-scan, capability-surface. That set has to stay free, because a
+validate pass you have to think about before triggering is one that stops getting triggered.
+
+**R2.3 description-consistency is opt-in** (`includeCostly`, `pnpm validate --consistency`).
+It asks a model whether the documentation honestly describes the bundled code — the blind
+spot the other four structurally cannot cover, since a script posting to an external host is
+fine in a skill that says it uploads reports and alarming in one that says it formats
+markdown. Two things keep it affordable: it targets only bundles that contain code
+(`versionsWithCode()`; ~7% of this corpus), and a bundle with no code returns a pass with no
+model call — which is the correct answer, not a cost dodge.
+
+Its thresholds are deliberately timid: `fail` below 35, `warn` below 70. Quarantine
+precision is a tracked metric, and a model that is merely unsure should produce a warning a
+human reads, not a block. The hard blocks stay with the analyzers that have no opinions.
+
+### Git symlinks are not documents
+
+A symlink is stored in git as a blob **whose content is the target path**. Over
+raw.githubusercontent.com that is literally what comes back — `../../../.config/agents/rules/panda-css.md`
+— not the file it points at. Treated as an ordinary blob it becomes a 40-byte "skill" whose
+entire body is a path, which is then hashed and stored.
+
+Found by spot-checking a quarantine count that looked too round: **217 of the 245 skills
+quarantined for "no frontmatter block" were symlinks.** They were in quarantine, which was
+the right outcome for the wrong reason — the verdict said `missing-name` when the truth was
+that we had ingested a pointer.
+
+The GitHub tree API reports `mode: 120000` for them and the connector was discarding the
+field. `isSymlink` now filters them out of enumeration. Skipped, not resolved: nearly all
+point *outside* the skill directory at files the crawl reaches on their own terms, and
+following arbitrary relative paths out of a bundle is a directory-traversal problem we would
+be choosing to have.
+
+**The cleanup needed no special case.** A skipped symlink is absent from the next
+enumeration, which is exactly what R1.5 tombstoning means by "gone upstream" — re-syncing
+`hashintel/hash` retired its four (36–42 bytes each) automatically, metadata retained. The
+rest clear as their sources re-sync.
+
+> The indexed side was checked too, and is clean: a sample of tiny indexed skills were all
+> legitimate — real frontmatter, just terse. Nothing was being served as a skill that was
+> actually a path.
+
+### Identity blocks; convention warns
+
+The rule `structural-lint` applies to identity is **"can this skill be identified at all"**,
+not "does it follow the convention". The normalizer's fallback chain — frontmatter, then the
+leading heading, then the directory name — already answers the first question for every
+dialect, and it had been answering it correctly while nothing read the result.
+
+| Situation | Verdict |
+|---|---|
+| Frontmatter complete | pass |
+| No `---` block, name derivable | `frontmatter-absent` · **medium** · indexed |
+| Block present, `name` omitted, derivable | `missing-name` · **medium** · indexed |
+| No `description`, summary derivable | `missing-description` · **medium** · indexed |
+| Nothing anywhere identifies it | **high** · quarantined |
+| Nothing anywhere describes it | **high** · quarantined |
+
+Blocking is for *safety*, and a missing YAML block is not a safety question — every security
+analyzer runs and passes regardless. Hiding 257 real skills over a convention was a quality
+decision wearing a trust decision's clothes.
+
+It stays a real defect and is priced as one: two `medium` findings cost 16 quality points,
+so these land at **84/100** and rank below well-formed skills without disappearing.
+`description` is what a consuming agent matches on in the Agent Skills standard, so a skill
+without one genuinely triggers less reliably.
+
+**Released 257.** The 8 that still block are 13–64 byte stubs and symlink remnants — a name
+from the directory, but no content to summarise, so nothing decides when they would trigger.
+
+> The message has to match the fault. "No YAML frontmatter block" is wrong when the block is
+> right there and merely omits `name`; that sends an author looking in the wrong place. The
+> two cases carry different reasons and different wording.
+
+### Absent frontmatter and malformed frontmatter are different faults
+
+`invalid-frontmatter` exists because ten skills were reported as `missing-name` +
+`missing-description` while having both fields plainly present in the file. The block was
+there and failed to parse — almost always a colon inside an unquoted value, where
+`description: Digest of posts on [REPLACE: TOPIC]` makes YAML read `[REPLACE: TOPIC]` as a
+nested mapping and reject the document. One pair of quotes fixes it, and nothing in the old
+verdict pointed there.
+
+`splitFrontmatter`'s `"no frontmatter block"` is absence and still reports `missing-name`;
+anything else is malformation and reports the parse error with the message. Both are pinned
+by `validate:verify` cases, in both directions.
+
+### Analyzers are dialect-aware, because the dialects have different contracts
+
+`structural-lint` used to read `frontmatter.name` and `frontmatter.description` and block
+when either was absent. That is the SKILL.md contract, and it was applied to everything —
+so **121 of 121 AGENTS.md files in the corpus were quarantined**, all for `missing-name` and
+`missing-description`, both blocking. AGENTS.md is plain markdown *by specification*: it has
+no frontmatter block at all. The files were fine; the rule was wrong about what it was
+reading, and an entire dialect was invisible to the registry as a result.
+
+`AnalyzerInput` now carries `dialect`, `resolvedName` and `resolvedSummary`. The last two
+are identity as the **normalizer** resolved it — frontmatter, then the leading heading, then
+the directory name — which had been working correctly all along, producing names like
+"Agent Configuration — Contributor Rules" that nothing ever read.
+
+The rule an analyzer should apply is *"does this skill have a name"*, not *"does this YAML
+key exist"*. Those are the same question for exactly one dialect.
+
+- `anthropic_skill` / `claude_plugin` — frontmatter is the contract; missing keys still block.
+- everything else — identity must be derivable from somewhere, and an empty document still
+  blocks; a missing summary is a `low` note, because an AGENTS.md is instructions for an
+  agent already in the repo, not a skill matched from a description.
+
+Re-validating released **120 of 121**. The one still quarantined is `windmill`'s AGENTS.md,
+for a database URL with credentials — a true positive from secret-scan, exactly what should
+still block.
+
+Two `verify:analyzers` cases pin this: an AGENTS.md with no frontmatter must pass, and a
+SKILL.md with no frontmatter must still fail.
+
+> The registry's dialect filter had disappeared while this was broken — one option covering
+> everything is a no-op control, so it hides itself. It came back on its own once the 120
+> were released, which is the behaviour a self-correcting facet should have.
+
+### Revocation and drift (R1.5) — three rules that were each broken
+
+`pnpm verify:revocation` proves all three.
+
+1. **A failing new version never withdraws a good one.** `validateOne` used to set
+   `currentVersionId = null` on any quarantine, so one bad upstream push de-listed a skill
+   that had passed — an upstream author could break our listing without touching anything we
+   had approved. It now falls back to the newest still-indexed version.
+2. **A changed version is `revalidating`, a new one is `pending`.** Both unserved, both
+   queued; the distinction is that "upstream changed under us" and "never seen before" need
+   different operational responses and one bucket cannot express which happened.
+3. **Deletion is detected only on a complete enumeration.** `tombstoneMissing` withdraws
+   content and keeps metadata — but a `--limit`ed, dry, or `includePaths`-narrowed run is a
+   partial view, and treating one as authoritative would tombstone everything it did not
+   look at, silently, one truncated sync at a time.
+
+Related fix: `includePaths` stored on a source was **never read back** by `syncSource` —
+only `allowLargeRepo` was. Narrowing `liferay/liferay-portal` to `workspaces/` was recorded
+and then ignored by every sync that did not re-type `--include`. Both are now read from
+`sources.config`, with an explicit argument winning.
+
+### Discovery — how sources are actually found
+
+Four channels, in descending order of precision (Doc 4 §4). The order matters: the precise
+ones are cheap and produce a *quality-biased* corpus, which is what archetypes should be
+learned from.
+
+| Channel | State | Command |
+|---|---|---|
+| 1. Seed allow-list | ✓ `src/server/crawl/seeds.ts` — 18 repos, 5 lists | `pnpm seed --repos` |
+| 2. Curated-list expansion | ✓ `src/server/connectors/awesome-list.ts` | `pnpm seed --lists` |
+| 3. GitHub code-search crawl | ⚠️ built, ~1% covered, **cannot finish** | `pnpm crawl` |
+| 4. Registry reconciliation (ClawHub, skills.sh, LobeHub) | ✗ not built | — |
+
+**Why 3 cannot finish.** GitHub reports 381,952 SKILL.md files. Search caps every query at
+1,000 results, so the space is sharded by file size — and 38 shards are `saturated`: over
+the cap and no longer splittable on that axis, covering 383,662 reported results. Finishing
+needs a *second* shard axis (path, created-date, language). Parked deliberately: 382k
+markers is mostly noise, and the top few thousand is what matters.
+
+**Why 1 and 2 exist.** Size-sharding is arbitrary with respect to value, so the crawl has
+no way to reach the good repositories first. `garrytan/gstack` — 130k stars, MIT, 59 skills —
+was reached by neither the crawl *nor* any of the four major awesome lists. Only a
+hand-picked list catches that, which is exactly why Doc 4 puts it first.
+
+Measured when the seed list was added: 14 seed repos → 1,406 skills reachable, and the
+licence mix (MIT, Apache-2.0) is far better than the pre-existing corpus at 96%
+`attribution_required`. Four curated lists → 277 candidates, 50 of them new.
+
+**Sources for the seed list come from `specs/skill-registries/`.** Every entry is verified
+against the GitHub API before it is hardcoded — that file is a human-written list and has
+been wrong: `forrestchang/andrej-karpathy-skills` is a 404 (the real repo is
+`multica-ai/andrej-karpathy-skills`), three entries name no repository at all, and
+`hesreallyhim/awesome-claude-code` is a list rather than a skill repo. `SEED_REJECTED`
+records each of those with its reason so nobody re-checks them.
+
+**`holdForReview` on a seed entry** is for repos worth having that are big enough to
+unbalance the corpus alone — `davila7/claude-code-templates` (898) and
+`alirezarezvani/claude-skills` (846) would each be about a third of it. They enter the
+review queue instead of promoting: a decision about *when*, not about quality.
+
+**An admin submission satisfies the large-repo gate.** `markerCountReviewThreshold` exists
+to stop the *crawl* ingesting a monorepo nobody looked at; someone typing the name into the
+admin form is that look. Without this the two gates disagree — submission promotes,
+`syncSource` then refuses and disables the source, which is exactly what happened to
+`aws/agent-toolkit-for-aws` at 155 markers. Re-submitting also re-enables a source a
+previous run paused.
+
+**A list is a discovery source, not a content source.** `awesome_list` sources are read for
+the repo links inside them by `expandList`, and are excluded from `pendingSources` — syncing
+one would try to ingest the list repository's own README as a skill.
+
+### TODO — LLM-assisted source discovery from the open web
+
+Channel 5, not yet designed. The three built channels all require someone to already know a
+URL. What they miss is the thing that actually happens: a skill pack gets popular on X, in a
+newsletter, on Hacker News, in a Discord, and nobody adds it here for weeks. `gstack` is the
+worked example — 130k stars and invisible to every automated channel we have.
+
+Shape it should take:
+
+- a scheduled search across the open web and social sources for people *talking about*
+  agent-skill repositories, not for the repositories themselves;
+- an LLM pass that extracts candidate GitHub URLs from that chatter and discards the noise;
+- everything it finds enters as an ordinary `discovered_repos` candidate at
+  `status: "new"` — **never auto-promoted**, because the source of the tip is untrusted and
+  a popularity signal is not a quality signal;
+- the tip itself recorded as provenance (where it was mentioned, when, by whom) so the
+  curator judging it can see the evidence.
+
+Cost and prompt-injection posture are the open questions: search results are untrusted input
+in exactly the sense R7.3 means, and this would be a recurring spend rather than a one-off.
+Both are reasons to build it *after* the corpus is balanced, not before.
+
+### Measure structural diversity, not source concentration
+
+**Read this before drawing any conclusion from a corpus-wide number.**
+
+The first instrument for corpus health was share-of-corpus per source, and it flagged
+`mohitagw15856/pm-claude-skills` at 89%. The number was alarming and the instrument was
+wrong. Source concentration is a *proxy*, and it misreads in both directions:
+
+| Source | Skills | Distinct shapes | Diversity |
+|---|---|---|---|
+| `aws/agent-toolkit-for-aws` | 120 | 104 | **87%** — large *and* varied |
+| `google/adk-kotlin` | 15 | 1 | **7%** — tiny *and* one skeleton |
+| `mohitagw15856/pm-claude-skills` | 2,185 | 340 | **16%** — the real generator |
+
+A share cap penalises AWS and ignores adk-kotlin. What actually damages the foundry is
+**structural monoculture** — many skills sharing one document skeleton. An archetype mined
+from one skeleton repeated 331 times describes a generator, not a convention, and it looks
+like a universal truth when you count skills.
+
+So the number on the wall is `templateClusters()` in `src/server/analytics/templates.ts`:
+the **structural signature** (ordered section-role sequence + coarse size band) of every
+fingerprint, grouped. Corpus-wide it reports distinct structures, diversity percent, and how
+many skills sit inside clusters of 10+.
+
+**This is not near-duplicate detection.** `analytics/dedupe.ts` compares *text* with MinHash
+and correctly refuses to cluster template siblings — they have genuinely different names,
+descriptions and subject matter. They share a *shape*, not content. Two orthogonal axes, two
+measurements; conflating them either discards real skills or hides a real problem.
+
+**Volume is an asset, noise is acceptable input.** The platform is not only a registry — it
+needs mass to run categorical and structural analysis against, and a corpus curated down to
+pristine sources would have too little to learn from. Nothing is rejected for being large or
+repetitive. The place monoculture is *acted* on is archetype weighting: `categoryEvidence()`
+counts **distinct structures**, not skills, so R3.2's ≥50 threshold cannot be cleared by one
+generator alone. `minStructuralDiversityPercent` in `policy.ts` is a reporting floor, never a
+gate.
+
+The long-run fix is balancing high-signal sources against the noisy ones, which is a
+market-analysis question — see the discovery section above and the open-web TODO.
+
+### Taxonomy — two axes, because structure follows function
+
+`skill_categories` (migration 0006) carries two independent vocabularies, both in
+`src/server/taxonomy/vocabulary.ts`:
+
+- **function** (13) — what the skill *does*: review, generate-document, edit-refactor,
+  transform-data, orchestrate, … **Archetypes are mined on this axis.**
+- **domain** (26) — what field it serves: marketing, devops-infrastructure, legal, …
+  Drives browse and filter.
+
+The split is the load-bearing decision. Structure correlates with function, not domain: a
+skill that reviews a contract and one that reviews a pull request share a shape (rubric,
+severity levels, output format), while one that writes an HR policy and one that writes a
+landing page share a different shape (template, placeholders, examples). Mining per domain
+would average a rubric together with a template and yield a skeleton that fits neither.
+
+Nothing in the corpus declares a category — **zero** of 2,531 skills carry a `category` or
+`tags` key — so the taxonomy is derived, never read. Curated and closed, after Hugging
+Face's `pipeline_tag`; npm keywords are the negative example.
+
+Assignments are multi-label with calibrated confidence. Below `REVIEW_FLOOR` (60) an
+assignment is held for a curator instead of being served, and a curator-reviewed row is
+never overwritten by a later classifier run — that is what `setWhere: reviewedAt is null`
+on the upsert is for. `skills.categories` stays as the denormalised read path and holds
+only servable labels at the **current** taxonomy version; `pnpm taxonomy --resync`
+recomputes it after a version bump.
+
+### Structural fingerprints — the evidence archetypes read
+
+`skill_structures` (migration 0006) stores one derived row per skill version: heading tree
+with normalised **section roles**, body metrics, resource layout, frontmatter conventions.
+Pure rules, no model, no network — so re-extraction is free and `EXTRACTOR_VERSION` is the
+re-scan selector, exactly like `verdicts.analyzer_version`.
+
+Roles rather than raw heading strings, because "When to use this", "When to use this skill"
+and "Triggers" are three strings and one idea; an archetype built on strings would report
+three sections at 33% instead of one at 100%. Rules cover the common headings; the long
+tail is genuinely *topical* ("Typography", "Amazon Bedrock") and correctly stays unlabelled
+rather than being forced into a role.
+
+Corpus-wide today: 93% of skills are a lone SKILL.md, 4% bundle `scripts/`, 4% bundle
+`references/`. Resource-layout archetypes will stay weak until the source mix widens.
+
 ### Admin settings — the knobs must become data, not code
 
 The `/settings` shell exists; the policy still does not live in it. Every decision about
@@ -230,22 +599,24 @@ Every number is already derivable from `skills`, `skill_versions`, `verdicts` an
 `events` — a query and a component, not new plumbing. Keep the aggregates cheap enough to
 compute on request before reaching for a materialised view.
 
-### Giant repositories need the tarball path
+### ~~Giant repositories need the tarball path~~ — solved with scoped subtrees
 
-`GET /git/trees/{sha}?recursive=1` truncates above ~100k entries, and the connector throws
-rather than proceeding — silence there would mean a partial corpus that looks complete.
+`GET /git/trees/{sha}?recursive=1` truncates above ~100k entries, and the connector still
+throws rather than proceeding — silence there would mean a partial corpus that looks
+complete. What changed is that `includePaths` is now a real way out.
 
-That is correct, but it means a curator can approve a monorepo and the sync still fails:
-`liferay/liferay-portal` is approved and holds real Cursor skills, and cannot currently be
-fetched. Two ways out, neither built yet:
+The trick is that it has to be applied **before** the call, not as a filter afterwards.
+`listBlobPaths` in `src/server/connectors/github.ts` reads each prefix as its own subtree
+via GitHub's `{commit}:{path}` SHA form, so the repository root is never listed. One API
+call per prefix instead of one per repo — the trade a curator makes when they name them.
 
-- **Tarball** — `GET /repos/{o}/{r}/tarball/{ref}` is one call for the whole repository and
-  has no entry limit. Costs bandwidth and needs a tar reader.
-- **`includePaths` at approval time** — let the curator narrow to `workspaces/` and reuse
-  the existing tree call. Cheaper, and the review UI already shows the sample paths that
-  would tell them what to type.
+`liferay/liferay-portal` now enumerates: **3,696 skills** under `workspaces/`, where it
+previously failed outright. Submitting a repo that is already a source merges the new
+include paths onto the existing `sources.config`, which is the case that silently did
+nothing at first.
 
-The second is the smaller change and probably the right first move.
+A tarball reader is still the answer for a repository with no usable prefix. Not built, and
+no longer urgent.
 
 ### Smaller ones
 
@@ -273,4 +644,21 @@ pnpm build
 pnpm lint
 pnpm typecheck
 pnpm db:generate | db:migrate | db:studio
+pnpm db:verify-rls  # after ANY schema change that adds an org-scoped table
+
+# Pipeline, each bounded and resumable
+pnpm crawl | promote | sync | validate | duplicates
+pnpm seed --status | --repos | --lists    # curated discovery (Doc 4 §4 steps 1-2)
+pnpm submit <repo-url|owner/name> [--include workspaces/,packages/]
+pnpm validate --consistency --limit 10   # R2.3 audit — COSTS MONEY, capped at 100/run
+pnpm structures --extract 500        # structural fingerprints — free, no model
+pnpm taxonomy --sample 20            # categories — COSTS MONEY, capped at 100/run
+pnpm taxonomy --status | --review | --resync
+pnpm verify:lists | verify:revocation | verify:export | validate:verify | db:verify-rls
 ```
+
+**Two commands spend money: `pnpm taxonomy --sample` and `pnpm validate --consistency`.**
+Both are opt-in, both are capped, and neither runs as part of any default pass. It calls a model once
+per skill. Everything else in the pipeline is rules. Treat it as a sampling tool: label a
+small batch, read the labels, fix an ambiguous category description in `vocabulary.ts`, run
+again. `MAX_BATCH` in `src/server/taxonomy/classify.ts` is a fuse, not a setting.

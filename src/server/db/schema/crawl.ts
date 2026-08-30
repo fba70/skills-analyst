@@ -103,6 +103,13 @@ export const discoveredRepos = pgTable(
 
     status: discoveredRepoStatus("status").notNull().default("new"),
     skipReason: text("skip_reason"),
+    /**
+     * Set when a person asked for this repository rather than the crawl finding it
+     * (Doc 2 R1.8). Kept here rather than inferred from `sources.config` so the
+     * submission survives a rejection — a repo we declined still records who asked, which
+     * is what makes a later policy change reviewable instead of a re-litigation.
+     */
+    submittedBy: text("submitted_by"),
     /** Set once promoted into `sources` and therefore syncable. */
     sourceId: uuid("source_id").references(() => sources.id, { onDelete: "set null" }),
 

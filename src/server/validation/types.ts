@@ -40,13 +40,51 @@ export type AnalyzerInput = {
   frontmatter: Record<string, unknown>;
   /** Bundle-relative path of the marker, e.g. "SKILL.md". */
   markerPath: string;
+  /**
+   * Which dialect this skill was authored in.
+   *
+   * Analyzers need it because the dialects do not share a contract. A SKILL.md without
+   * frontmatter `name` has no identity and no trigger; an AGENTS.md without frontmatter is
+   * simply an AGENTS.md — the format has none, and judging one against the other's rules
+   * quarantined every AGENTS.md in the corpus.
+   */
+  dialect: string;
+  /**
+   * Identity as the normalizer resolved it, after its per-dialect fallbacks — frontmatter
+   * first, then the leading heading, then the directory name.
+   *
+   * Analyzers should ask "does this skill have a name" rather than "does this YAML key
+   * exist", which are the same question only for one dialect.
+   */
+  resolvedName: string | null;
+  resolvedSummary: string | null;
+  /**
+   * Why the frontmatter block failed to parse, if it did.
+   *
+   * "Absent" and "malformed" are different faults with different fixes, and collapsing
+   * them into `missing-name` sent authors hunting for a field that was in their file all
+   * along.
+   */
+  parseError: string | null;
 };
 
 export type Analyzer = {
   name: string;
   /** Bump on ANY rule change — this is the re-scan selector. */
   version: string;
-  run(input: AnalyzerInput): AnalyzerOutput;
+  /**
+   * May return a promise. Rule-based analyzers stay synchronous; the LLM-assisted ones
+   * (R2.3) cannot, and the runner awaits either.
+   */
+  run(input: AnalyzerInput): AnalyzerOutput | Promise<AnalyzerOutput>;
+  /**
+   * True when a run costs money or network.
+   *
+   * The runner excludes these unless a caller opts in, so the ordinary validate pass stays
+   * free and re-runnable. Cost that is easy to trigger by accident ends up triggered by
+   * accident.
+   */
+  readonly costly?: boolean;
 };
 
 /**
