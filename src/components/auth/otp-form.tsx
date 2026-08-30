@@ -5,6 +5,7 @@ import { useState, type FormEvent } from "react";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { requestOtpAction } from "@/app/(auth)/actions";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,17 +31,25 @@ export function OtpForm({ mode }: { mode: "sign-in" | "sign-up" }) {
   const [code, setCode] = useState("");
   const [pending, setPending] = useState(false);
 
+  /**
+   * Through a server action, not the auth client, and the difference is the whole point.
+   *
+   * `authClient.emailOtp.sendVerificationOtp` cannot report a delivery failure: Better
+   * Auth awaits our transport and then swallows the throw, so the endpoint answers 200
+   * whether or not the message left. This form used to advance to the code step and say
+   * "Code sent" on the strength of that 200 — to someone who would never receive it.
+   *
+   * `requestOtpAction` reads the recorded failure back and returns it, so the step only
+   * advances when a code is actually on its way.
+   */
   async function requestCode(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setPending(true);
-    const { error } = await authClient.emailOtp.sendVerificationOtp({
-      email,
-      type: "sign-in",
-    });
+    const result = await requestOtpAction(email);
     setPending(false);
 
-    if (error) {
-      toast.error(error.message ?? "Could not send the code. Try again.");
+    if (!result.ok) {
+      toast.error(result.message);
       return;
     }
     setStep("code");

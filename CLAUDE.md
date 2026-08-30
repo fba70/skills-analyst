@@ -1025,8 +1025,6 @@ no longer urgent.
 
 ### Smaller ones
 
-- **Neon backoff.** Wrap DAL queries in exponential backoff with jitter. Neon documents
-  this as required for cold starts, not optional.
 - **GitHub OAuth.** Doc 3 wants it as a login path for identity attribution. Additive —
   the `account` table already carries it.
 - **Mail goes out through Nylas** (`src/server/mail/nylas.ts`), which replaced Resend
@@ -1035,9 +1033,6 @@ no longer urgent.
   variables, and **all three still need adding to Vercel before a deploy**.
   `MAIL_TRANSPORT=console` is pinned locally, so a laptop cannot quietly email people;
   `MAIL_TRANSPORT=nylas` forces a real send for a test.
-- **A failed send still shows the user "code sent".** Better Auth runs
-  `sendVerificationOTP` as a background task and swallows the throw, so a delivery failure
-  is visible in the logs (`[mail] …`) but not in the UI.
 - **Orphaned organizations.** Deleting a user cascades their `member` row but leaves an
   organization nobody belongs to. `deleteUser` is disabled, so this is not live yet.
 
@@ -1084,6 +1079,71 @@ through the same `sendOtpEmail` that Better Auth calls, and logs the `request_id
 is what the Nylas dashboard is searched by, because a 200 means Nylas accepted the message,
 not that the provider delivered it.
 
+### A failed send can no longer look like a sent one
+
+`pnpm verify:otp` (4 checks). The bug was not ours and could not be fixed where it happened.
+Better Auth hands `sendVerificationOTP` to `runInBackgroundOrAwait`, which — with no
+`advanced.backgroundTasks.handler` configured — does exactly this:
+
+```js
+try { await promise } catch (e) { logger.error("Failed to run background task:", e) }
+```
+
+So the send **is** awaited and its outcome exists by the time the response is built. What
+was missing was a channel: the throw was logged, the endpoint answered 200, and the form
+advanced to the code step saying "Code sent to you@example.com" to someone who would wait
+for ever. The only record was in a server log, which is the one place the person waiting
+cannot look.
+
+- `src/server/auth/send-failures.ts` is the channel — a keyed map, written by the transport
+  wrapper and read back by the caller. AsyncLocalStorage would be the obvious answer and is
+  unavailable: Better Auth owns the route, so there is nowhere to open a scope around it.
+- **`since` is the safety property.** A reader only accepts a failure recorded *after* it
+  started its own call, so a stale error cannot be reported against an attempt that
+  succeeded — which would erode trust in the message exactly as much as the false success
+  did. Entries are consumed on read and expire on their own.
+- The sign-in form now calls `requestOtpAction` instead of
+  `authClient.emailOtp.sendVerificationOtp`, because that client call *cannot fail*. The
+  action wraps `auth.api.sendVerificationOTP` — the same endpoint, same rate limiting, same
+  OTP storage, headers forwarded — and reads the recorded failure back.
+
+> `verify:otp` pins Better Auth's swallow as an **external behaviour**, deliberately. If an
+> upgrade ever propagates the throw, that check goes red and the workaround can be deleted
+> rather than quietly carried for years.
+
+Module-level state is a real limitation and is only correct because the write and the read
+happen inside the *same request*. Nothing may ever read it from a different one.
+
+### Neon retries, and the half of the idea that is dangerous
+
+`src/server/db/retry.ts`, wrapped around the pool in `db/index.ts`. `pnpm verify:db-retry`
+(11 checks, no database and no network — the risk in a retry is entirely in what it decides
+to do again, and that is pure logic).
+
+Neon suspends an idle compute and wakes it on the next connection, so a cold start is normal
+behaviour rather than an incident, and Neon documents backoff with jitter as required.
+
+**"Retry the query" is one word away from "run the write twice."** `ECONNRESET` can mean the
+socket died before the statement was sent, or after the server received it. Retrying the
+second case double-applies a write, silently, under load. So failures are split by what they
+*prove*, and the split is enforced by where the retry happens:
+
+| phase | what it may retry | why |
+|---|---|---|
+| `connect` | any connection-class failure | nothing has been sent |
+| `query` | only *establishment* failures | anything else may have interrupted a live statement |
+
+Wrapping the pool rather than the DAL is what makes it complete: Drizzle sends ordinary
+statements through `pool.query` and takes a client from `pool.connect` for transactions, so
+those two methods are every path in. A retry in the DAL would have covered the DAL and
+missed ingest, analytics and every script.
+
+**Deliberately never retried:** `40001` and `40P01` are the textbook retryables and are
+excluded, because both mean the statement *ran* and its transaction rolled back — the
+correct unit is the whole transaction, and retrying one statement would re-issue it into a
+transaction Postgres has already aborted. `08007` is excluded for the sharper version of the
+same reason: it says nobody knows whether the commit landed.
+
 ## Commands
 
 ```
@@ -1107,6 +1167,7 @@ pnpm structures --extract 500        # structural fingerprints — free, no mode
 pnpm taxonomy --sample 20            # categories — COSTS MONEY, capped at 100/run
 pnpm taxonomy --status | --review | --resync
 pnpm verify:lists | verify:revocation | verify:export | verify:takedown
+pnpm verify:otp | verify:db-retry        # both free, no network, no database
 pnpm validate:verify | db:verify-rls
 ```
 
