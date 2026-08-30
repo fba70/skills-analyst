@@ -8,15 +8,20 @@ import type { VercelConfig } from "@vercel/config/v1";
  *
  * ## The cadence
  *
- * Ten minutes, and the number follows from the arithmetic rather than taste. Each pass
- * takes two sources; 518 sources awaiting a first sync therefore need ~260 passes, which at
- * this cadence is about two days of unattended catch-up. After that the same schedule keeps
- * the corpus inside R7.4's 24-hour freshness target with room to spare, because a pass with
- * nothing to fetch costs one cheap query per stage and returns immediately.
+ * Twice a day, and the job it is sized for is **freshness, not catch-up**. Initial
+ * ingestion runs from a local machine, where there is no function ceiling and a
+ * 2,000-skill repository can take the hour it needs. A schedule racing that same queue
+ * would duplicate every fetch and contend for the same rows.
  *
- * Slower would stretch the catch-up into a week. Faster would overlap: a pass can run for
- * several minutes, and two passes fetching the same sources concurrently would duplicate
- * work and race each other's writes.
+ * What the schedule is for is the part nobody remembers to do: R7.4 asks that upstream
+ * changes be detected within 24 hours, and `pendingSources` returns sources whose last
+ * successful sync is older than that. Two passes a day against a 24-hour staleness window
+ * means a due source is picked up within twelve — inside the target, with margin for a
+ * pass that fails.
+ *
+ * It also keeps compute honest. Ten minutes is 144 invocations a day whether or not there
+ * is anything to do; this is two, and a pass with nothing due costs one cheap query per
+ * stage and returns.
  *
  * ## What is deliberately not scheduled
  *
@@ -29,7 +34,8 @@ export const config: VercelConfig = {
   crons: [
     {
       path: "/api/cron/pipeline",
-      schedule: "*/10 * * * *",
+      // 05:00 and 17:00 UTC — twelve hours apart, inside R7.4's 24-hour window.
+      schedule: "0 5,17 * * *",
     },
   ],
 };

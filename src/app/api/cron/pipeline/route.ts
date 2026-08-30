@@ -40,12 +40,30 @@ export const dynamic = "force-dynamic";
 /**
  * Sources per scheduled pass.
  *
- * Lower than the manual default of five. A cron pass has a hard ceiling it cannot negotiate
- * with, and being cut off mid-stage loses the stages behind it — so the scheduled path
- * trades throughput for reliably finishing. At a ten-minute cadence this still clears
- * roughly 290 sources a day.
+ * At two passes a day this is the freshness budget, not a catch-up rate: twelve sources
+ * refreshed daily, chosen oldest-first, which is what R7.4's 24-hour window needs once
+ * initial ingestion is done.
+ *
+ * Still well inside the function ceiling, because `MAX_SKILLS_PER_SOURCE` means no single
+ * source can run away with the budget — that is the guard that makes a larger number safe
+ * here, and its absence is what made the previous pass time out.
  */
-const SOURCES_PER_PASS = 2;
+const SOURCES_PER_PASS = 6;
+
+/**
+ * A scheduled pass will not start a source larger than this.
+ *
+ * Measured, not guessed: the first live cron run hit `FUNCTION_INVOCATION_TIMEOUT` after
+ * the full 800 seconds on a single repository, and would have retried the same one every
+ * ten minutes forever, because a timed-out source is never marked synced.
+ *
+ * A source must be fetched completely — a partial enumeration would make R1.5 tombstone
+ * everything it did not reach — so the only safe bound is deciding before the fetch begins.
+ * Anything larger is held for review and synced deliberately with `pnpm sync <url>`, which
+ * has no ceiling. 120 skills is comfortably inside 13 minutes at the fetch concurrency the
+ * ingest policy allows.
+ */
+const MAX_SKILLS_PER_SOURCE = 120;
 
 /**
  * Confirms the caller is Vercel Cron and not the open internet.
@@ -82,6 +100,7 @@ export async function GET(request: Request) {
     const report = await runPipeline({
       trigger: "cron",
       sources: SOURCES_PER_PASS,
+      maxSkillsPerSource: MAX_SKILLS_PER_SOURCE,
       // Leave room for the stages behind sync inside the function's ceiling.
       syncBudgetMs: 6 * 60_000,
     });

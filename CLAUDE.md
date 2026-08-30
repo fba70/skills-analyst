@@ -246,6 +246,49 @@ reasoning is in the route file so nobody has to rediscover it.
 > facts up through the DAL) because the DAL reaches `next/navigation` and cannot load in a
 > plain node script. Assembly is the part with rules worth testing.
 
+### `pnpm typecheck` must generate route types first
+
+`PageProps` and `LayoutProps` are **generated**, not imported. Next writes them into
+`.next/types/routes.d.ts`, and `tsconfig.json` picks them up through its `include`. A clean
+checkout has no `.next`, so `tsc --noEmit` alone fails with eight `TS2304: Cannot find name
+'LayoutProps'` — which is exactly what the Vercel build hit, while the same command passed
+on every machine that had ever run `next dev`.
+
+`typecheck` now runs `next typegen && tsc --noEmit`. `typegen` generates the route
+definitions without a full build, so the check is correct from a clean tree.
+
+> Worth knowing how this hid: locally it passed for two reasons at once — `.next/types`
+> lingering from earlier builds, and `"incremental": true` with a committed
+> `tsconfig.tsbuildinfo` returning a cached pass. Deleting `.next/types` alone was not
+> enough to reproduce it, because `tsconfig` also includes `.next/dev/types`, which the dev
+> server maintains separately. Reproducing it needed the whole `.next` directory gone.
+>
+> When verifying a CI failure locally, remove `.next` **and** `tsconfig.tsbuildinfo`, or the
+> green result means nothing.
+
+### A scheduled pass cannot start a source it may not finish
+
+The first live cron run died with `FUNCTION_INVOCATION_TIMEOUT` after the full 800 seconds,
+mid-fetch on a single repository. Worse than the failure: a timed-out source is never marked
+synced, so the next tick would have picked the same one and died again — **every ten minutes,
+indefinitely**, burning function time and never advancing.
+
+`syncBudgetMs` could not prevent it. That budget is checked *between* sources, and one
+oversized source runs to completion or to the platform's kill regardless. The check has to
+happen before the fetch begins, because a source must be fetched **completely** — a partial
+enumeration would make R1.5 tombstone every skill it did not reach.
+
+So `syncSource` takes `maxSkills`, and enumeration (two API calls, already paid for) decides.
+Over the limit, the source is **held for review** — the queue a curator already watches —
+and synced deliberately with `pnpm sync <url>`, which has no ceiling. The scheduled pass sets
+120; manual runs set nothing.
+
+> Reading the logs correctly mattered here. The first invocation I saw was `curl/8.7.1` at
+> 401 — my own deployment check, which I misread as the cron working. The real one is
+> `vercel-cron/1.0`, and it was failing. `User-Agent` is what distinguishes a scheduled
+> invocation from a manual probe, and the 12-hour observability window can be empty simply
+> because the schedule has not ticked yet.
+
 ### The ingest schedule (R1.7)
 
 `vercel.ts` runs `/api/cron/pipeline` every ten minutes; the route runs one bounded pass and
@@ -253,15 +296,28 @@ returns what it did. That is the whole scheduler — no queue, no worker, no sta
 Every stage is already resumable and idempotent, so "run a slice periodically" is a complete
 implementation rather than a placeholder for one.
 
-The cadence follows from arithmetic, not taste: two sources a pass, ~260 passes for the
-sources awaiting a first sync, about two days of unattended catch-up. After that the same
-schedule holds the corpus inside R7.4's 24-hour freshness target, because a pass with
-nothing to fetch is one cheap query per stage and returns immediately. Faster would overlap
-— a pass can run minutes, and two fetching the same sources would race each other's writes.
+**The schedule is for freshness, not catch-up.** Twice a day (05:00 and 17:00 UTC), six
+sources a pass. Initial ingestion runs from a local machine, where there is no function
+ceiling and a 2,000-skill repository can take the hour it needs; a schedule racing that same
+queue would duplicate every fetch and contend for the same rows.
 
-**Two sources per scheduled pass, against five for a manual run.** A cron pass has a ceiling
-it cannot negotiate with, and being cut off mid-stage loses every stage behind it, so the
-scheduled path trades throughput for reliably finishing.
+What it *is* for is the part nobody remembers: R7.4 asks that upstream changes be detected
+within 24 hours. Two passes a day against a 24-hour staleness window picks up a due source
+within twelve, with margin for a failed pass. It also keeps compute honest — ten minutes is
+144 invocations a day whether or not anything is due; this is two.
+
+### `pendingSources` had one job and it was the wrong one
+
+It selected `lastSuccessAt IS NULL` and nothing else, so the scheduler could only ever do
+**initial catch-up** and went permanently idle the moment it finished. No drift detection,
+no revocation, no freshness — R7.4's target was unreachable by the only thing running on a
+timer, and nothing would have reported that.
+
+It now returns never-synced sources **first**, then any whose last success is older than the
+freshness window. Never-synced first because a source contributing nothing is a bigger gap
+than one a day out of date, and because it keeps a catch-up run doing catch-up. When that
+queue empties the same query starts returning stale sources and the schedule becomes a
+freshness loop, with no change in behaviour anywhere else.
 
 **`CRON_SECRET` gates it, and the route fails closed when it is unset.** Vercel sends it as
 a bearer token. Without the check this is an unauthenticated endpoint that makes us fetch
@@ -787,7 +843,7 @@ no longer urgent.
 pnpm dev            # http://localhost:3000
 pnpm build
 pnpm lint
-pnpm typecheck
+pnpm typecheck       # runs `next typegen` first — see below
 pnpm db:generate | db:migrate | db:studio
 pnpm db:verify-rls  # after ANY schema change that adds an org-scoped table
 

@@ -83,6 +83,15 @@ export type PipelineOptions = {
   /** Who started this pass — `cron`, `admin`, or the CLI. Recorded on the event. */
   trigger?: string;
   /**
+   * Refuse any source with more skills than this, deferring it for a dedicated run.
+   *
+   * For callers under a ceiling they cannot negotiate with. `syncBudgetMs` alone cannot
+   * protect them: it is checked between sources, so a single oversized repository still
+   * runs to completion or to the platform's kill — which is exactly how the scheduled pass
+   * burned its full 800 s and died mid-fetch.
+   */
+  maxSkillsPerSource?: number;
+  /**
    * Wall-clock budget for the sync stage, in milliseconds.
    *
    * A slice bounded only by *count* is not bounded at all when one item can be arbitrarily
@@ -134,6 +143,7 @@ export async function runPipeline(options: PipelineOptions = {}): Promise<Pipeli
       let tombstoned = 0;
       let failed = 0;
       let skippedSkills = 0;
+      let deferredSources = 0;
       let attempted = 0;
       let deferred = 0;
 
@@ -153,7 +163,11 @@ export async function runPipeline(options: PipelineOptions = {}): Promise<Pipeli
         attempted += 1;
 
         try {
-          const result = await syncSource({ sourceUrl: target.url });
+          const result = await syncSource({
+            sourceUrl: target.url,
+            maxSkills: options.maxSkillsPerSource,
+          });
+          if (result.deferred) deferredSources += 1;
           created += result.created;
           tombstoned += result.tombstoned;
           skippedSkills += result.failedSkills.length;
@@ -167,6 +181,8 @@ export async function runPipeline(options: PipelineOptions = {}): Promise<Pipeli
         `${attempted} source(s): ${created} version(s) created, ${tombstoned} tombstoned, ${failed} failed` +
         // Distinct from a failed *source*: the repository synced, some skills in it did not.
         (skippedSkills > 0 ? `, ${skippedSkills} skill(s) skipped` : "") +
+        // Distinct from the time budget: this source was too large to start at all.
+        (deferredSources > 0 ? `, ${deferredSources} too large — held for review` : "") +
         (deferred > 0 ? ` · ${deferred} deferred, time budget spent` : "")
       );
     });

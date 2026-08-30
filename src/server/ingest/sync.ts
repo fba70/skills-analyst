@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 
 import { githubConnector } from "@/server/connectors/github";
 import type { Connector, SourceConfig } from "@/server/connectors/types";
@@ -55,6 +55,16 @@ export type SyncOptions = {
   sourceUrl: string;
   /** Restrict to path prefixes, e.g. ["skills/"]. */
   includePaths?: string[];
+  /**
+   * Refuse to fetch a source whose enumeration exceeds this many skills.
+   *
+   * For callers that run under a hard ceiling they cannot negotiate with — the scheduled
+   * pass, above all. A source is fetched completely or not at all (a partial enumeration
+   * would make R1.5 tombstone everything it did not reach), so the only safe way to bound
+   * one is to decide *before* fetching starts, using the count enumeration already gives us
+   * for free.
+   */
+  maxSkills?: number;
   ref?: string;
   /** Public corpus when null. */
   orgId?: string | null;
@@ -96,6 +106,9 @@ export type SyncReport = {
   unchanged: number;
   /** Skills withdrawn because they are gone upstream (R1.5). */
   tombstoned: number;
+  /** True when the source was too large for this caller and was left for a dedicated run. */
+  deferred?: boolean;
+  deferredReason?: string;
   /**
    * Skills that could not be fetched, with why.
    *
@@ -111,13 +124,35 @@ export type SyncReport = {
  * Kept here rather than in the CLI because the cron dispatcher will need exactly the same
  * query — the trigger changes, the selection should not.
  */
+/**
+ * How long a synced source may go before it is due again (Doc 2 R7.4).
+ *
+ * The spec asks that upstream changes be detected within 24 hours, so a source older than
+ * that is due. Nothing re-reads a repository except a sync, so this interval is also what
+ * bounds how long a deleted skill keeps being served (R1.5) and how stale a verdict may be.
+ */
+const FRESHNESS_HOURS = 24;
+
+/**
+ * What to sync next: never-synced sources first, then the stale ones.
+ *
+ * The ordering carries the whole design. This used to select `lastSuccessAt IS NULL` and
+ * nothing else, which meant the scheduler had exactly one job — initial catch-up — and went
+ * permanently idle the moment it finished. No drift detection, no revocation, no freshness:
+ * R7.4's 24-hour target could never be met by the only thing running on a timer.
+ *
+ * Never-synced first because a source contributing nothing is a bigger gap than a source
+ * that is a day out of date, and because it keeps a catch-up run doing catch-up rather than
+ * refreshing things it has already read. Once that queue empties, the same query starts
+ * returning stale sources and the schedule becomes a freshness loop with no change in
+ * behaviour anywhere else.
+ */
 export async function pendingSources(limit = 10) {
   return db
     .select({ id: sources.id, url: sources.url, name: sources.name })
     .from(sources)
     .where(
       and(
-        isNull(sources.lastSuccessAt),
         eq(sources.enabled, true),
         // A curated list is a *discovery* source, not a content source: it is read for the
         // repository links inside it, by `expandList`, and it holds no skills of its own.
@@ -125,9 +160,14 @@ export async function pendingSources(limit = 10) {
         // own README as a skill. Expanding it is the equivalent operation, and it belongs
         // to the crawl, not to the fetch pipeline.
         ne(sources.kind, "awesome_list"),
+        or(
+          isNull(sources.lastSuccessAt),
+          sql`${sources.lastSuccessAt} < now() - make_interval(hours => ${FRESHNESS_HOURS})`,
+        ),
       ),
     )
-    .orderBy(sources.createdAt)
+    // NULLS FIRST is the point: never-synced sources sort ahead of merely-stale ones.
+    .orderBy(sql`${sources.lastSuccessAt} asc nulls first`, sources.createdAt)
     .limit(limit);
 }
 
@@ -197,6 +237,36 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
         `${discoveryPolicy.markerCountReviewThreshold} threshold — held for review, ` +
         `source disabled. Re-run with allowLargeRepo to sync it anyway.`,
     );
+  }
+
+  /**
+   * Too large for this caller's budget: defer rather than start.
+   *
+   * The scheduled pass has ~13 minutes. A repository with hundreds of skills needs more
+   * than that, and because a source must be fetched completely, starting one is committing
+   * to finishing it. The Vercel cron timed out at exactly 800 s doing this — and, worse,
+   * left the source unsynced, so the next tick would have picked the same one and timed out
+   * again, every ten minutes, indefinitely.
+   *
+   * Held for review rather than skipped, so it lands in the queue a curator already watches
+   * and can be synced deliberately with `pnpm sync <url>`, which has no ceiling.
+   */
+  if (options.maxSkills && enumerated.refs.length > options.maxSkills) {
+    await holdForReview(options.sourceUrl, enumerated.refs.length, orgId);
+    return {
+      sourceUrl: options.sourceUrl,
+      commitSha: enumerated.refs[0]?.commitSha ?? null,
+      skills: [],
+      signals: Object.fromEntries(
+        Object.entries(enumerated.signals).filter(([, v]) => typeof v === "number"),
+      ) as Record<string, number>,
+      created: 0,
+      unchanged: 0,
+      tombstoned: 0,
+      failedSkills: [],
+      deferred: true,
+      deferredReason: `${enumerated.refs.length} skills — over the ${options.maxSkills} this caller may fetch`,
+    };
   }
 
   const refs = options.limit ? enumerated.refs.slice(0, options.limit) : enumerated.refs;
