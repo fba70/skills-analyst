@@ -3,7 +3,6 @@ import "server-only";
 import { sql } from "drizzle-orm";
 
 import { db, type Db } from "@/server/db";
-import { getSession } from "@/server/dal/session";
 
 /**
  * Runs a query inside a transaction that has declared which org is asking.
@@ -19,6 +18,16 @@ import { getSession } from "@/server/dal/session";
  * (`org_id IS NULL`), which is the common case for the registry.
  */
 export async function withOrgScope<T>(fn: (tx: Db) => Promise<T>): Promise<T> {
+  /**
+   * Imported lazily so this module stays loadable outside a request.
+   *
+   * `dal/session` reaches `next/navigation` for `redirect`, which pulls in React's client
+   * runtime and throws on import in a plain node process. At module scope that cost was
+   * paid by *everything* importing this file — including `withPublicScope`, which needs no
+   * session at all — so any verification script touching public-corpus reads died on an
+   * import it never used.
+   */
+  const { getSession } = await import("@/server/dal/session");
   const session = await getSession();
   const organizationId = session?.session.activeOrganizationId ?? null;
   return runScoped(organizationId, fn);

@@ -57,6 +57,13 @@
       "when": 1788081044112,
       "tag": "0007_nice_meltdown",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788093577791,
+      "tag": "0008_jittery_sasquatch",
+      "breakpoints": true
     }
   ]
 }

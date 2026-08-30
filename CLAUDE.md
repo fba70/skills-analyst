@@ -246,6 +246,46 @@ reasoning is in the route file so nobody has to rediscover it.
 > facts up through the DAL) because the DAL reaches `next/navigation` and cannot load in a
 > plain node script. Assembly is the part with rules worth testing.
 
+### Run the pipeline, not the stages
+
+`pnpm pipeline` / Settings → Ingestion → **Run the pipeline** does
+sync → validate → fingerprint → signatures → cluster in one bounded pass. The individual
+stage commands still exist and are still right for tuning one threshold at a time, but they
+are not how the corpus should be advanced.
+
+Running them separately is how the derived data drifted: **fingerprints fell 1,566 behind
+the corpus and dedup signatures 2,240**, each gap widening with every sync, because the
+loop being run was sync + validate and nothing else. Neither shortfall raises an error —
+they look like a smaller corpus. And both starve the next phase: archetype mining reads
+fingerprints, and only *canonical* skills get classified, so a missing signature quietly
+keeps a skill out of the taxonomy too.
+
+The order is a dependency chain, not a preference: each stage consumes what the previous
+one produced. A stage that throws is recorded and the rest still run — a GitHub rate limit
+during sync must not also cost the fingerprints of everything already fetched.
+
+### Re-scan campaigns (R2.12)
+
+`pnpm rescan --status` shows, per analyzer, how many skills carry a verdict from a
+superseded version. `--run N` re-judges a bounded slice. Free: rules only, and the LLM
+analyzers are deliberately never re-run by a campaign — a `structural-lint` fix is no reason
+to pay for a fresh R2.3 audit of the same skill.
+
+The selector is **every version whose newest verdict predates the analyzer's current
+version**, not "skills that look affected". That distinction is the point. `structural-lint`
+went 1.0.0 → 1.3.0 in one session and each fix was chased with a throwaway script targeting
+whichever slice seemed relevant — which left **4,179 behind**, all the skills that *passed*
+under the old rules and so were never in any slice anyone thought to check.
+`ANALYZER_VERSIONS` is derived from the analyzer objects, so the current version cannot
+drift from what actually runs.
+
+> **What the first campaign found: nothing.** 300 re-judged, **0 status changes, 0 score
+> changes.** I had claimed those 4,179 carried stale quality scores; they did not. The
+> `structural-lint` fixes only ever removed *blocking* findings from skills that were
+> already quarantined, and those had been re-validated at the time — a passing skill had no
+> such findings to lose. The mechanism is still right to have, and the version stamps are
+> worth correcting so the freshness number is honest, but the specific alarm was overstated.
+
 ### Validation — what runs by default, and what does not
 
 `validatePending()` runs four **free, deterministic** analyzers: structural-lint,
@@ -647,7 +687,10 @@ pnpm db:generate | db:migrate | db:studio
 pnpm db:verify-rls  # after ANY schema change that adds an org-scoped table
 
 # Pipeline, each bounded and resumable
-pnpm crawl | promote | sync | validate | duplicates
+pnpm pipeline                        # sync → validate → fingerprint → signatures → cluster
+pnpm pipeline --loop 40 --skip-sync  # catch the derived stages up
+pnpm rescan --status | --run 300     # R2.12 campaigns; free, rules only
+pnpm crawl | promote | sync | validate | duplicates   # the individual stages
 pnpm seed --status | --repos | --lists    # curated discovery (Doc 4 §4 steps 1-2)
 pnpm submit <repo-url|owner/name> [--include workspaces/,packages/]
 pnpm validate --consistency --limit 10   # R2.3 audit — COSTS MONEY, capped at 100/run

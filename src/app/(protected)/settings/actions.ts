@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { buildSignatures, clusterDuplicates } from "@/server/analytics/dedupe";
+import { archetypeSummary, mineAll } from "@/server/analytics/archetype-run";
 import { extractStructures } from "@/server/analytics/structure-run";
 import { expandList, applySeedRepos } from "@/server/crawl/seed-run";
 import { normalizeRepoInput, submitRepository } from "@/server/crawl/submit";
@@ -15,6 +16,8 @@ import {
   releaseFromQuarantine,
 } from "@/server/dal/curation";
 import { pendingSources, syncSource } from "@/server/ingest/sync";
+import { runPipeline } from "@/server/pipeline/run";
+import { runRescan, staleSlices } from "@/server/validation/rescan";
 import { MAX_BATCH } from "@/server/taxonomy/classify";
 import { classifySample, reviewCategory, type SampleStrategy } from "@/server/taxonomy/run";
 import { validatePending, versionsWithCode } from "@/server/validation/run";
@@ -419,4 +422,98 @@ export async function consistencyAction(limit: number): Promise<ActionResult> {
   } catch (error) {
     return failure(error);
   }
+}
+
+
+/**
+ * The whole ingest pipeline, one bounded pass (sync → validate → fingerprint → signatures
+ * → cluster).
+ *
+ * The button that should be used most. Running stages individually is how the derived data
+ * fell behind — fingerprints 1,566 short, signatures 2,240 — because each one is easy to
+ * forget and its absence looks like a smaller corpus rather than an error.
+ */
+export async function runPipelineAction(sources: number): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+    const report = await runPipeline({ sources: Math.min(Math.max(1, sources), 10) });
+    revalidatePath("/settings");
+    revalidatePath("/skills");
+    revalidatePath("/dashboard");
+    return {
+      ok: report.ok,
+      message: report.stages
+        .map((stage) => `${stage.stage}: ${stage.detail}`)
+        .join(" · "),
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Re-scan campaign (R2.12) — re-judge verdicts left behind by an analyzer version bump.
+ *
+ * Rules only, so it costs nothing; the LLM analyzers are deliberately not re-run by a
+ * campaign, since a `structural-lint` fix is no reason to pay for a fresh R2.3 audit.
+ */
+export async function rescanAction(limit: number): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+    const report = await runRescan({ limit: Math.min(Math.max(1, limit), 500) });
+    revalidatePath("/settings");
+    revalidatePath("/skills");
+
+    if (report.selected === 0) {
+      return { ok: true, message: "Every verdict is at the current analyzer version." };
+    }
+    return {
+      ok: true,
+      message:
+        `re-judged ${report.rejudged} · ${report.statusChanged} changed status · ` +
+        `${report.scoreChanged} changed score · ${report.remaining} still stale`,
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** Verdict freshness per analyzer, for the settings panel. Read-only. */
+export async function verdictFreshness() {
+  await requireAdmin();
+  return staleSlices();
+}
+
+
+/**
+ * Mine every function category's archetype (R3.2).
+ *
+ * Free — derived from stored fingerprints and labels, no model. Categories below the
+ * evidence gate are skipped rather than mined thin, and the message says which, because
+ * "nothing happened for 4 of 13 categories" is the useful half of the result.
+ */
+export async function mineArchetypesAction(): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+    const results = await mineAll();
+    const stored = results.filter((r) => r.stored);
+    const gated = results.filter((r) => !r.stored && r.reason.startsWith("below the"));
+
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      message:
+        `${stored.length} archetype(s) written` +
+        (gated.length > 0 ? ` · ${gated.length} below the evidence gate` : "") +
+        (stored.length > 0 ? ` · ${stored.map((r) => r.category).join(", ")}` : ""),
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** Latest archetype per category, for the settings panel. */
+export async function archetypeRows() {
+  await requireAdmin();
+  return archetypeSummary();
 }

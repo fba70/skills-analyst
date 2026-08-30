@@ -2,7 +2,6 @@ import Link from "next/link";
 
 import { Logo } from "@/components/brand";
 import { NavAdmin, NavMain } from "@/components/layout/nav-main";
-import { NavOrganization } from "@/components/layout/nav-organization";
 import { NavUser, type NavUserProps } from "@/components/layout/nav-user";
 import { ThemeToggleMenuItem } from "@/components/theme-toggle";
 import {
@@ -18,7 +17,6 @@ import {
 
 export type AppSidebarProps = {
   user: NavUserProps;
-  organization: { name: string; role: string } | null;
   /** System admin, resolved on the server. Gates the Administration group. */
   isAdmin?: boolean;
 };
@@ -28,7 +26,7 @@ export type AppSidebarProps = {
  * the sidebar renders complete on first paint. Only the interactive rows below are
  * client components.
  */
-export function AppSidebar({ user, organization, isAdmin = false }: AppSidebarProps) {
+export function AppSidebar({ user, isAdmin = false }: AppSidebarProps) {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
@@ -59,11 +57,19 @@ export function AppSidebar({ user, organization, isAdmin = false }: AppSidebarPr
           </SidebarMenuItem>
         </SidebarMenu>
         <SidebarSeparator />
-        {/* gap-2: SidebarMenu ships with gap-0, which left these two rows touching. */}
-        <SidebarMenu className="gap-2">
-          {organization ? (
-            <NavOrganization name={organization.name} role={organization.role} />
-          ) : null}
+        {/*
+          The workspace row used to sit here above the user.
+
+          It was removed rather than hidden: every user has exactly one organisation, made
+          for them on sign-up, and there is no switcher and nothing to switch to. A control
+          whose only state is the state you are already in is noise in the densest part of
+          the sidebar. The user row carries identity, account and sign-out, which is what
+          this corner is actually for.
+
+          Bring it back when workspaces become something a person belongs to more than one
+          of — the component (`NavOrganization`) is still there and still correct.
+        */}
+        <SidebarMenu>
           <NavUser {...user} />
         </SidebarMenu>
       </SidebarFooter>

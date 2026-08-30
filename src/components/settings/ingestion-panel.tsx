@@ -112,7 +112,7 @@ const STAGES: Stage[] = [
     key: "consistency",
     title: "8 · Audit documentation",
     description:
-      "R2.3: asks a model whether each skill's documentation honestly describes its bundled code — the gap the rule-based analyzers cannot see. Only skills that ship code are audited. COSTS MONEY per skill; capped at 25 a run.",
+      "Checks whether each skill's documentation honestly describes its bundled code — the gap the rule-based analyzers cannot see. Only skills that ship code are audited. Costs per skill; capped at 25 a run.",
     cta: "Run audit",
     amountLabel: "skills",
     amount: 10,

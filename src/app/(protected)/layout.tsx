@@ -5,7 +5,6 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { isAdmin } from "@/server/dal/admin";
-import { getActiveOrganization } from "@/server/dal/organizations";
 import { requireSession } from "@/server/dal/session";
 
 /**
@@ -17,7 +16,9 @@ import { requireSession } from "@/server/dal/session";
  */
 export default async function ProtectedLayout({ children }: LayoutProps<"/">) {
   const session = await requireSession();
-  const [organization, admin] = await Promise.all([getActiveOrganization(), isAdmin()]);
+  // Only the admin flag is needed now that the sidebar no longer shows a workspace row.
+  // Keeping the organisation lookup would be a query per render for data nothing renders.
+  const admin = await isAdmin();
 
   return (
     <SidebarProvider>
@@ -27,9 +28,6 @@ export default async function ProtectedLayout({ children }: LayoutProps<"/">) {
           email: session.user.email,
           image: session.user.image ?? null,
         }}
-        organization={
-          organization ? { name: organization.name, role: organization.role } : null
-        }
         isAdmin={admin}
       />
       <SidebarInset className="min-w-0">
