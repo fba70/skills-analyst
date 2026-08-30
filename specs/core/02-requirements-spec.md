@@ -250,7 +250,7 @@ and R2.6's integrity guarantee is untestable without a delivery path.*
 - **R8.4 Per-skill permalink & citation:** A stable URL per skill and per skill *version*,
   so a verdict can be cited and an archetype's exemplar list stays resolvable after the
   upstream repo moves.
-- **R8.5 Corpus statistics on the landing surface:** Skills indexed, sources, validation
+- **R8.5 Corpus statistics on the landing surface** *(delivered)*: Skills indexed, sources, validation
   pass rate, licence mix, quality distribution, freshness against the R7.4 target. Doc 2
   covers operators (R1.7, R6.4) and researchers (R3.7) and specifies nothing for the ordinary
   user; this is that.

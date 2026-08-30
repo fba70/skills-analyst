@@ -2,8 +2,9 @@ import "server-only";
 
 import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 
-import { skills, skillVersions, sources } from "@/server/db/schema";
+import { archetypes, skills, skillVersions, sources } from "@/server/db/schema";
 import { withOrgScope, withPublicScope } from "@/server/dal/scope";
+import { FUNCTIONS } from "@/server/taxonomy/vocabulary";
 
 /**
  * Corpus statistics for the ordinary user (Doc 2 R8.5).
@@ -41,6 +42,17 @@ export type PlatformStats = {
   downloadable: number;
   licenceMix: Array<{ posture: string; count: number }>;
   qualityBands: Array<{ band: string; count: number }>;
+  /** Function categories with a mined archetype (R3.2), and how many there could be. */
+  archetypeCategories: number;
+  functionCategories: number;
+  /**
+   * Distinct document structures those archetypes were derived from.
+   *
+   * Structures, not skills, because that is the unit the mine measures in — one generator's
+   * three hundred clones are one data point. Quoting a skill count here would inflate the
+   * evidence by exactly the factor the miner exists to divide out.
+   */
+  archetypeStructures: number;
   /** Most recent successful sync of any source. */
   lastSyncAt: Date | null;
   /** Hours since that sync — R7.4 targets a full resync inside 24h. */
@@ -116,6 +128,35 @@ export async function platformStats(): Promise<PlatformStats> {
       )
       .groupBy(sql`1`);
 
+    /**
+     * The latest archetype per category, counted and summed in one pass.
+     *
+     * `distinct on (category)` with a version-descending order keeps the newest row per
+     * category — archetypes are append-only, so every previous version is still in the
+     * table and a plain `count(*)` would report how many times we have mined rather than
+     * how many categories are covered.
+     *
+     * `org_id is null` is explicit: a Team-tier archetype mined from a private corpus must
+     * never be counted into a public statistic. RLS would already do it here, but this
+     * number ends up on the front door, and OQ-C2's default belongs where someone can see
+     * it rather than only in a policy on a table.
+     */
+    const [archetypeTotals] = await tx
+      .select({
+        categories: sql<number>`count(*)::int`,
+        structures: sql<number>`coalesce(sum(t.distinct_structures), 0)::int`,
+      })
+      .from(
+        sql`(
+          select distinct on (${archetypes.category})
+            ${archetypes.category} as category,
+            ${archetypes.distinctStructures} as distinct_structures
+          from ${archetypes}
+          where ${archetypes.axis} = 'function' and ${archetypes.orgId} is null
+          order by ${archetypes.category}, ${archetypes.version} desc
+        ) t`,
+      );
+
     const downloadable = licence
       .filter((row) => (SERVABLE as readonly string[]).includes(row.posture))
       .reduce((total, row) => total + row.count, 0);
@@ -134,6 +175,9 @@ export async function platformStats(): Promise<PlatformStats> {
       downloadable,
       licenceMix: licence,
       qualityBands: quality.sort((a, b) => order.indexOf(a.band) - order.indexOf(b.band)),
+      archetypeCategories: archetypeTotals?.categories ?? 0,
+      functionCategories: FUNCTIONS.length,
+      archetypeStructures: archetypeTotals?.structures ?? 0,
       lastSyncAt,
       hoursSinceSync: lastSyncAt
         ? Math.floor((Date.now() - lastSyncAt.getTime()) / 3_600_000)

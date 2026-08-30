@@ -958,16 +958,51 @@ any other state change:
 Keep new policy constants in `policy.ts` rather than scattering them, so this becomes a
 migration of one module instead of an archaeology exercise.
 
-### ~~Platform stats on /dashboard~~ — done
+### ~~Corpus statistics (R8.5)~~ — done, on `/dashboard` **and** on `/`
 
-`/dashboard` shows the corpus at a glance: skills indexed, validation pass rate, how many
-are downloadable, quality banded rather than averaged, licence mix, and freshness. Licence
-mix gets equal billing with the count because a result you cannot download is a different
-thing from one you can.
+Skills indexed, validation pass rate, how many are downloadable, quality banded rather than
+averaged, licence mix, and freshness against R7.4's 24-hour target. Licence mix gets equal
+billing with the count because a result you cannot download is a different thing from one
+you can.
 
-The "your skills" half is queried against the real table and is empty for everyone, because
-nothing writes an org-scoped skill until the builder (R4.x) exists. It fills in on its own
-when it does.
+Both carry a fifth figure: **archetypes mined**, `12 of 13` categories, and the
+distinct-structure count behind them, each with a link through to `/archetypes`. It is the
+only figure that is not a fact about the corpus — the other four count what came in, this counts what has been
+learned from it, which is the claim the third pillar makes and the one the page could not
+previously back with a number. Counted in **distinct structures**, never skills: quoting a
+skill count would inflate the evidence by exactly the factor the miner exists to divide out.
+The `org_id is null` filter on that query is explicit rather than left to RLS, because the
+number lands on the front door and OQ-C2's "private corpora never feed public archetypes"
+belongs where someone can see it.
+
+Both surfaces call the same `platformStats()` and **share nothing else**. `/dashboard`
+renders it in Cards, which is right inside application chrome; `src/components/landing/
+corpus-stats.tsx` renders larger quiet numbers with no borders, because the front door is a
+different register. Sharing the query and not the components is the split that matters — the
+facts cannot diverge, the framing should.
+
+The panel is written so it can look bad. Pass rate sits beside the quarantine count,
+downloads beside the licence mix that caps them, and the headline is qualified by
+`sourcesSynced of sources` — ingestion is a fraction done, so the skill count is the size
+*so far*, and printing it alone would be true and would overstate what has been reached.
+Freshness is stated against the 24-hour target rather than as a bare timestamp, so "6h" can
+be read as *inside target* by someone who has never heard of R7.4.
+
+> **A copy bug worth remembering: "only the first two can be downloaded".** Carried from the
+> dashboard into the landing page and wrong in both. The licence rows are ordered by count,
+> so "the first two" is not a stable claim — and today only *one* servable posture appears
+> at all, so the sentence described a list that was not on screen. It now names the two
+> `Mirrored` postures by their label, which is true whatever the ordering and however many
+> rows exist. Copy that describes a list by position rots the moment the data moves.
+
+Numbers are queried live rather than cached. They are cheap aggregates at this size and a
+freshness metric served from a stale cache is self-defeating. `/` is the highest-traffic
+page in the product, so it is the first place that will need a cache; the answer then is a
+short revalidate on `platformStats`, never a second copy of these numbers.
+
+The dashboard's "your skills" half is queried against the real table and is empty for
+everyone, because nothing writes an org-scoped skill until the builder (R4.x) exists. It
+fills in on its own when it does.
 
 ### ~~Giant repositories need the tarball path~~ — solved with scoped subtrees
 
