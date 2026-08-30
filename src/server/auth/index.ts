@@ -10,6 +10,7 @@ import { getServerAppUrl, getTrustedOrigins } from "@/lib/app-url";
 import { ADMIN_ROLE, isBootstrapAdmin } from "./roles";
 import { db, schema } from "@/server/db";
 import { sendOtpEmail } from "@/server/mail";
+import { recordSendFailure } from "@/server/auth/send-failures";
 
 import { ensurePersonalOrganization, findFirstOrganizationId } from "./personal-org";
 
@@ -103,13 +104,27 @@ export const auth = betterAuth({
       // false = an unknown email signs up on first successful code
       disableSignUp: false,
       overrideDefaultEmailVerification: true,
+      /**
+       * Records a failure before re-throwing, because Better Auth will swallow the throw.
+       *
+       * `runInBackgroundOrAwait` awaits this and then catches — so the endpoint returns
+       * 200 and the user is told "code sent" for a message that never left. The throw is
+       * still worth making: it is what puts the reason in the server log. What it cannot
+       * do is reach the person waiting for the code, which is what the recorded failure is
+       * for (`requestOtpAction` reads it back).
+       */
       sendVerificationOTP: async ({ email, otp, type }) => {
-        await sendOtpEmail({
-          to: email,
-          code: otp,
-          purpose: type,
-          expiresInMinutes: OTP_EXPIRY_SECONDS / 60,
-        });
+        try {
+          await sendOtpEmail({
+            to: email,
+            code: otp,
+            purpose: type,
+            expiresInMinutes: OTP_EXPIRY_SECONDS / 60,
+          });
+        } catch (error) {
+          recordSendFailure(email, (error as Error).message);
+          throw error;
+        }
       },
     }),
     admin(),
