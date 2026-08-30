@@ -47,6 +47,17 @@ const ANALYZERS: Analyzer[] = [structuralLint, secretScan, injectionScan, capabi
 const COSTLY_ANALYZERS: Analyzer[] = [consistencyCheck];
 
 /**
+ * The version each analyzer currently ships, by name.
+ *
+ * Derived from the analyzer objects rather than written out, so it cannot drift from what
+ * actually runs — a hand-maintained copy would be wrong the first time someone bumped a
+ * version and forgot this list, and the whole point of R2.12 is trusting these numbers.
+ */
+export const ANALYZER_VERSIONS: Record<string, string> = Object.fromEntries(
+  [...ANALYZERS, ...COSTLY_ANALYZERS].map((analyzer) => [analyzer.name, analyzer.version]),
+);
+
+/**
  * Version ids whose bundle carries executable code, per the structural fingerprint.
  *
  * The targeting query for an R2.3 campaign. Running the consistency check across the whole
@@ -358,6 +369,36 @@ async function validateOne(
  * rules found. Crude, but public and explainable, which matters more right now than
  * precision — and popularity is deliberately not an input.
  */
+/**
+ * Quality score (Doc 2 R2.9) — a composite, not an inverted defect count.
+ *
+ * ## What was wrong
+ *
+ * This used to be `100 - penalties`, which scores the *absence of problems* and calls it
+ * quality. A document with almost nothing in it has almost nothing to penalise, so the
+ * registry's default ranking put an **8-word skill and a 4-word skill at the very top**,
+ * both on a perfect 100. Meanwhile 87% of the corpus sat at 99 or 100, which is not a
+ * ranking signal at all — it is a near-constant.
+ *
+ * It also broke archetype mining outright. R3.2 contrasts a strong band against a weak one,
+ * and with scores compressed into two values the bands came out as "100 versus 99" —
+ * comparing perfect skills to almost-perfect ones. Worse, because findings accumulate with
+ * surface area (a 12-file skill has twelve chances at an orphaned-resource finding), the
+ * "strong" band filled with trivially simple documents and the miner concluded that good
+ * review skills are single-file with no code examples. That is an artifact of the metric,
+ * stated as guidance.
+ *
+ * ## What it is now
+ *
+ * R2.9 asks for structure, **documentation completeness**, and resource hygiene. The
+ * penalty term covers structure and hygiene; `substance` supplies the missing half.
+ *
+ * A skill earns full substance credit at roughly 330 words — enough for a purpose, a
+ * trigger and a procedure. Below that it is scaled down, because a document that short
+ * cannot be a complete skill however clean it is. The 0.45 floor means a defect-free stub
+ * still scores respectably: it is thin, not broken, and the distinction matters when the
+ * number is used for ranking rather than gating.
+ */
 function scoreOf(results: Array<{ analyzer: Analyzer; output: AnalyzerOutput }>): number {
   const weights: Record<string, number> = {
     info: 1,
@@ -369,7 +410,26 @@ function scoreOf(results: Array<{ analyzer: Analyzer; output: AnalyzerOutput }>)
   const penalty = results
     .flatMap(({ output }) => output.findings)
     .reduce((total, finding) => total + (weights[finding.severity] ?? 0), 0);
-  return Math.max(0, Math.min(100, 100 - penalty));
+  const defectScore = Math.max(0, Math.min(100, 100 - penalty));
+
+  /**
+   * How much document there is to judge, from structural-lint's own measurement.
+   *
+   * Falls back to full credit when the analyzer did not report — a missing measurement
+   * must not silently mark every skill down, which would be the same class of error in the
+   * other direction.
+   */
+  const lintData = results.find(({ analyzer }) => analyzer.name === structuralLint.name)?.output
+    .data as { bodyBytes?: number } | undefined;
+  const bodyBytes = typeof lintData?.bodyBytes === "number" ? lintData.bodyBytes : null;
+
+  if (bodyBytes === null) return defectScore;
+
+  const SUBSTANTIAL_BYTES = 2_000;
+  const FLOOR = 0.45;
+  const substance = FLOOR + (1 - FLOOR) * Math.min(1, bodyBytes / SUBSTANTIAL_BYTES);
+
+  return Math.max(0, Math.min(100, Math.round(defectScore * substance)));
 }
 
 /** Re-scan selector: every version last judged by an older version of an analyzer. */

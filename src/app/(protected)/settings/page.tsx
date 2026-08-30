@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 
 import { Paginator } from "@/components/common/paginator";
 import { IngestionPanel } from "@/components/settings/ingestion-panel";
+import { ArchetypePanel } from "@/components/settings/archetype-panel";
+import { PipelinePanel } from "@/components/settings/pipeline-panel";
 import { ListControls, SettingsTabs } from "@/components/settings/list-controls";
 import { QuarantinePanel } from "@/components/settings/quarantine-panel";
 import { ReviewPanel } from "@/components/settings/review-panel";
@@ -15,6 +17,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { discoveryPolicy } from "@/server/crawl/policy";
 import { crawlCoverage } from "@/server/crawl/run";
 import { sourceDiversity } from "@/server/analytics/templates";
+import { archetypeSummary } from "@/server/analytics/archetype-run";
+import { pipelineBacklog } from "@/server/pipeline/run";
+import { staleSlices } from "@/server/validation/rescan";
 import { isAdmin, listPlatformUsers, platformCounts } from "@/server/dal/admin";
 import {
   curationCounts,
@@ -31,6 +36,7 @@ export const metadata: Metadata = { title: "Settings" };
 
 const TABS = [
   "ingestion",
+  "archetypes",
   "submit",
   "taxonomy",
   "review",
@@ -78,7 +84,8 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity] = await Promise.all([
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, archetypeList] =
+    await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
     tab === "sources" ? listSourceHealth(query) : null,
@@ -86,6 +93,9 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "taxonomy" ? taxonomySummary() : null,
     tab === "taxonomy" ? reviewQueue(20) : null,
     tab === "submit" ? sourceDiversity(12) : null,
+    tab === "ingestion" ? staleSlices() : null,
+    tab === "ingestion" ? pipelineBacklog() : null,
+    tab === "archetypes" ? archetypeSummary() : null,
   ]);
 
   // Every tab except Ingestion is a paginated list.
@@ -126,6 +136,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
           { value: "ingestion", label: "Ingestion" },
           { value: "submit", label: "Add source" },
           { value: "taxonomy", label: "Taxonomy" },
+          { value: "archetypes", label: "Archetypes" },
           { value: "review", label: `Review (${curation.held})` },
           { value: "quarantine", label: `Quarantine (${curation.quarantined})` },
           { value: "sources", label: "Sources" },
@@ -144,7 +155,43 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
           />
         ) : null}
 
-        {tab === "ingestion" ? <IngestionPanel /> : null}
+        {tab === "ingestion" ? (
+          <div className="grid gap-6">
+            <PipelinePanel
+              freshness={freshness ?? []}
+              backlog={
+                backlog ?? {
+                  sourcesAwaitingSync: 0,
+                  awaitingValidation: 0,
+                  awaitingFingerprint: 0,
+                  awaitingSignature: 0,
+                }
+              }
+            />
+            <div className="grid gap-2">
+              <h2 className="text-sm font-medium">Individual stages</h2>
+              <IngestionPanel />
+            </div>
+          </div>
+        ) : null}
+        {tab === "archetypes" ? (
+          <ArchetypePanel
+            archetypes={(archetypeList ?? []).map((row) => {
+              const skeleton = row.skeleton as {
+                sections?: Array<{ role: string; lift: number; required: boolean }>;
+              };
+              return {
+                category: row.category,
+                version: row.version,
+                skillCount: row.skillCount,
+                distinctStructures: row.distinctStructures,
+                sourceCount: row.sourceCount,
+                sections: skeleton.sections ?? [],
+                antiPatterns: (row.antiPatterns as Array<{ label: string; lift: number }>) ?? [],
+              };
+            })}
+          />
+        ) : null}
         {tab === "submit" ? (
           <SubmitPanel
             diversity={diversity ?? []}

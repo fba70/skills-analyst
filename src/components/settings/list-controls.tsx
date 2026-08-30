@@ -53,9 +53,18 @@ export function SettingsTabs({
         )
       }
     >
-      {/* Five tabs do not fit at 375px. They scroll inside their own strip rather than
-          widening the page — a body that scrolls sideways is never the right answer. */}
-      <TabsList className="max-w-full justify-start overflow-x-auto">
+      {/*
+        Seven tabs do not fit at 375px. They scroll inside their own strip rather than
+        widening the page — a body that scrolls sideways is never the right answer.
+
+        `overflow-y-hidden` is not redundant. Per the CSS overflow spec, when one axis is
+        set to something other than `visible` the other axis computes to `auto` rather than
+        staying `visible` — so `overflow-x-auto` alone silently enables vertical scrolling
+        too. The triggers sit at `h-[calc(100%-1px)]` inside a padded list, and that is
+        enough sub-pixel overflow to raise a vertical scrollbar on a strip that has nothing
+        to scroll vertically.
+      */}
+      <TabsList className="max-w-full justify-start overflow-x-auto overflow-y-hidden">
         {tabs.map((tab) => (
           <TabsTrigger key={tab.value} value={tab.value} className="shrink-0">
             {tab.label}

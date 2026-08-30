@@ -24,8 +24,18 @@ const VAGUE_TERMS =
 
 export const structuralLint: Analyzer = {
   name: "structural-lint",
-  // 1.1.0: identity checks became dialect-aware. Bumped because this re-judges the corpus.
-  version: "1.3.0",
+  /**
+   * 1.1.0 — identity checks became dialect-aware.
+   * 1.2.0 — malformed frontmatter separated from absent frontmatter.
+   * 1.3.0 — derivable identity warns instead of blocking.
+   * 1.4.0 — **no rule change here.** The quality score this analyzer's `bodyBytes` feeds
+   *         became a composite rather than an inverted defect count, so every verdict needs
+   *         re-scoring. Bumped deliberately: the re-scan selector is the analyzer version,
+   *         and a scoring change that leaves the corpus un-rescored is exactly the silent
+   *         drift R2.12 exists to prevent. A dedicated scorer version would be more precise
+   *         and is worth having once scoring changes more often than rules do.
+   */
+  version: "1.4.0",
 
   run({ files, body, frontmatter, markerPath, dialect, resolvedName, resolvedSummary, parseError }) {
     const findings: Finding[] = [];
