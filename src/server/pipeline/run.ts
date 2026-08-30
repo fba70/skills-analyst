@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray, isNull, ne, notExists, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, notExists, sql } from "drizzle-orm";
 
 import {
   buildSignatures,
@@ -8,7 +8,7 @@ import {
   pendingSignatureCount,
 } from "@/server/analytics/dedupe";
 import { db } from "@/server/db";
-import { skillStructures, skillVersions, sources } from "@/server/db/schema";
+import { events, skillStructures, skillVersions, sources } from "@/server/db/schema";
 import { EXTRACTOR_VERSION } from "@/server/analytics/structure";
 import { extractStructures } from "@/server/analytics/structure-run";
 import { pendingSources, syncSource } from "@/server/ingest/sync";
@@ -46,6 +46,15 @@ import { validatePending } from "@/server/validation/run";
  * which is the failure mode a naive `await` chain has.
  */
 
+/**
+ * How long the sync stage may spend starting new sources.
+ *
+ * Generous enough for five ordinary repositories, short enough that a pass still returns
+ * and the derived stages behind it still run. The derived stages are the ones that fall
+ * behind, and they must not be starved by a fetch that never ends.
+ */
+const DEFAULT_SYNC_BUDGET_MS = 8 * 60_000;
+
 export type StageResult = {
   stage: string;
   ok: boolean;
@@ -71,6 +80,19 @@ export type PipelineOptions = {
   pairs?: number;
   /** Skip fetching and only catch the derived stages up. */
   skipSync?: boolean;
+  /** Who started this pass — `cron`, `admin`, or the CLI. Recorded on the event. */
+  trigger?: string;
+  /**
+   * Wall-clock budget for the sync stage, in milliseconds.
+   *
+   * A slice bounded only by *count* is not bounded at all when one item can be arbitrarily
+   * large. `davila7/claude-code-templates` holds 898 skills — roughly 3,600 file fetches —
+   * and `syncSource` deliberately fetches a source completely, because a partial
+   * enumeration would make R1.5's tombstoning delete everything it did not reach. So one
+   * source in a five-source slice ran past the job's wall clock and the whole loop was
+   * killed mid-pass, twice, at exactly the same source.
+   */
+  syncBudgetMs?: number;
   onProgress?: (message: string) => void;
 };
 
@@ -98,26 +120,55 @@ async function stage(
 export async function runPipeline(options: PipelineOptions = {}): Promise<PipelineReport> {
   const log = options.onProgress ?? (() => {});
   const report: PipelineReport = { stages: [], ok: true };
+  const startedAt = Date.now();
 
   if (!options.skipSync) {
     await stage("sync", report, log, async () => {
       const targets = await pendingSources(options.sources ?? 5);
       if (targets.length === 0) return "no sources awaiting a first sync";
 
+      const budgetMs = options.syncBudgetMs ?? DEFAULT_SYNC_BUDGET_MS;
+      const deadline = Date.now() + budgetMs;
+
       let created = 0;
       let tombstoned = 0;
       let failed = 0;
+      let skippedSkills = 0;
+      let attempted = 0;
+      let deferred = 0;
+
       for (const target of targets) {
+        /**
+         * Checked before starting, never during.
+         *
+         * A source in flight is fetched to completion or not at all — abandoning one
+         * halfway would leave a partial enumeration, and R1.5 treats "absent from the
+         * enumeration" as "deleted upstream". So the budget stops the *next* source from
+         * starting, which bounds the overrun to one source rather than the whole queue.
+         */
+        if (Date.now() >= deadline) {
+          deferred = targets.length - attempted;
+          break;
+        }
+        attempted += 1;
+
         try {
           const result = await syncSource({ sourceUrl: target.url });
           created += result.created;
           tombstoned += result.tombstoned;
+          skippedSkills += result.failedSkills.length;
         } catch {
           // Per-source, so one unreachable repository does not end the slice.
           failed += 1;
         }
       }
-      return `${targets.length} source(s): ${created} version(s) created, ${tombstoned} tombstoned, ${failed} failed`;
+
+      return (
+        `${attempted} source(s): ${created} version(s) created, ${tombstoned} tombstoned, ${failed} failed` +
+        // Distinct from a failed *source*: the repository synced, some skills in it did not.
+        (skippedSkills > 0 ? `, ${skippedSkills} skill(s) skipped` : "") +
+        (deferred > 0 ? ` · ${deferred} deferred, time budget spent` : "")
+      );
     });
   }
 
@@ -146,7 +197,65 @@ export async function runPipeline(options: PipelineOptions = {}): Promise<Pipeli
     return `${result.candidatePairs} pair(s) compared, ${result.confirmed} confirmed, ${result.variantsMarked} variant(s) marked`;
   });
 
+  /**
+   * Every pass leaves a record.
+   *
+   * Without one a schedule is unobservable: "it is running" and "it has been failing since
+   * Tuesday" look identical from the outside, and R1.7 asks for source health precisely so
+   * that difference is visible. One row per pass, in the same `events` spine everything
+   * else audits through.
+   */
+  await db.insert(events).values({
+    actorType: "system",
+    actorId: options.trigger ?? "pipeline",
+    kind: report.ok ? "pipeline.completed" : "pipeline.partial",
+    subjectType: "pipeline",
+    reason: report.stages.map((s) => `${s.stage}: ${s.detail}`).join(" · ").slice(0, 500),
+    payload: {
+      elapsedMs: Date.now() - startedAt,
+      stages: report.stages,
+      trigger: options.trigger ?? "manual",
+    },
+  });
+
   return report;
+}
+
+export type PipelineRun = {
+  at: Date;
+  ok: boolean;
+  trigger: string;
+  elapsedMs: number | null;
+  stages: StageResult[];
+};
+
+/** Recent passes, newest first — what the admin panel shows about the schedule. */
+export async function recentRuns(limit = 10): Promise<PipelineRun[]> {
+  const rows = await db
+    .select({
+      at: events.at,
+      kind: events.kind,
+      payload: events.payload,
+    })
+    .from(events)
+    .where(inArray(events.kind, ["pipeline.completed", "pipeline.partial"]))
+    .orderBy(desc(events.at))
+    .limit(limit);
+
+  return rows.map((row) => {
+    const payload = (row.payload ?? {}) as {
+      elapsedMs?: number;
+      stages?: StageResult[];
+      trigger?: string;
+    };
+    return {
+      at: row.at,
+      ok: row.kind === "pipeline.completed",
+      trigger: payload.trigger ?? "manual",
+      elapsedMs: payload.elapsedMs ?? null,
+      stages: payload.stages ?? [],
+    };
+  });
 }
 
 export type PipelineBacklog = {

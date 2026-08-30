@@ -436,7 +436,10 @@ export async function consistencyAction(limit: number): Promise<ActionResult> {
 export async function runPipelineAction(sources: number): Promise<ActionResult> {
   try {
     await requireAdmin();
-    const report = await runPipeline({ sources: Math.min(Math.max(1, sources), 10) });
+    const report = await runPipeline({
+      trigger: "admin",
+      sources: Math.min(Math.max(1, sources), 10),
+    });
     revalidatePath("/settings");
     revalidatePath("/skills");
     revalidatePath("/dashboard");

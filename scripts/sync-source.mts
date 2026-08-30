@@ -114,6 +114,20 @@ const mirrored = report.skills.filter((s) => s.contentStored).length;
 console.info("");
 console.info(
   `${report.skills.length} skill(s): ${mirrored} mirrored, ${report.skills.length - mirrored} metadata-only` +
-    (dryRun ? "" : ` · ${report.created} created, ${report.unchanged} unchanged`),
+    (dryRun ? "" : ` · ${report.created} created, ${report.unchanged} unchanged`) +
+    (report.tombstoned > 0 ? ` · ${report.tombstoned} tombstoned` : ""),
 );
+
+// Named, not counted. A skipped skill is usually a detection problem with one directory,
+// and the path is what makes it fixable.
+if (report.failedSkills.length > 0) {
+  console.info(`\n${report.failedSkills.length} skill(s) skipped:`);
+  for (const failure of report.failedSkills.slice(0, 10)) {
+    console.info(`  ${failure.path}`);
+    console.info(`    ${failure.reason}`);
+  }
+  if (report.failedSkills.length > 10) {
+    console.info(`  … and ${report.failedSkills.length - 10} more`);
+  }
+}
 console.info("");

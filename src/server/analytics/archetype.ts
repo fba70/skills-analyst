@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 
 import { db } from "@/server/db";
 import { EXTRACTOR_VERSION, type SectionRole } from "@/server/analytics/structure";
+import { SEED_REPOS } from "@/server/crawl/seeds";
 
 /**
  * Archetype mining (Doc 2 R3.2) — the core novel piece.
@@ -33,14 +34,40 @@ import { EXTRACTOR_VERSION, type SectionRole } from "@/server/analytics/structur
  * The same reduction is why the R3.2 gate is `distinctStructures >= 50` across
  * `sources >= 10` rather than a skill count.
  *
- * ## Bands, not a median split
+ * ## Bands come from source trust, not from the quality score
  *
- * Quartiles. The middle half of any category is unremarkable by construction and including
- * it just drags both bands toward the mean, flattening exactly the differences being looked
- * for. Comparing the top quarter against the bottom quarter is what makes a lift visible.
+ * The first version banded on `quality_score` quartiles and produced a confident, wrong
+ * answer: it reported that good review skills are **single-file with no code examples**.
+ *
+ * The cause is worth recording because it is not obvious. The score is bounded at 100 and
+ * most skills have no findings at all, so thousands sit at exactly 100 — the "top quartile"
+ * is really "the subset of the 100s that sorting happened to pick". Anything that
+ * systematically stops a skill reaching 100 is then, by construction, absent from the
+ * strong band and reported as an anti-pattern. Every multi-file bundle picks up an
+ * `orphaned-resources` note — severity `info`, one point, 2,293 occurrences — so **no
+ * multi-file skill can score 100**, and "has more than one file" arrived as guidance. The
+ * average actually runs the other way: 4+ file skills score 92.4 against 86.2 for
+ * single-file ones.
+ *
+ * Raising the info weight to zero would remove that particular bias and make the ceiling
+ * worse, since more skills would reach 100. The metric has no headroom at the top, and no
+ * band drawn from it can have any either.
+ *
+ * Enriching the score with completeness signals — has a when-to-use section, has examples —
+ * would be circular: the miner would then discover that good skills have the features we
+ * scored them for, which is not a finding.
+ *
+ * So the bands come from something the miner does not measure at all: **who published the
+ * skill**. The strong band is the curated seed allow-list — Anthropic, Stripe, Cloudflare,
+ * Sentry, Trail of Bits, Hugging Face, Expo, and the high-signal community packs — and the
+ * weak band is everything else. That is an independent judgement about craft, made by
+ * people, before any of our analyzers ran. It is a proxy and it is imperfect (a long-tail
+ * repository can be excellent), but it is honest about being a proxy, and unlike the score
+ * it cannot be gamed by having less content.
  */
 
-export const MINER_VERSION = "1.0.0";
+/** 2.0.0 — bands moved from quality quartiles to source trust. See the note above. */
+export const MINER_VERSION = "2.0.0";
 
 /** R3.2's gate, in the terms that actually resist a monoculture. */
 export const MIN_STRUCTURES = 50;
@@ -57,6 +84,23 @@ const MIN_LIFT = 12;
 
 /** An element has to exist somewhere before its lift means anything. */
 const MIN_STRONG_PREVALENCE = 25;
+
+/**
+ * Members each band needs before a percentage over it is worth reading.
+ *
+ * Below this a single skill moves a lift by ten points or more, which is sampling noise
+ * presented as advice.
+ */
+const MIN_BAND = 15;
+
+/**
+ * The curated set, derived from the seed allow-list rather than duplicated.
+ *
+ * A hand-copied list here would drift from `seeds.ts` the first time someone added a vendor
+ * repository, and the drift would be invisible — the archetype would simply be mined from a
+ * slightly wrong idea of which sources are trusted.
+ */
+const CURATED_SOURCES: ReadonlySet<string> = new Set(SEED_REPOS.map((seed) => seed.repo));
 
 type Representative = {
   skillId: string;
@@ -80,6 +124,8 @@ type Representative = {
   descriptionLength: number;
   descriptionShape: Record<string, unknown>;
   redistribution: string;
+  /** Published by a repository on the curated seed allow-list. The band selector. */
+  curated: boolean;
 };
 
 /**
@@ -156,6 +202,7 @@ async function representatives(category: string): Promise<Representative[]> {
       descriptionLength: (row.description_length as number) ?? 0,
       descriptionShape: (row.description_shape ?? {}) as Record<string, unknown>,
       redistribution: row.redistribution as string,
+      curated: CURATED_SOURCES.has(row.source as string),
     };
   });
 }
@@ -269,12 +316,16 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
 
   const sources = new Set(reps.map((r) => r.source));
 
-  // Quartile bands. `Math.max(…, 1)` keeps a tiny category from producing empty bands and
-  // dividing by zero — it will fail the gate anyway, but it should fail with numbers.
-  const sorted = [...reps].sort((a, b) => b.qualityScore - a.qualityScore);
-  const bandSize = Math.max(Math.floor(sorted.length / 4), 1);
-  const strong = sorted.slice(0, bandSize);
-  const weak = sorted.slice(-bandSize);
+  /**
+   * Bands by publisher, not by score.
+   *
+   * Both sides need enough members for a percentage to mean anything. A category with three
+   * curated structures would produce lifts of 33 points from a single skill, which is noise
+   * wearing a number's clothes — it fails `meetsGate` below and is reported as ungated
+   * rather than mined thin.
+   */
+  const strong = reps.filter((r) => r.curated);
+  const weak = reps.filter((r) => !r.curated);
 
   const roleSet = new Set<SectionRole>();
   for (const rep of reps) for (const role of rep.roles) roleSet.add(role);
@@ -330,8 +381,12 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
    * exemplars. An exemplar exists to be read in context by the builder, so listing one
    * whose text we may not redistribute would be an invitation to violate its licence.
    */
-  const exemplars = strong
-    .filter((r) => r.redistribution === "mirror_allowed" || r.redistribution === "attribution_required")
+  const exemplars = [...strong]
+    .filter(
+      (r) => r.redistribution === "mirror_allowed" || r.redistribution === "attribution_required",
+    )
+    // Best-scoring first. The band is no longer sorted by quality, so this has to say so.
+    .sort((a, b) => b.qualityScore - a.qualityScore)
     .slice(0, 8)
     .map((r) => ({
       skillId: r.skillId,
@@ -340,20 +395,36 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
       qualityScore: r.qualityScore,
     }));
 
-  const meetsGate = reps.length >= MIN_STRUCTURES && sources.size >= MIN_SOURCES;
+  const meetsGate =
+    reps.length >= MIN_STRUCTURES &&
+    sources.size >= MIN_SOURCES &&
+    strong.length >= MIN_BAND &&
+    weak.length >= MIN_BAND;
+
   const gateReason = meetsGate
     ? null
     : reps.length < MIN_STRUCTURES
       ? `${reps.length} distinct structures, needs ${MIN_STRUCTURES}`
-      : `${sources.size} sources, needs ${MIN_SOURCES}`;
+      : sources.size < MIN_SOURCES
+        ? `${sources.size} sources, needs ${MIN_SOURCES}`
+        : strong.length < MIN_BAND
+          ? `${strong.length} from curated sources, needs ${MIN_BAND}`
+          : `${weak.length} from other sources, needs ${MIN_BAND}`;
 
   return {
     category,
     skillCount,
     distinctStructures: reps.length,
     sourceCount: sources.size,
-    strongThreshold: strong[strong.length - 1]?.qualityScore ?? 0,
-    weakThreshold: weak[0]?.qualityScore ?? 0,
+    // Retained for transparency: the quality range each band happens to span. They no
+    // longer *define* the bands — publisher does — but a reader comparing them can see
+    // whether trust and score agree, which is itself informative.
+    strongThreshold: Math.round(
+      strong.reduce((sum, r) => sum + r.qualityScore, 0) / Math.max(strong.length, 1),
+    ),
+    weakThreshold: Math.round(
+      weak.reduce((sum, r) => sum + r.qualityScore, 0) / Math.max(weak.length, 1),
+    ),
     meetsGate,
     gateReason,
     skeleton: {

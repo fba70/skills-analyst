@@ -246,6 +246,68 @@ reasoning is in the route file so nobody has to rediscover it.
 > facts up through the DAL) because the DAL reaches `next/navigation` and cannot load in a
 > plain node script. Assembly is the part with rules worth testing.
 
+### The ingest schedule (R1.7)
+
+`vercel.ts` runs `/api/cron/pipeline` every ten minutes; the route runs one bounded pass and
+returns what it did. That is the whole scheduler — no queue, no worker, no state machine.
+Every stage is already resumable and idempotent, so "run a slice periodically" is a complete
+implementation rather than a placeholder for one.
+
+The cadence follows from arithmetic, not taste: two sources a pass, ~260 passes for the
+sources awaiting a first sync, about two days of unattended catch-up. After that the same
+schedule holds the corpus inside R7.4's 24-hour freshness target, because a pass with
+nothing to fetch is one cheap query per stage and returns immediately. Faster would overlap
+— a pass can run minutes, and two fetching the same sources would race each other's writes.
+
+**Two sources per scheduled pass, against five for a manual run.** A cron pass has a ceiling
+it cannot negotiate with, and being cut off mid-stage loses every stage behind it, so the
+scheduled path trades throughput for reliably finishing.
+
+**`CRON_SECRET` gates it, and the route fails closed when it is unset.** Vercel sends it as
+a bearer token. Without the check this is an unauthenticated endpoint that makes us fetch
+hundreds of repositories on demand — a denial-of-wallet against our own GitHub budget — and
+refusing on a *missing* secret is the only safe default, since the alternative is a
+deployment that is quietly unprotected exactly when someone forgot to configure it.
+
+**Nothing that costs money is scheduled.** The R2.3 analyzer and the taxonomy classifier
+stay manual. A schedule that quietly spends is one nobody can leave switched on; they can
+join it once RC.2's spend caps exist to bound them.
+
+Every pass writes an `events` row (`pipeline.completed` / `pipeline.partial`) tagged with
+its trigger — `cron`, `admin` or `cli` — and Settings → Ingestion renders the last few.
+A schedule you cannot observe is one you cannot trust: "it is running" and "it has been
+failing since Tuesday" look identical from the outside.
+
+### A slice is bounded in time as well as count
+
+The pipeline's sync stage takes N sources — which is not a bound at all when one source can
+be arbitrarily large. `davila7/claude-code-templates` holds 898 skills, roughly 3,600 file
+fetches, and `syncSource` deliberately fetches a source *completely* (a partial enumeration
+would make R1.5's tombstoning delete everything it did not reach). One source in a
+five-source slice outran the job's wall clock and the whole loop was killed mid-pass —
+twice, at exactly the same source.
+
+`syncBudgetMs` (8 minutes) is checked **before starting a source, never during**. A source
+in flight is fetched to completion or not at all; the budget stops the *next* one starting,
+which caps the overrun at one source rather than the queue, and the stage reports
+`N deferred, time budget spent` instead of dying.
+
+### One bad skill must not cost the repository
+
+`syncSource` had no per-skill error handling: a single throw inside the fetch loop aborted
+the source. The same repository proved it — one directory
+(`cli-tool/components/skills/ai-research/loki-mode`) trips the 300-file bundle backstop
+because detection reads a project as a skill, and that one throw **lost the other 897
+skills**. Twice. Reported only as `2 failed` in a pipeline summary, which is why it went
+unnoticed for several passes.
+
+Failures are now per-skill, collected into `report.failedSkills` with the path and the
+reason, and named in the CLI rather than counted. The same run now syncs 149 and skips 1.
+
+Tombstoning stays correct because `seenPaths` is built from the **enumeration**, not from
+what was successfully fetched — a skill that failed to fetch is still *seen*, so it is never
+mistaken for one deleted upstream.
+
 ### Run the pipeline, not the stages
 
 `pnpm pipeline` / Settings → Ingestion → **Run the pipeline** does
@@ -503,6 +565,49 @@ Cost and prompt-injection posture are the open questions: search results are unt
 in exactly the sense R7.3 means, and this would be a recurring spend rather than a one-off.
 Both are reasons to build it *after* the corpus is balanced, not before.
 
+### Archetypes band on source trust, not on the quality score
+
+R3.2 is implemented in `analytics/archetype.ts`. The method is a **contrast**: every element
+carries a `lift` — prevalence in the strong band minus the weak band — because a section
+present in 90% of good skills *and* 90% of weak ones is not advice. Near-zero lift is
+dropped however common; negative lift becomes an anti-pattern for free. Evidence is counted
+in **distinct structures**, never skills, so one generator's 300 clones are one data point.
+
+**The bands come from who published the skill, not from `quality_score`.** That reversal is
+the most important thing in this file.
+
+Banding on quality quartiles produced a confident, wrong archetype: *good review skills are
+single-file with no code examples.* The score is bounded at 100, most skills have no findings
+at all, and thousands sit at exactly 100 — so the "top quartile" is really "whichever 100s
+sorting picked", and anything that systematically stops a skill reaching 100 shows up as an
+anti-pattern. Every multi-file bundle collects an `orphaned-resources` note (severity `info`,
+one point, 2,293 occurrences), so **no multi-file skill can score 100**. Meanwhile the
+average runs the other way: 4+ file skills average 92.4 against 86.2 for single-file.
+
+Zeroing the info weight removes that bias and makes the ceiling worse. Adding completeness
+signals to the score would be circular — the miner would discover that good skills have the
+features we scored them for.
+
+So the strong band is the **curated seed allow-list** (`SEED_REPOS`, derived not copied) and
+the weak band is everything else: an independent judgement about craft, made by people,
+before any analyzer ran. A proxy, and honest about being one.
+
+Every sign flipped:
+
+| element | quality bands | source trust |
+|---|---|---|
+| More than one file | −62 avoid | **+40 do** |
+| Bundles assets | −18 avoid | **+32 do** |
+| Offloads into `references/` | −18 avoid | **+26 do** |
+| Contains code examples | −39 avoid | **+23 do** |
+
+The confirming detail: curated skills average **95** on our quality score against **97** for
+the rest. The professionally-built ones score *worse* on our own metric, which is the
+clearest possible statement that the metric was measuring the wrong thing.
+
+`MINER_VERSION` is 2.0.0 and the v1 rows are kept — archetypes are append-only, so the
+broken generation stays visible as history rather than being quietly overwritten.
+
 ### Measure structural diversity, not source concentration
 
 **Read this before drawing any conclusion from a corpus-wide number.**
@@ -688,6 +793,7 @@ pnpm db:verify-rls  # after ANY schema change that adds an org-scoped table
 
 # Pipeline, each bounded and resumable
 pnpm pipeline                        # sync → validate → fingerprint → signatures → cluster
+                                     # (also runs on a 10-minute cron in production)
 pnpm pipeline --loop 40 --skip-sync  # catch the derived stages up
 pnpm rescan --status | --run 300     # R2.12 campaigns; free, rules only
 pnpm crawl | promote | sync | validate | duplicates   # the individual stages

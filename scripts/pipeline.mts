@@ -30,6 +30,7 @@ for (let pass = 1; pass <= passes; pass += 1) {
   if (passes > 1) console.info(`\n━━ pass ${pass}/${passes}`);
 
   const report = await runPipeline({
+    trigger: "cli",
     sources: num("sources"),
     validate: num("validate"),
     structures: num("structures"),
