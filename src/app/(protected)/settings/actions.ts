@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 
+import { desc, eq, sql } from "drizzle-orm";
+
 import { buildSignatures, clusterDuplicates } from "@/server/analytics/dedupe";
 import { archetypeSummary, mineAll } from "@/server/analytics/archetype-run";
 import { extractStructures } from "@/server/analytics/structure-run";
@@ -9,6 +11,15 @@ import { expandList, applySeedRepos } from "@/server/crawl/seed-run";
 import { normalizeRepoInput, submitRepository } from "@/server/crawl/submit";
 import { runCrawl, ensureSeedShards } from "@/server/crawl/run";
 import { decideCandidates, enrichCandidates } from "@/server/crawl/promote";
+import {
+  recordTakedown,
+  rejectTakedown,
+  reinstateTakedown,
+  upholdTakedown,
+  type TakedownInput,
+} from "@/server/compliance/takedown";
+import { db } from "@/server/db";
+import { skills, skillVersions, sources } from "@/server/db/schema";
 import { requireAdmin, setUserBanned, setUserRole } from "@/server/dal/admin";
 import {
   approveRepo,
@@ -519,4 +530,154 @@ export async function mineArchetypesAction(): Promise<ActionResult> {
 export async function archetypeRows() {
   await requireAdmin();
   return archetypeSummary();
+}
+
+/**
+ * Takedowns (Doc 2 R7.5).
+ *
+ * Recording and deciding are separate actions because they are separate events, and
+ * because they carry different risks: logging a notice is free and reversible, upholding
+ * one deletes bytes from storage and un-lists content. A single "accept" button would make
+ * the destructive half the default path.
+ */
+export async function recordTakedownAction(input: {
+  scope: "skill" | "source";
+  target: string;
+  requester: string;
+  requesterEmail: string;
+  grounds: TakedownInput["grounds"];
+  claim: string;
+}): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+
+    const target = input.target.trim();
+    if (!target) throw new Error("Name the skill slug or the repository URL.");
+    if (!input.requester.trim()) throw new Error("Record who made the request.");
+    if (!input.claim.trim()) throw new Error("Record what was claimed.");
+
+    // A slug is what a curator has in front of them; the block needs (source url, path).
+    // Resolving here rather than making them look it up is the difference between a form
+    // someone uses under time pressure and one they get wrong.
+    const resolved = await resolveTakedownTarget(input.scope, target);
+
+    await recordTakedown({
+      ...resolved,
+      requester: input.requester.trim(),
+      requesterEmail: input.requesterEmail.trim() || null,
+      grounds: input.grounds,
+      claim: input.claim.trim(),
+    });
+
+    revalidatePath("/settings");
+    return { ok: true, message: "Request logged. Nothing is withdrawn until it is upheld." };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function upholdTakedownAction(id: string, note: string): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+    const result = await upholdTakedown(id, note.trim() || undefined);
+
+    revalidatePath("/settings");
+    revalidatePath("/skills");
+    revalidatePath("/archetypes");
+
+    return {
+      ok: true,
+      message:
+        `${result.affectedSkills} skill(s) withdrawn · ${result.bundlesDeleted} bundle(s) ` +
+        `deleted from storage` +
+        (result.bundlesShared > 0
+          ? ` · ${result.bundlesShared} kept, shared byte-for-byte with a skill not covered`
+          : "") +
+        (result.sourceDisabled ? " · source disabled" : ""),
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function rejectTakedownAction(id: string, note: string): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+    await rejectTakedown(id, note);
+    revalidatePath("/settings");
+    return { ok: true, message: "Rejected. The claim stays on the record." };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function reinstateTakedownAction(id: string, note: string): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+    const result = await reinstateTakedown(id, note);
+    revalidatePath("/settings");
+    revalidatePath("/skills");
+    return {
+      ok: true,
+      message:
+        `Block lifted on ${result.unblocked} skill(s)` +
+        (result.sourceReEnabled ? " · source re-enabled" : "") +
+        ". Content returns on the next sync — the mirrored copy was deleted.",
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Turns what a curator has — a slug, or a repository URL — into the identity a block needs.
+ *
+ * `syncSource` matches an existing skill on `(source, path)`, so that pair is what a
+ * takedown has to record. A slug is neither: it is ours, it is uniquified on collision, and
+ * it does not survive a rebuild. Resolving it once, here, keeps the stored block correct
+ * without asking a curator to read `provenance->>'path'` out of the database.
+ */
+async function resolveTakedownTarget(
+  scope: "skill" | "source",
+  target: string,
+): Promise<Pick<TakedownInput, "scope" | "sourceUrl" | "skillPath" | "skillId" | "sourceId">> {
+  if (scope === "source") {
+    const { owner, repo } = normalizeRepoInput(target);
+    const url = `https://github.com/${owner}/${repo}`;
+    const [source] = await db
+      .select({ id: sources.id })
+      .from(sources)
+      .where(eq(sources.url, url))
+      .limit(1);
+    if (!source) throw new Error(`No source is registered at ${url}.`);
+    return { scope: "source", sourceUrl: url, skillPath: null, skillId: null, sourceId: source.id };
+  }
+
+  const slug = target.replace(/^\/?skills\//, "");
+  const [skill] = await db
+    .select({
+      id: skills.id,
+      path: sql<string | null>`${skillVersions.provenance}->>'path'`,
+      sourceId: sources.id,
+      sourceUrl: sources.url,
+    })
+    .from(skills)
+    .innerJoin(skillVersions, eq(skillVersions.skillId, skills.id))
+    .innerJoin(sources, eq(sources.id, skillVersions.sourceId))
+    .where(eq(skills.slug, slug))
+    .orderBy(desc(skillVersions.syncedAt))
+    .limit(1);
+
+  if (!skill) throw new Error(`No skill with slug "${slug}".`);
+  if (skill.path === null) {
+    throw new Error(`"${slug}" has no recorded upstream path, so a block cannot be keyed to it.`);
+  }
+
+  return {
+    scope: "skill",
+    sourceUrl: skill.sourceUrl,
+    skillPath: skill.path,
+    skillId: skill.id,
+    sourceId: skill.sourceId,
+  };
 }

@@ -178,11 +178,20 @@ export const skillVersions = pgTable(
   (t) => [
     /**
      * Dedup (Doc 2 R1.4): the same bytes from two sources collapse to one row. Partial,
-     * because a tombstoned version must not block the same content reappearing later.
+     * because a version whose content we no longer hold must not block the same content
+     * reappearing later.
+     *
+     * `withdrawn` is excluded for exactly the reason `tombstoned` is, and leaving it in
+     * would have been a quiet bug introduced by the takedown workflow: a withdrawn row
+     * keeps the hash slot forever while holding no bytes, so an *unrelated* repository
+     * shipping an identical file would fail to index with a unique-violation nobody could
+     * trace back to a takedown on someone else's copy. The block is deliberately keyed to
+     * the `(source, path)` a claimant named (R7.5); it is not a global ban on the bytes,
+     * and the index must not turn it into one.
      */
     uniqueIndex("skill_versions_content_hash_uq")
       .on(t.contentHash)
-      .where(sql`status <> 'tombstoned'`),
+      .where(sql`status <> 'tombstoned' and status <> 'withdrawn'`),
     index("skill_versions_skill_idx").on(t.skillId, t.syncedAt),
     index("skill_versions_source_idx").on(t.sourceId),
     index("skill_versions_status_idx").on(t.status),

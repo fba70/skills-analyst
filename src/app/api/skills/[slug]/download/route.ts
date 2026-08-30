@@ -32,8 +32,15 @@ export async function GET(
   const result = await exportSkill(slug);
 
   if (!result.ok) {
+    // 451 is the status for content withheld for legal reasons, which covers both a licence
+    // that never permitted redistribution and a takedown that ended it. 409 is for the
+    // states a later version can resolve — quarantined, unvalidated, not mirrored.
     const status =
-      result.reason === "not-found" ? 404 : result.reason === "not-licensed" ? 451 : 409;
+      result.reason === "not-found"
+        ? 404
+        : result.reason === "not-licensed" || result.reason === "withdrawn"
+          ? 451
+          : 409;
 
     // JSON rather than a redirect to origin: a client asked us for bytes, and silently
     // bouncing it somewhere else would look like a successful download of something we

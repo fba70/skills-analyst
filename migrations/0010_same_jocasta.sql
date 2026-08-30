@@ -1,0 +1,2 @@
+DROP INDEX "skill_versions_content_hash_uq";--> statement-breakpoint
+CREATE UNIQUE INDEX "skill_versions_content_hash_uq" ON "skill_versions" USING btree ("content_hash") WHERE status <> 'tombstoned' and status <> 'withdrawn';

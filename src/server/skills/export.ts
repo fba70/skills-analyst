@@ -56,8 +56,8 @@ const EXPORTABLE: ReadonlySet<RedistributionPosture> = new Set([
 
 export type ExportRefusal = {
   ok: false;
-  /** `not-found` | `not-licensed` | `not-stored` | `not-indexed` */
-  reason: "not-found" | "not-licensed" | "not-stored" | "not-indexed";
+  /** `not-found` | `not-licensed` | `not-stored` | `not-indexed` | `withdrawn` */
+  reason: "not-found" | "not-licensed" | "not-stored" | "not-indexed" | "withdrawn";
   message: string;
   /** Where the consumer can get it themselves, when we may not serve it. */
   originUrl?: string;
@@ -147,6 +147,25 @@ export async function buildBundle(
     commitSha?: string;
   };
   const originUrl = provenance.sourceUrl ?? skill.sourceUrl ?? undefined;
+
+  /**
+   * A withdrawal is refused before anything else, and with its own reason (R7.5).
+   *
+   * `not-indexed` would already have caught it and would have been the wrong answer twice
+   * over. The status code differs — 451 exists for exactly this and 409 does not — and so
+   * does what a consumer should do next: a quarantined skill may pass on a later version,
+   * a withdrawn one will not, and telling them apart is the difference between "retry
+   * tomorrow" and "stop asking".
+   */
+  if (skill.status === "withdrawn") {
+    return {
+      ok: false,
+      reason: "withdrawn",
+      message:
+        "This skill was withdrawn following a takedown request and is no longer distributed.",
+      originUrl,
+    };
+  }
 
   if (skill.status !== "indexed") {
     // Quarantined and tombstoned skills stay visible — their verdicts are the point — but

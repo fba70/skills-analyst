@@ -645,3 +645,58 @@ export async function getSkillBySlug(slug: string): Promise<SkillDetail | null> 
     } satisfies SkillDetail;
   });
 }
+
+/** A skill referenced from somewhere else in the product — an archetype exemplar (R3.3). */
+export type SkillRef = {
+  id: string;
+  slug: string;
+  name: string;
+  summary: string | null;
+  qualityScore: number | null;
+  licenseSpdx: string | null;
+  redistribution: string;
+  contentStored: boolean;
+  sourceName: string | null;
+  sourceUrl: string | null;
+};
+
+/**
+ * Resolve a stored list of skill ids, in the order given.
+ *
+ * Archetypes pin their exemplars as ids (R3.3) so the mine stays reproducible, and this is
+ * the read that turns them back into something renderable. Resolving **live** rather than
+ * storing names beside the ids is the point: an exemplar that has since been quarantined,
+ * tombstoned, or re-validated into a worse verdict must stop being held up as an example
+ * of good practice, and a snapshot of its name would go on recommending it forever.
+ *
+ * `indexed` is therefore a filter, not a nicety, and a short list coming back is a correct
+ * answer rather than an error.
+ */
+export async function getSkillsByIds(ids: string[]): Promise<SkillRef[]> {
+  if (ids.length === 0) return [];
+
+  return withOrgScope(async (tx) => {
+    const rows = await tx
+      .select({
+        id: skills.id,
+        slug: skills.slug,
+        name: skills.name,
+        summary: skills.summary,
+        qualityScore: skills.qualityScore,
+        licenseSpdx: skillVersions.licenseSpdx,
+        redistribution: skillVersions.redistribution,
+        contentStored: skillVersions.contentStored,
+        sourceName: sources.name,
+        sourceUrl: sources.url,
+      })
+      .from(skills)
+      .innerJoin(skillVersions, eq(skillVersions.id, skills.currentVersionId))
+      .leftJoin(sources, eq(sources.id, skillVersions.sourceId))
+      .where(and(inArray(skills.id, ids), eq(skills.status, "indexed")));
+
+    // The caller's order carries meaning — exemplars arrive best-scoring first — and
+    // `in (...)` returns whatever order the planner likes.
+    const byId = new Map<string, SkillRef>(rows.map((row) => [row.id, row]));
+    return ids.map((id) => byId.get(id)).filter((row) => row !== undefined);
+  });
+}

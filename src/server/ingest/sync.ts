@@ -2,6 +2,7 @@ import "server-only";
 
 import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 
+import { activeBlocks } from "@/server/compliance/takedown";
 import { githubConnector } from "@/server/connectors/github";
 import type { Connector, SourceConfig } from "@/server/connectors/types";
 import { discoveryPolicy } from "@/server/crawl/policy";
@@ -106,6 +107,8 @@ export type SyncReport = {
   unchanged: number;
   /** Skills withdrawn because they are gone upstream (R1.5). */
   tombstoned: number;
+  /** Skills not fetched because an upheld takedown blocks them (R7.5). */
+  blocked: number;
   /** True when the source was too large for this caller and was left for a dedicated run. */
   deferred?: boolean;
   deferredReason?: string;
@@ -208,6 +211,36 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
     includePaths: includePaths.length > 0 ? includePaths : undefined,
   };
 
+  /**
+   * Takedowns, read before anything is fetched (R7.5).
+   *
+   * Ahead of enumeration on purpose. A withdrawn repository should cost us one query, not
+   * two GitHub calls and a tree walk — and more importantly, "we did not fetch it" is a
+   * stronger statement than "we fetched it and then declined to store it". Content we were
+   * asked to stop copying should not be copied into memory either.
+   *
+   * The source is also disabled when a source-scoped takedown is upheld, so `pendingSources`
+   * stops offering it. This check is the backstop for every other way in: a hand-run
+   * `pnpm sync <url>`, an admin re-submission, a caller passing the URL directly.
+   */
+  const blocks = await activeBlocks(options.sourceUrl);
+  if (blocks.sourceBlocked) {
+    log(`${options.sourceUrl} is withdrawn on request — nothing fetched`);
+    return {
+      sourceUrl: options.sourceUrl,
+      commitSha: null,
+      skills: [],
+      signals: {},
+      created: 0,
+      unchanged: 0,
+      tombstoned: 0,
+      blocked: 0,
+      failedSkills: [],
+      deferred: true,
+      deferredReason: "withdrawn on request — an upheld takedown covers this source",
+    };
+  }
+
   const connector = CONNECTORS.github_repo;
   log(`enumerating ${options.sourceUrl}`);
   const enumerated = await connector.enumerate(config, null);
@@ -263,6 +296,7 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
       created: 0,
       unchanged: 0,
       tombstoned: 0,
+      blocked: 0,
       failedSkills: [],
       deferred: true,
       deferredReason: `${enumerated.refs.length} skills — over the ${options.maxSkills} this caller may fetch`,
@@ -290,6 +324,7 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
     created: 0,
     unchanged: 0,
     tombstoned: 0,
+    blocked: 0,
     failedSkills: [],
   };
 
@@ -312,6 +347,23 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
      * what was successfully fetched, so a skill that failed to fetch is still *seen* and is
      * not mistaken for one deleted upstream.
      */
+    /**
+     * A blocked path is skipped before the fetch, never after.
+     *
+     * This is the line that makes a takedown mean something. Everything else — the status,
+     * the deleted objects, the notice on the page — is undone by one enumeration finding
+     * the file again, because that is exactly what the tombstone path is built to do.
+     *
+     * Tombstoning stays correct without a special case: `seenPaths` comes from the full
+     * enumeration, so a blocked skill is still *seen* and is not mistaken for one deleted
+     * upstream, and `withdrawn` is not among the statuses `tombstoneMissing` will touch.
+     */
+    if (blocks.paths.has(ref.path)) {
+      report.blocked += 1;
+      log(`  withdrawn ${ref.path || "."} — takedown upheld`);
+      continue;
+    }
+
     let fetched: Awaited<ReturnType<typeof connector.fetch>>;
     try {
       fetched = await connector.fetch(config, ref);

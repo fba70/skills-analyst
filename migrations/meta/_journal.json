@@ -64,6 +64,20 @@
       "when": 1788093577791,
       "tag": "0008_jittery_sasquatch",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788109303933,
+      "tag": "0009_quick_crusher_hogan",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788109916317,
+      "tag": "0010_same_jocasta",
+      "breakpoints": true
     }
   ]
 }

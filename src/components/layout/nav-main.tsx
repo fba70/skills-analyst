@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Library, Settings2, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, Library, Settings2, Shapes, type LucideIcon } from "lucide-react";
 
 import {
   SidebarGroup,
@@ -22,6 +22,9 @@ type NavItem = {
 const items: NavItem[] = [
   { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { title: "Registry", href: "/skills", icon: Library },
+  // Public like the registry, and sits beside it on purpose: the registry is what the
+  // corpus *contains*, archetypes are what it has been shown to *mean*.
+  { title: "Archetypes", href: "/archetypes", icon: Shapes },
 ];
 
 /** System-admin only. Rendered from a server-resolved flag, never a client role check. */
