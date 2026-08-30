@@ -2,9 +2,11 @@ import Link from "next/link";
 import { ArrowRight, ScanSearch, ShieldCheck, Sparkles } from "lucide-react";
 
 import { Logo, Wordmark } from "@/components/brand";
+import { CorpusStats } from "@/components/landing/corpus-stats";
 import { ThemeToggleButton } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { getSession } from "@/server/dal/session";
+import { platformStats } from "@/server/dal/stats";
 
 const pillars = [
   {
@@ -25,7 +27,17 @@ const pillars = [
 ];
 
 export default async function HomePage() {
-  const session = await getSession();
+  /**
+   * Both in parallel: the session decides which buttons render, the stats are the page's
+   * evidence, and neither waits on the other.
+   *
+   * The stats are queried live rather than cached. They are cheap aggregates at this size,
+   * and the DAL makes the argument for keeping them live — a freshness metric served from a
+   * stale cache is self-defeating. This is the highest-traffic page in the product, so it
+   * is also the first place that will need a cache; the answer then is a short revalidate
+   * on `platformStats`, not a second copy of these numbers.
+   */
+  const [session, stats] = await Promise.all([getSession(), platformStats()]);
 
   return (
     <div className="flex min-h-svh flex-col">
@@ -114,10 +126,20 @@ export default async function HomePage() {
             </div>
           ))}
         </section>
+
+        {/*
+          Evidence last, and that ordering is deliberate.
+
+          The hero makes a claim and the pillars explain the mechanism; a reader who is
+          still on the page by this point is the one asking whether any of it is real. Put
+          the numbers above the pillars and they arrive before the reader knows what a
+          "quarantined skill" is or why licence mix matters.
+        */}
+        <CorpusStats stats={stats} />
       </main>
 
       <footer className="text-muted-foreground px-4 py-6 text-sm sm:px-6">
-        Skill Foundry — local development build.
+        Skill Foundry — built by Boris Fedotov — https://fba70.vercel.app/
       </footer>
     </div>
   );

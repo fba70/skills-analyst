@@ -43,7 +43,7 @@ export default async function DashboardPage() {
 
       {/* ---- The corpus at a glance ---------------------------------------- */}
       <section className="grid gap-3">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <Stat
             label="Skills indexed"
             value={stats.indexed}
@@ -69,6 +69,19 @@ export default async function DashboardPage() {
                   : `${stats.hoursSinceSync}h ago`
             }
             detail={`${stats.sourcesSynced} of ${stats.sources} sources synced`}
+          />
+          {/*
+            The one figure here that is not a fact about the corpus.
+
+            The four above count what came in; this counts what has been learned from it.
+            Measured in **distinct structures** rather than skills because that is the unit
+            the mine uses — a skill count would inflate the evidence by exactly the factor
+            the miner exists to divide out.
+          */}
+          <Stat
+            label="Archetypes"
+            value={`${stats.archetypeCategories} of ${stats.functionCategories}`}
+            detail={`from ${stats.archetypeStructures.toLocaleString()} distinct structures`}
           />
         </div>
 
@@ -96,9 +109,10 @@ export default async function DashboardPage() {
             <CardHeader>
               <CardTitle className="text-base">Licences</CardTitle>
               <CardDescription>
-                What each licence lets you do with the skill. Only the first two can be
-                downloaded — the rest are indexed with a link to origin, because their
-                licence does not permit us to redistribute the content.
+                What each licence lets you do with the skill. The two &ldquo;Mirrored&rdquo;
+                postures can be downloaded &mdash; the rest are indexed with a link to
+                origin, because their licence does not permit us to redistribute the
+                content.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -130,10 +144,18 @@ export default async function DashboardPage() {
           </p>
         ) : null}
 
-        <div>
+        <div className="flex flex-wrap gap-2">
           <Button asChild variant="outline" size="sm">
             <Link href="/skills">
               Browse the registry
+              <ArrowRight className="size-4" />
+            </Link>
+          </Button>
+          {/* The route out of the number above. A count with no way to read one is the
+              state the archetype pages were built to end. */}
+          <Button asChild variant="outline" size="sm">
+            <Link href="/archetypes">
+              Read the archetypes
               <ArrowRight className="size-4" />
             </Link>
           </Button>
