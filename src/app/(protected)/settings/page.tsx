@@ -18,7 +18,7 @@ import { discoveryPolicy } from "@/server/crawl/policy";
 import { crawlCoverage } from "@/server/crawl/run";
 import { sourceDiversity } from "@/server/analytics/templates";
 import { archetypeSummary } from "@/server/analytics/archetype-run";
-import { pipelineBacklog } from "@/server/pipeline/run";
+import { pipelineBacklog, recentRuns } from "@/server/pipeline/run";
 import { staleSlices } from "@/server/validation/rescan";
 import { isAdmin, listPlatformUsers, platformCounts } from "@/server/dal/admin";
 import {
@@ -84,7 +84,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, archetypeList] =
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, archetypeList] =
     await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
@@ -95,6 +95,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "submit" ? sourceDiversity(12) : null,
     tab === "ingestion" ? staleSlices() : null,
     tab === "ingestion" ? pipelineBacklog() : null,
+    tab === "ingestion" ? recentRuns(8) : null,
     tab === "archetypes" ? archetypeSummary() : null,
   ]);
 
@@ -167,6 +168,16 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
                   awaitingSignature: 0,
                 }
               }
+              runs={(runs ?? []).map((run) => ({
+                at: run.at.toISOString(),
+                ok: run.ok,
+                trigger: run.trigger,
+                elapsedMs: run.elapsedMs,
+                stages: run.stages,
+              }))}
+              // Presence of the secret is what actually gates the cron route, so it is the
+              // honest thing to report — a schedule in vercel.ts that 401s is not enabled.
+              cronEnabled={Boolean(process.env.CRON_SECRET)}
             />
             <div className="grid gap-2">
               <h2 className="text-sm font-medium">Individual stages</h2>

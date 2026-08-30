@@ -39,8 +39,14 @@ export const DEFAULT_PAGE_SIZE: PageSize = 10;
 
 export const SORTS = {
   quality: "Quality",
-  name: "Name",
-  stars: "Stars",
+  /**
+   * Named for what it measures. Stars belong to the *repository*, so every skill in a repo
+   * carries the same number — which is why this sort interleaves rather than blocking (see
+   * `orderFor`). Alphabetical sorting was dropped: it ranks nothing, and a registry whose
+   * job is surfacing trustworthy work has no use for a control that surfaces whatever
+   * starts with "a".
+   */
+  stars: "Source repo stars",
   recent: "Recently synced",
 } as const;
 export type SortKey = keyof typeof SORTS;
@@ -194,12 +200,29 @@ function whereFor(filters: SkillFilters): SQL | undefined {
 
 function orderFor(sort: SortKey | undefined) {
   switch (sort) {
-    case "name":
-      return [asc(skills.name)];
     case "stars":
-      // Quality still breaks ties, so popularity cannot promote a weak skill past a
-      // strong one at the same star count.
-      return [desc(latestSignal("stars")), desc(skills.qualityScore)];
+      /**
+       * Interleaved by source, not blocked by it.
+       *
+       * Stars are a repository property, so a plain `order by stars desc` returns each
+       * repo's entire catalogue before moving on — 15 from `obra/superpowers`, then 37
+       * from `mattpocock/skills`, then 59 from `garrytan/gstack`. Four pages, three
+       * repositories, every card showing the same number. Correct, and useless to browse.
+       *
+       * Ranking within each source first and ordering by that rank means the first page is
+       * each repository's *best* skill, ordered by how well-regarded the repository is; the
+       * second page is everyone's second-best, and so on. Popularity still orders the
+       * result, but it can no longer monopolise it — which is also the spirit of R2.9,
+       * where popularity must never outrank quality.
+       */
+      return [
+        sql`row_number() over (
+          partition by ${skillVersions.sourceId}
+          order by ${skills.qualityScore} desc nulls last, ${skills.name} asc
+        )`,
+        desc(latestSignal("stars")),
+        desc(skills.qualityScore),
+      ];
     case "recent":
       return [desc(skillVersions.syncedAt), desc(skills.qualityScore)];
     default:

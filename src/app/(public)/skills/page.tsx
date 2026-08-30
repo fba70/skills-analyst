@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Star } from "lucide-react";
 
 import { LicenseBadge } from "@/components/registry/license-badge";
 import { labelFor } from "@/server/taxonomy/vocabulary";
@@ -119,9 +120,38 @@ export default async function RegistryPage(props: PageProps<"/skills">) {
                           </Badge>
                         ) : null}
                         {skill.stars !== null ? (
-                          <span className="text-muted-foreground text-xs">
-                            ★ {skill.stars.toLocaleString()}
-                          </span>
+                          /*
+                            Upstream stars, as a badge like every other fact on the card.
+                            `fill-current` is what makes the icon read as a star rather
+                            than an outline — a stroke-only star at 12px is mush.
+
+                            Amber, not the primary colour: this is the one number on the
+                            card that is *not* ours. Doc 2 R2.9 is explicit that popularity
+                            must never outrank a failed or unscored skill, so it should look
+                            like what it is — an upstream signal sitting alongside our
+                            verdict, not competing with it.
+
+                            It is the *repository's* star count, not the skill's, and every
+                            skill in a repo carries the same number. That reads as a bug
+                            when ten cards in a row show 279,495, so the tooltip names the
+                            repository rather than leaving the number to be misread as a
+                            property of the skill.
+                          */
+                          <Badge
+                            variant="outline"
+                            className="gap-1 text-xs font-normal"
+                            title={
+                              skill.sourceName
+                                ? `${skill.sourceName} has ${skill.stars.toLocaleString()} stars on GitHub — a property of the repository, shared by every skill in it`
+                                : `${skill.stars.toLocaleString()} stars on GitHub`
+                            }
+                          >
+                            <Star
+                              aria-hidden
+                              className="size-3 fill-current text-amber-500 dark:text-amber-400"
+                            />
+                            {skill.stars.toLocaleString()}
+                          </Badge>
                         ) : null}
                       </div>
                       {skill.summary ? (

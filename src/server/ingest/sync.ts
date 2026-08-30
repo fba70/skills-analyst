@@ -96,6 +96,13 @@ export type SyncReport = {
   unchanged: number;
   /** Skills withdrawn because they are gone upstream (R1.5). */
   tombstoned: number;
+  /**
+   * Skills that could not be fetched, with why.
+   *
+   * Reported rather than thrown: a repository is not unusable because one directory in it
+   * confuses detection, and a count with no reasons is a number nobody can act on.
+   */
+  failedSkills: Array<{ path: string; reason: string }>;
 };
 
 /**
@@ -213,6 +220,7 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
     created: 0,
     unchanged: 0,
     tombstoned: 0,
+    failedSkills: [],
   };
 
   const sourceId = options.dryRun
@@ -220,7 +228,32 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
     : await upsertSource(options.sourceUrl, orgId, enumerated.repoLicenseSpdx);
 
   for (const ref of refs) {
-    const fetched = await connector.fetch(config, ref);
+    /**
+     * One skill failing must not cost the rest of the repository.
+     *
+     * Without this the loop was all-or-nothing, and it showed:
+     * `davila7/claude-code-templates` holds 898 skills, one of which
+     * (`cli-tool/components/skills/ai-research/loki-mode`) trips the 300-file bundle
+     * backstop because detection reads a project directory as a skill. That single throw
+     * aborted the entire source and lost the other 897 — twice, silently, reported only as
+     * "2 failed" in a pipeline summary.
+     *
+     * Tombstoning stays correct: `seenPaths` is built from the full enumeration, not from
+     * what was successfully fetched, so a skill that failed to fetch is still *seen* and is
+     * not mistaken for one deleted upstream.
+     */
+    let fetched: Awaited<ReturnType<typeof connector.fetch>>;
+    try {
+      fetched = await connector.fetch(config, ref);
+    } catch (error) {
+      report.failedSkills.push({
+        path: ref.path || "(root)",
+        reason: (error as Error).message.slice(0, 200),
+      });
+      log(`  skipped   ${ref.path || "."} — ${(error as Error).message.slice(0, 120)}`);
+      continue;
+    }
+
     const dirName = ref.path.split("/").pop() || "root";
 
     const marker = fetched.files[0];

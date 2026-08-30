@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Loader2, PlayCircle, RefreshCw } from "lucide-react";
+import { Clock, Loader2, PlayCircle, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -37,6 +37,14 @@ export type FreshnessRow = {
   behind: Array<{ version: string; count: number }>;
 };
 
+export type RunRow = {
+  at: string;
+  ok: boolean;
+  trigger: string;
+  elapsedMs: number | null;
+  stages: Array<{ stage: string; ok: boolean; detail: string }>;
+};
+
 export type BacklogRow = {
   sourcesAwaitingSync: number;
   awaitingValidation: number;
@@ -47,15 +55,19 @@ export type BacklogRow = {
 export function PipelinePanel({
   freshness,
   backlog,
+  runs,
+  cronEnabled,
 }: {
   freshness: FreshnessRow[];
   backlog: BacklogRow;
+  runs: RunRow[];
+  cronEnabled: boolean;
 }) {
   const stale = freshness.reduce((sum, row) => sum + row.total, 0);
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      <PipelineCard backlog={backlog} />
+      <PipelineCard backlog={backlog} runs={runs} cronEnabled={cronEnabled} />
 
       <Card>
         <CardHeader>
@@ -167,7 +179,15 @@ function RescanControl({ disabled }: { disabled: boolean }) {
  * what the number does — a paragraph explaining it as well was three sentences of prose
  * the operator has to read every time to learn nothing the table above did not show.
  */
-function PipelineCard({ backlog }: { backlog: BacklogRow }) {
+function PipelineCard({
+  backlog,
+  runs,
+  cronEnabled,
+}: {
+  backlog: BacklogRow;
+  runs: RunRow[];
+  cronEnabled: boolean;
+}) {
   const [amount, setAmount] = useState(5);
   const [result, setResult] = useState<ActionResult | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -274,11 +294,70 @@ function PipelineCard({ backlog }: { backlog: BacklogRow }) {
 
           {outstanding > 0 ? (
             <p className="text-muted-foreground mt-2 text-xs">
-              {outstanding.toLocaleString()} items outstanding — run this repeatedly, or{" "}
-              <code className="text-[11px]">pnpm pipeline --loop 40</code> to clear the
-              backlog unattended.
+              {outstanding.toLocaleString()} items outstanding
+              {cronEnabled ? " — the schedule is working through them." : "."}
             </p>
           ) : null}
+        </div>
+
+        {/*
+          Schedule status and recent passes.
+
+          A schedule you cannot observe is one you cannot trust: "it is running" and "it has
+          been failing since Tuesday" look identical from outside. Each pass writes an
+          `events` row, and this is that row rendered.
+        */}
+        <div className="border-t pt-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Clock className="text-muted-foreground size-4" />
+            <span className="text-sm font-medium">Schedule</span>
+            <Badge variant={cronEnabled ? "default" : "outline"}>
+              {cronEnabled ? "every 10 minutes" : "not configured"}
+            </Badge>
+            {!cronEnabled ? (
+              <span className="text-muted-foreground text-xs">
+                set <code className="text-[11px]">CRON_SECRET</code> to enable
+              </span>
+            ) : null}
+          </div>
+
+          {runs.length > 0 ? (
+            <ul className="mt-2 grid gap-1">
+              {runs.slice(0, 5).map((run) => (
+                <li
+                  key={run.at}
+                  className="flex flex-wrap items-baseline gap-x-2 text-xs"
+                  title={run.stages.map((s) => `${s.stage}: ${s.detail}`).join("\n")}
+                >
+                  <span
+                    className={
+                      run.ok ? "text-muted-foreground" : "text-destructive font-medium"
+                    }
+                  >
+                    {run.ok ? "✓" : "✗"}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {new Date(run.at).toLocaleString()}
+                  </span>
+                  <Badge variant="outline" className="text-[10px]">
+                    {run.trigger}
+                  </Badge>
+                  {run.elapsedMs !== null ? (
+                    <span className="text-muted-foreground tabular-nums">
+                      {Math.round(run.elapsedMs / 1000)}s
+                    </span>
+                  ) : null}
+                  <span className="text-muted-foreground ml-auto truncate">
+                    {run.stages.find((s) => s.stage === "sync")?.detail ?? ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-muted-foreground mt-2 text-xs">
+              No passes recorded yet.
+            </p>
+          )}
         </div>
 
         {isPending ? (

@@ -26,11 +26,11 @@ function render(a: NonNullable<Awaited<ReturnType<typeof mineArchetype>>>) {
     `\n${labelFor("function", a.category)}  —  ${a.skillCount} skills → ${a.distinctStructures} structures from ${a.sourceCount} sources`,
   );
   console.info(
-    `gate ${a.meetsGate ? "PASS" : `FAIL (${a.gateReason})`} · bands: strong ≥ ${a.strongThreshold}, weak ≤ ${a.weakThreshold}`,
+    `gate ${a.meetsGate ? "PASS" : `FAIL (${a.gateReason})`} · curated vs other sources · avg quality ${a.strongThreshold} vs ${a.weakThreshold}`,
   );
 
   if (a.skeleton.sections.length > 0) {
-    console.info("\n  SECTIONS                      strong / weak    lift");
+    console.info("\n  SECTIONS                     curated / other   lift");
     for (const s of a.skeleton.sections) {
       console.info(
         `  ${s.required ? "▪" : "·"} ${s.role.padEnd(26)} ${String(s.strongPrevalence).padStart(3)}% / ${String(s.weakPrevalence).padStart(3)}%   +${s.lift}`,
