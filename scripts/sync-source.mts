@@ -115,7 +115,8 @@ console.info("");
 console.info(
   `${report.skills.length} skill(s): ${mirrored} mirrored, ${report.skills.length - mirrored} metadata-only` +
     (dryRun ? "" : ` · ${report.created} created, ${report.unchanged} unchanged`) +
-    (report.tombstoned > 0 ? ` · ${report.tombstoned} tombstoned` : ""),
+    (report.tombstoned > 0 ? ` · ${report.tombstoned} tombstoned` : "") +
+    (report.blocked > 0 ? ` · ${report.blocked} withdrawn on request` : ""),
 );
 
 // Named, not counted. A skipped skill is usually a detection problem with one directory,

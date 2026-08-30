@@ -19,6 +19,7 @@
     "validate:verify": "tsx --conditions=react-server scripts/verify-analyzers.mts",
     "verify:lists": "tsx --conditions=react-server scripts/verify-list-parser.mts",
     "verify:revocation": "tsx --conditions=react-server scripts/verify-revocation.mts",
+    "verify:takedown": "tsx --conditions=react-server scripts/verify-takedown.mts",
     "verify:export": "tsx --conditions=react-server scripts/verify-export.mts",
     "mail:check": "tsx --conditions=react-server scripts/mail-check.mts",
     "crawl": "tsx --conditions=react-server scripts/crawl.mts",

@@ -15,6 +15,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { WithdrawalNotice } from "@/components/registry/withdrawal-notice";
+import { minedCategories } from "@/server/analytics/archetype-read";
+import { withdrawalNotice } from "@/server/compliance/takedown";
 import { getSkillBySlug } from "@/server/dal/skills";
 import { labelFor } from "@/server/taxonomy/vocabulary";
 
@@ -32,6 +35,26 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
   const { slug } = await props.params;
   const skill = await getSkillBySlug(slug);
   if (!skill) notFound();
+
+  /**
+   * The way back out to what the corpus knows about this kind of skill.
+   *
+   * Checked rather than assumed: one function category has no archetype, and a link to a
+   * page that 404s is worse than no link. `minedCategories` is one cheap distinct query.
+   */
+  /**
+   * A withdrawn skill keeps its page and loses its content (R7.5).
+   *
+   * Only queried when the status says so — this is a compliance lookup on a hot public
+   * page, and every other skill would be paying for a row that does not exist.
+   */
+  const withdrawal =
+    skill.status === "withdrawn" ? await withdrawalNotice(skill.id) : null;
+
+  const mined = await minedCategories();
+  const archetypeCategory = skill.categories.find(
+    (category) => category.axis === "function" && mined.has(category.value),
+  );
 
   const findings = skill.verdicts.flatMap((verdict) =>
     verdict.findings.map((finding) => ({ ...finding, analyzer: verdict.analyzer })),
@@ -81,10 +104,39 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
             ))}
           </div>
         ) : null}
+
+        {archetypeCategory ? (
+          <p className="text-muted-foreground text-sm">
+            <Link
+              href={`/archetypes/${archetypeCategory.value}`}
+              className="hover:text-foreground underline underline-offset-4"
+            >
+              See what the corpus says a{" "}
+              {labelFor("function", archetypeCategory.value).toLowerCase()} skill looks like
+            </Link>
+          </p>
+        ) : null}
       </header>
 
       <ConsistencyCard verdicts={skill.verdicts} />
 
+      {skill.status === "withdrawn" ? (
+        /*
+         * The notice replaces the download card rather than sitting beside it. A disabled
+         * download button next to "withdrawn on request" invites the reader to look for the
+         * way around it; there isn't one, and the interface should not imply there is.
+         *
+         * The verdicts below stay. They are our own derived record of what we found, not
+         * the author's text, and they are what makes the permalink worth resolving.
+         */
+        <WithdrawalNotice
+          grounds={withdrawal?.grounds ?? "other"}
+          decidedAt={withdrawal?.decidedAt ?? null}
+          originUrl={
+            (skill.provenance as { sourceUrl?: string })?.sourceUrl ?? skill.sourceUrl ?? null
+          }
+        />
+      ) : (
       <DownloadCard
         slug={skill.slug}
         status={skill.status}
@@ -96,6 +148,7 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
         }
         fileCount={skill.fileCount}
       />
+      )}
 
       <Card>
         <CardHeader>

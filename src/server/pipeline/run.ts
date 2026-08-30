@@ -141,6 +141,7 @@ export async function runPipeline(options: PipelineOptions = {}): Promise<Pipeli
 
       let created = 0;
       let tombstoned = 0;
+      let blocked = 0;
       let failed = 0;
       let skippedSkills = 0;
       let deferredSources = 0;
@@ -170,6 +171,7 @@ export async function runPipeline(options: PipelineOptions = {}): Promise<Pipeli
           if (result.deferred) deferredSources += 1;
           created += result.created;
           tombstoned += result.tombstoned;
+          blocked += result.blocked;
           skippedSkills += result.failedSkills.length;
         } catch {
           // Per-source, so one unreachable repository does not end the slice.
@@ -179,6 +181,9 @@ export async function runPipeline(options: PipelineOptions = {}): Promise<Pipeli
 
       return (
         `${attempted} source(s): ${created} version(s) created, ${tombstoned} tombstoned, ${failed} failed` +
+        // Reported rather than silent: a skill not fetched because of a takedown looks
+        // exactly like a skill that was never there, and those need different responses.
+        (blocked > 0 ? `, ${blocked} withdrawn on request` : "") +
         // Distinct from a failed *source*: the repository synced, some skills in it did not.
         (skippedSkills > 0 ? `, ${skippedSkills} skill(s) skipped` : "") +
         // Distinct from the time budget: this source was too large to start at all.

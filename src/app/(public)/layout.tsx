@@ -76,9 +76,12 @@ function AnonymousShell({ children }: { children: React.ReactNode }) {
           <span className="truncate font-semibold tracking-tight">Skill Foundry</span>
         </Link>
 
-        <nav className="ml-4 hidden sm:flex">
+        <nav className="ml-4 hidden items-center gap-1 sm:flex">
           <Button asChild variant="ghost" size="sm">
             <Link href="/skills">Registry</Link>
+          </Button>
+          <Button asChild variant="ghost" size="sm">
+            <Link href="/archetypes">Archetypes</Link>
           </Button>
         </nav>
 

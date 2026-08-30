@@ -66,8 +66,13 @@ import { SEED_REPOS } from "@/server/crawl/seeds";
  * it cannot be gamed by having less content.
  */
 
-/** 2.0.0 — bands moved from quality quartiles to source trust. See the note above. */
-export const MINER_VERSION = "2.0.0";
+/**
+ * 2.0.0 — bands moved from quality quartiles to source trust. See the note above.
+ * 2.1.0 — the mine records **who it was derived from** (R3.4). Attribution is evidence,
+ *   so it is pinned into the row beside the skeleton rather than recomputed at render
+ *   time against a corpus that has moved on since the numbers were taken.
+ */
+export const MINER_VERSION = "2.1.0";
 
 /** R3.2's gate, in the terms that actually resist a monoculture. */
 export const MIN_STRUCTURES = 50;
@@ -108,6 +113,7 @@ type Representative = {
   name: string;
   qualityScore: number;
   source: string;
+  sourceUrl: string | null;
   signature: string;
   roles: SectionRole[];
   /** Ordered role sequence as it appears in the document. */
@@ -144,6 +150,7 @@ async function representatives(category: string): Promise<Representative[]> {
         sk.name,
         sk.quality_score,
         src.name as source,
+        src.url as source_url,
         sv.redistribution,
         st.section_roles,
         st.headings,
@@ -185,6 +192,7 @@ async function representatives(category: string): Promise<Representative[]> {
       name: row.name as string,
       qualityScore: row.quality_score as number,
       source: row.source as string,
+      sourceUrl: (row.source_url as string | null) ?? null,
       signature: row.signature as string,
       roles: ((row.section_roles ?? []) as SectionRole[]) ?? [],
       roleOrder: headings
@@ -228,6 +236,22 @@ export type SkeletonTrait = {
   lift: number;
 };
 
+/**
+ * A source that contributed evidence to the mine (R3.4).
+ *
+ * Counted in **distinct structures**, exactly like the evidence gate. A generator that
+ * supplied three hundred near-identical skills contributed one shape to this skeleton and
+ * is credited with one — both the honest number and the one the mine actually used.
+ */
+export type Contributor = {
+  /** `owner/repo`, as `sources.name` records it. */
+  source: string;
+  url: string | null;
+  structures: number;
+  /** In the curated band the skeleton is contrasted against, rather than merely present. */
+  curated: boolean;
+};
+
 export type Archetype = {
   category: string;
   skillCount: number;
@@ -248,6 +272,14 @@ export type Archetype = {
   };
   antiPatterns: SkeletonTrait[];
   exemplars: Array<{ skillId: string; slug: string; name: string; qualityScore: number }>;
+  /**
+   * Every source behind the numbers above, best-represented first (R3.4).
+   *
+   * Not truncated. The point of crediting is that the whole list is available — a page can
+   * show the first dozen and put the rest behind a disclosure, but the archetype should not
+   * be the thing that decides who stops being credited.
+   */
+  contributors: Contributor[];
 };
 
 const median = (values: number[]): number => {
@@ -257,6 +289,32 @@ const median = (values: number[]): number => {
 };
 
 const pct = (count: number, total: number) => (total === 0 ? 0 : Math.round((count / total) * 100));
+
+/**
+ * Who the evidence came from, in the unit the evidence is measured in.
+ *
+ * Runs over the representatives rather than the raw skills, so it credits a source for the
+ * shapes it contributed. Reading it any other way would put the generator that supplied 89%
+ * of the corpus at the top of every credit list while having taught the skeleton nothing.
+ */
+function contributorsOf(reps: Representative[]): Contributor[] {
+  const bySource = new Map<string, Contributor>();
+  for (const rep of reps) {
+    const entry = bySource.get(rep.source);
+    if (entry) entry.structures += 1;
+    else {
+      bySource.set(rep.source, {
+        source: rep.source,
+        url: rep.sourceUrl,
+        structures: 1,
+        curated: rep.curated,
+      });
+    }
+  }
+  return [...bySource.values()].sort(
+    (a, b) => b.structures - a.structures || a.source.localeCompare(b.source),
+  );
+}
 
 /** Boolean traits worth contrasting. Each is a decision an author actually makes. */
 const TRAITS: Array<{ key: string; label: string; of: (r: Representative) => boolean }> = [
@@ -440,5 +498,6 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
     },
     antiPatterns,
     exemplars,
+    contributors: contributorsOf(reps),
   };
 }

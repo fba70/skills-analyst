@@ -137,6 +137,189 @@ Better Auth's table shapes are not guesswork: re-derive them with `getAuthTables
 `better-auth/db` whenever a plugin is added or the version moves, then generate a
 migration. Do not hand-tune those columns.
 
+## Where things stand — 2026-08-30
+
+Snapshot for picking this up cold. Numbers move; the shape does not.
+
+| | |
+|---|---|
+| Corpus | 5,110 indexed · 60 quarantined |
+| Sources | 92 synced of 610 enabled — **ingestion is ~15% done** |
+| Taxonomy | 4,121 skills labelled, 11,289 assignments, 3 unlabelled |
+| Archetypes | 12 of 13 function categories, at v5 · miner 2.1.0 · **public at `/archetypes`** |
+| Spent on LLM work | ~$12 (taxonomy 4,124 calls, R2.3 six calls) |
+
+**Ingestion runs from a local terminal** (`pnpm pipeline --loop 60`), not from the schedule.
+A 2,000-skill repository needs longer than any function ceiling, and locally there is none.
+The cron is sized for *freshness* (twice daily, six sources, `MAX_SKILLS_PER_SOURCE` 120) and
+will pick up the stale-source queue once catch-up is done.
+
+**Cost to finish**: ~$24–49 to classify the ~8,000–16,800 skills the remaining 518 sources
+will produce, plus ~$4 for R2.3 across the corpus. Prompt caching does **not** help — Haiku
+4.5 needs a 4,096-token prefix and ours is ~1,940; enlarging it means bumping
+`TAXONOMY_VERSION` and re-classifying everything already labelled, which costs more than it
+saves. Measured, not assumed — see `taxonomy/classify.ts`.
+
+### What to build next, in order
+
+**1. ~~Archetype pages~~ · ~~Takedown workflow~~ — both done. Sections below.**
+
+**2. Search (R7.4)** — the only thing left on this list, and still `ilike '%q%'`: no index,
+no relevance ranking. Two problems, not one. A leading `%` means no btree can serve it and
+there is no textual index on `skills` anyway, so every search is a sequential scan; and
+results fall through to the default quality sort, so a skill *named* the query ranks below
+an unrelated higher-scoring one that merely mentions it. Fine at 5,110 rows; the budget is
+p95 < 500 ms at 500K.
+
+Fixing it means a `tsvector` column with a GIN index (probably plus `pg_trgm` for partial
+and misspelt terms) and a ranking *function* rather than a sort — R2.9 constrains it to
+`f(quality, security tier, relevance)`, so `ts_rank` is an input and never the whole answer.
+`CREATE INDEX CONCURRENTLY` needs `DATABASE_URL_UNPOOLED`.
+
+Still better done once the corpus stops moving: the index would be rebuilt mid-flight, and
+weights tuned against a corpus that is a sixth ingested are weights tuned against the wrong
+corpus.
+
+### Archetypes are public now (R3.2–R3.4)
+
+`/archetypes` and `/archetypes/[category]`, in the `(public)` group alongside the registry
+and absent from the `proxy.ts` matcher for the same reason. Doc 1 licenses archetype
+snapshots CC BY-SA and sells the *live API* and org-scoped blends, so the pages belong on
+the free tier — they are the argument for the platform, and until now the argument was a
+database table.
+
+Server components throughout: no state, nothing to filter, nothing to toggle.
+
+- **Read path** is `src/server/analytics/archetype-read.ts`, separate from `archetype-run.ts`
+  because mining and rendering have opposite risk profiles. Every read pins `org_id is null`
+  *and* runs in `withPublicScope`. Either alone would do today; both are there because
+  OQ-C2 answers "may org-private archetypes feed public ones?" with *never*, and that
+  default should be visible in the code that would break it.
+- **Exemplars (R3.3) resolve live.** The row pins ids so the mine stays reproducible;
+  `getSkillsByIds` in the DAL turns them back into skills and drops anything no longer
+  `indexed`. An exemplar quarantined since the mine must stop being held up as good
+  practice, and a stored name would go on recommending it forever. The count of dropped
+  ones is shown, not swallowed.
+- **The one chart** draws both bands on the same track, always. A single prevalence bar
+  would say "55% of review skills have a when-to-use section" — a fact about markdown. The
+  gap between the two bars *is* the lift, which is the finding.
+- **Categories below the gate are listed, not hidden.** `automate-browser` sits at 43
+  structures against a floor of 50 and gets a tile saying so. Twelve tiles and a clean grid
+  would look finished and would tell an author nothing about where the corpus is thin.
+
+**Miner 2.1.0 records who an archetype was derived from** (R3.4) — the sources behind the
+numbers, credited in **distinct structures**, the unit the mine measures in. Crediting by
+skill count would put the 89%-of-corpus generator at the top of every list having taught the
+skeleton one thing.
+
+> **A miner bump has to beat the skeleton-match skip, or new evidence never lands.**
+> `mineAndStore` skips writing when the skeleton is unchanged, which is right as the corpus
+> drifts and wrong across a version bump: every stored row already had the skeleton it was
+> going to keep, so 2.1.0's attribution would have reached exactly zero archetypes,
+> silently. `--force` would not have helped — it only bypasses the evidence gate. The skip
+> now also requires `minerVersion` to match. `minerVersion` is stored so "reproducible"
+> means something; it has to be able to change the answer, or storing it is decoration.
+
+**What the pages immediately showed.** `edit-refactor` clears the gate at 70 structures /
+27 sources and produces a **one-section skeleton** — only `purpose`, at +25. That is the
+thin archetype CLAUDE.md flagged, and it is reported as thin rather than padded: the other
+twelve roles were measured and none separated the bands. Worth re-reading after full
+ingestion, when v5-vs-v6 answers how much the sampled weak band was distorting it.
+
+### Takedowns (R7.5) — the whole difficulty is that a sync must not undo it
+
+`src/server/compliance/takedown.ts`, Settings → **Takedowns**, `pnpm verify:takedown`
+(14 checks). P0 compliance: we mirror other people's work, and Doc 1 states the obligation to
+upstream authors — who never signed up — as structural.
+
+Withdrawing content is the easy half and the tombstone path (R1.5) already does it. Reusing
+it would have looked finished and been wrong. **A tombstone is designed to reverse itself** —
+the file went away upstream, and if it comes back the next enumeration re-indexes it. Run
+that logic on a takedown and the content returns within 24 hours, on a schedule, with nobody
+watching.
+
+So a takedown is a **persistent record consulted before fetching**, and the state on the
+skill is a consequence of it:
+
+- `takedowns` (migration 0009) keys the block on **`(source_url, skill_path)`**, duplicated
+  out of the join columns on purpose. That pair is the identity `syncSource` matches an
+  existing skill on, and the block has to work when the rows it was recorded against are
+  gone. Keyed on `skills.id` it would be lifted the first time a skill row was rebuilt.
+- **Not the content hash**, tempting as it is with content-addressed storage: an author who
+  edits the file after asking us to remove it produces a new hash and walks past the block.
+  Path identity survives an edit; a hash is designed not to.
+- `activeBlocks(sourceUrl)` runs in `syncSource` **before enumeration**, and again per skill
+  before `connector.fetch`. Content we were asked to stop copying is not copied into memory
+  either.
+- Only `upheld` enforces. A `received` notice is logged and unenforced — enforcing on arrival
+  means anyone who can send an email can un-list a competitor, which is the failure every
+  takedown regime is criticised for. Recording and deciding are separate actions in the UI
+  for the same reason.
+
+**`withdrawn` is a new status on both skill enums, not a reuse of `tombstoned`.** Same end
+state, different re-ingestion rule, and different notice to a reader: "the author deleted
+this" and "this was removed following a request" are not the same sentence.
+
+> **The new status silently changed dedup, and that needed migration 0010.**
+> `skill_versions_content_hash_uq` is a *partial* unique index — `where status <>
+> 'tombstoned'` — so a withdrawn row would have held its hash slot forever while holding no
+> bytes, and an **unrelated** repository shipping an identical file would fail to index with
+> a unique-violation nobody could trace to a takedown on someone else's copy. The block is
+> deliberately keyed to the `(source, path)` a claimant named; the index must not turn it
+> into a global ban on the bytes.
+
+**What is deliberately kept:** rejected claims (a refused claim is still a claim that was
+made, and that record is the half of this that protects the platform), and the page itself.
+A withdrawn skill keeps its permalink and shows grounds and a date — R8.4 wants citations to
+keep resolving, and a URL that silently 404s tells a reader nothing about whether the skill
+was dangerous, deleted, or withdrawn. **Never the requester or the claim text**: naming the
+requester turns a compliance record into a pillory, and quoting the claim republishes an
+allegation we have not adjudicated.
+
+Download returns **451**, not 409, with its own `withdrawn` reason — a quarantined skill may
+pass on a later version, a withdrawn one will not, and that is the difference between "retry
+tomorrow" and "stop asking". Archetype exemplars need no special case: `getSkillsByIds`
+filters to `indexed`, so a withdrawn exemplar drops out on its own.
+
+Reinstating lifts the block and rests versions at `tombstoned` — **it does not restore
+content**, because the bytes were deleted. The next sync re-fetches and re-validates. A
+function claiming otherwise would be lying about R2, and flipping to `indexed` would leave a
+skill that lists as servable and 409s on download.
+
+> The bundle-deletion guard checks whether another *stored* version shares the hash before
+> deleting. Honest status: **it cannot currently fire**, because the two statuses that escape
+> the partial unique index also clear `contentStored`. That is three conditions holding in
+> three files, guarding an irreversible delete, so the query stays — and `verify:takedown`
+> does *not* fake the state to make it green.
+
+**Still admin-entered.** A notice arrives by email and a curator records it. A public
+submission form is the obvious next step and is not built; R1.8's public-submission plumbing
+is the natural place to hang it.
+
+### Deliberately deferred
+
+- **R4.x builder** — the natural next phase, but it scaffolds *from* archetypes, and those
+  will shift as the corpus triples. Building against numbers about to move is rework.
+- **RC.2 spend caps** — real once the assistant (R5.x) makes LLM cost recurring and per-user.
+  Today `MAX_BATCH` and the per-action caps are the whole control.
+- **Embeddings / pgvector** — needed for R5.2 retrieval and R3.1's low-confidence queue,
+  not before.
+- **Finishing the code-search crawl** — 38 shards are saturated and unsplittable on the size
+  axis; a second axis (path, date, language) is needed. 382k markers is mostly noise and the
+  curated channels produce a better corpus, so this stays parked.
+
+### Re-run these as the corpus grows — all free, all incremental
+
+```
+pnpm taxonomy --sample 100     # only unlabelled skills; ~$0.29 per 100
+pnpm archetypes --mine-all     # free; append-only, lands as v6 with a changelog
+pnpm rescan --status           # verdict freshness after any analyzer bump
+pnpm structures --templates    # structural diversity; the monoculture check
+```
+
+Comparing archetype **v5 against v6** after full ingestion answers the open question of how
+much the 13%-sampled weak band distorted the current numbers.
+
 ## Open TODOs carried from the specs
 
 ### ~~Tenant isolation, layer 2~~ — done (migration 0002)
@@ -775,30 +958,16 @@ any other state change:
 Keep new policy constants in `policy.ts` rather than scattering them, so this becomes a
 migration of one module instead of an archaeology exercise.
 
-### Platform stats on /dashboard — a gap in the specs
+### ~~Platform stats on /dashboard~~ — done
 
-Not in Doc 2 or Doc 3, and worth adding after the core features land. The specs cover two
-audiences and miss a third:
+`/dashboard` shows the corpus at a glance: skills indexed, validation pass rate, how many
+are downloadable, quality banded rather than averaged, licence mix, and freshness. Licence
+mix gets equal billing with the count because a result you cannot download is a different
+thing from one you can.
 
-- **operators** — source health (R1.7), loop observability (R6.4), and the four dashboards
-  in Doc 3 §Observability;
-- **researchers** — corpus statistics as an API/dataset export (R3.7, P2);
-- **users** — nothing. `/dashboard` is currently empty.
-
-What a user needs from a trust-first registry is the corpus at a glance, and it differs
-from what an operator needs: not queue depth and rate-limit headroom, but *how much is
-here, how good is it, and how much can I actually use*. Roughly:
-
-- skills indexed, and how many sources they came from;
-- how many passed validation, how many are quarantined, quality-score distribution;
-- licence mix — mirrored vs metadata-only, since that changes what a user may do with a
-  result;
-- duplicate clusters, once R1.4 near-duplicate detection exists;
-- freshness: last sync, and corpus staleness against the 24 h target (R7.4).
-
-Every number is already derivable from `skills`, `skill_versions`, `verdicts` and
-`events` — a query and a component, not new plumbing. Keep the aggregates cheap enough to
-compute on request before reaching for a materialised view.
+The "your skills" half is queried against the real table and is empty for everyone, because
+nothing writes an org-scoped skill until the builder (R4.x) exists. It fills in on its own
+when it does.
 
 ### ~~Giant repositories need the tarball path~~ — solved with scoped subtrees
 
@@ -859,7 +1028,8 @@ pnpm validate --consistency --limit 10   # R2.3 audit — COSTS MONEY, capped at
 pnpm structures --extract 500        # structural fingerprints — free, no model
 pnpm taxonomy --sample 20            # categories — COSTS MONEY, capped at 100/run
 pnpm taxonomy --status | --review | --resync
-pnpm verify:lists | verify:revocation | verify:export | validate:verify | db:verify-rls
+pnpm verify:lists | verify:revocation | verify:export | verify:takedown
+pnpm validate:verify | db:verify-rls
 ```
 
 **Two commands spend money: `pnpm taxonomy --sample` and `pnpm validate --consistency`.**

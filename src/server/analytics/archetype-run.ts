@@ -42,7 +42,11 @@ function skeletonsMatch(a: unknown, b: Archetype["skeleton"]): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function describeChange(previous: Archetype["skeleton"] | null, next: Archetype["skeleton"]): string {
+function describeChange(
+  previous: Archetype["skeleton"] | null,
+  next: Archetype["skeleton"],
+  minerChanged: boolean,
+): string {
   if (!previous) return "first mine";
 
   const before = new Set(previous.sections.map((s) => s.role));
@@ -53,6 +57,7 @@ function describeChange(previous: Archetype["skeleton"] | null, next: Archetype[
   const parts: string[] = [];
   if (added.length > 0) parts.push(`sections added: ${added.join(", ")}`);
   if (removed.length > 0) parts.push(`sections dropped: ${removed.join(", ")}`);
+  if (minerChanged) parts.push(`miner ${MINER_VERSION}`);
   if (parts.length === 0) parts.push("prevalence shifted without changing the section set");
   return parts.join("; ");
 }
@@ -82,13 +87,29 @@ export async function mineAndStore(
     .select({
       version: archetypes.version,
       skeleton: archetypes.skeleton,
+      minerVersion: archetypes.minerVersion,
     })
     .from(archetypes)
     .where(and(eq(archetypes.axis, "function"), eq(archetypes.category, category)))
     .orderBy(desc(archetypes.version))
     .limit(1);
 
-  if (previous && skeletonsMatch(previous.skeleton, archetype.skeleton)) {
+  /**
+   * A different miner is a different claim, even from an identical skeleton.
+   *
+   * The skeleton-match skip exists to stop near-identical versions piling up as the corpus
+   * drifts, and for that it is exactly right. It is wrong across a miner bump: 2.1.0 added
+   * the attribution R3.4 asks for, and every stored row would have kept the skeleton it
+   * already had — so the new evidence would never reach a single archetype, silently, and
+   * `--force` would not have helped because it only bypasses the evidence gate.
+   *
+   * This is the same argument the pinned versions on the row already make. `minerVersion`
+   * is stored precisely so "reproducible" means something; it has to be able to *change*
+   * the answer, or storing it is decoration.
+   */
+  const minerChanged = previous ? previous.minerVersion !== MINER_VERSION : false;
+
+  if (previous && !minerChanged && skeletonsMatch(previous.skeleton, archetype.skeleton)) {
     return {
       category,
       version: previous.version,
@@ -102,6 +123,7 @@ export async function mineAndStore(
   const changelog = describeChange(
     (previous?.skeleton as Archetype["skeleton"] | undefined) ?? null,
     archetype.skeleton,
+    minerChanged,
   );
 
   await db.transaction(async (tx) => {
@@ -115,6 +137,12 @@ export async function mineAndStore(
         weakThreshold: archetype.weakThreshold,
         sections: archetype.skeleton.sections,
         traits: archetype.skeleton.traits,
+        /**
+         * R3.4 attribution, pinned with the numbers it belongs to. Recomputing this at
+         * render time would credit whoever is in the corpus *today* for a skeleton mined
+         * from whoever was in it in August — a plausible-looking lie about provenance.
+         */
+        contributors: archetype.contributors,
       },
       antiPatterns: archetype.antiPatterns,
       exemplarSkillIds: archetype.exemplars.map((e) => e.skillId),

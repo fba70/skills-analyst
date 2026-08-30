@@ -10,6 +10,7 @@ import { QuarantinePanel } from "@/components/settings/quarantine-panel";
 import { ReviewPanel } from "@/components/settings/review-panel";
 import { SourcesPanel } from "@/components/settings/sources-panel";
 import { SubmitPanel } from "@/components/settings/submit-panel";
+import { TakedownPanel } from "@/components/settings/takedown-panel";
 import { TaxonomyPanel } from "@/components/settings/taxonomy-panel";
 import { UsersPanel } from "@/components/settings/users-panel";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +19,7 @@ import { discoveryPolicy } from "@/server/crawl/policy";
 import { crawlCoverage } from "@/server/crawl/run";
 import { sourceDiversity } from "@/server/analytics/templates";
 import { archetypeSummary } from "@/server/analytics/archetype-run";
+import { listTakedowns, takedownCounts } from "@/server/compliance/takedown";
 import { pipelineBacklog, recentRuns } from "@/server/pipeline/run";
 import { staleSlices } from "@/server/validation/rescan";
 import { isAdmin, listPlatformUsers, platformCounts } from "@/server/dal/admin";
@@ -42,6 +44,7 @@ const TABS = [
   "review",
   "quarantine",
   "sources",
+  "takedowns",
   "users",
 ] as const;
 type Tab = (typeof TABS)[number];
@@ -72,10 +75,11 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     : "ingestion";
   const query = { page: Number(single("page")) || 1, pageSize: Number(single("size")) || undefined };
 
-  const [counts, coverage, curation] = await Promise.all([
+  const [counts, coverage, curation, takedowns] = await Promise.all([
     platformCounts(),
     crawlCoverage(),
     curationCounts(),
+    takedownCounts(),
   ]);
 
   const shardTotals = coverage.shards.reduce(
@@ -84,7 +88,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, archetypeList] =
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, archetypeList, takedownList] =
     await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
@@ -97,10 +101,11 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "ingestion" ? pipelineBacklog() : null,
     tab === "ingestion" ? recentRuns(8) : null,
     tab === "archetypes" ? archetypeSummary() : null,
+    tab === "takedowns" ? listTakedowns(query) : null,
   ]);
 
   // Every tab except Ingestion is a paginated list.
-  const paged = held ?? quarantined ?? sourceHealth ?? users;
+  const paged = held ?? quarantined ?? sourceHealth ?? users ?? takedownList;
 
   return (
     <div className="grid min-w-0 gap-6">
@@ -141,6 +146,12 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
           { value: "review", label: `Review (${curation.held})` },
           { value: "quarantine", label: `Quarantine (${curation.quarantined})` },
           { value: "sources", label: "Sources" },
+          {
+            value: "takedowns",
+            // The open count is in the label because an unanswered notice has a clock on
+            // it in a way a quarantined skill does not.
+            label: takedowns.open > 0 ? `Takedowns (${takedowns.open})` : "Takedowns",
+          },
           { value: "users", label: `Users (${counts.users})` },
         ]}
       >
@@ -185,6 +196,10 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
             </div>
           </div>
         ) : null}
+        {tab === "takedowns" ? (
+          <TakedownPanel takedowns={takedownList?.items ?? []} />
+        ) : null}
+
         {tab === "archetypes" ? (
           <ArchetypePanel
             archetypes={(archetypeList ?? []).map((row) => {
