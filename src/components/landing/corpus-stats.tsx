@@ -104,7 +104,7 @@ export function CorpusStats({ stats }: { stats: PlatformStats }) {
         />
       </dl>
 
-      <div className="grid gap-8 sm:grid-cols-2">
+      <div className="grid gap-10 sm:grid-cols-2 sm:gap-8">
         <Distribution
           title="Quality"
           note="Composite score per skill — structure, documentation, resource hygiene. Bands rather than an average, which over thousands of skills moves by a point a week and says nothing."
@@ -201,17 +201,17 @@ function Distribution({
   const largest = Math.max(1, ...rows.map((row) => row.count));
 
   return (
-    <div className="grid gap-3">
-      <div className="grid gap-1">
+    <div className="grid gap-5">
+      <div className="grid gap-1.5">
         <h3 className="font-medium">{title}</h3>
         <p className="text-muted-foreground text-xs">{note}</p>
       </div>
       {rows.length === 0 ? (
         <p className="text-muted-foreground text-sm">Nothing indexed yet.</p>
       ) : (
-        <ul className="grid gap-2">
+        <ul className="grid gap-4">
           {rows.map((row) => (
-            <li key={row.key} className="grid gap-1">
+            <li key={row.key} className="grid gap-2">
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="min-w-0 truncate">{row.label}</span>
                 <span className="text-muted-foreground shrink-0 tabular-nums">
