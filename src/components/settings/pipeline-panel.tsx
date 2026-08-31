@@ -313,14 +313,6 @@ function PipelineCard({
           <div className="flex flex-wrap items-center gap-2">
             <Clock className="text-muted-foreground size-4" />
             <span className="text-sm font-medium">Schedule</span>
-            <Badge variant={cronEnabled ? "default" : "outline"}>
-              {cronEnabled ? "every 10 minutes" : "not configured"}
-            </Badge>
-            {!cronEnabled ? (
-              <span className="text-muted-foreground text-xs">
-                set <code className="text-[11px]">CRON_SECRET</code> to enable
-              </span>
-            ) : null}
           </div>
 
           {runs.length > 0 ? (

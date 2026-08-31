@@ -42,17 +42,6 @@ import { ARCHETYPE_THRESHOLD, reviewQueue, taxonomySummary } from "@/server/taxo
 
 export const metadata: Metadata = { title: "Settings" };
 
-/**
- * Mirrored from `vercel.ts` for display only.
- *
- * The expression itself cannot be imported — `vercel.ts` is build configuration, not
- * application code — so this is a copy, and it exists because the schedule page would
- * otherwise be unable to tell an operator the one number that bounds everything on it. If
- * the cron changes, this changes with it; getting it wrong misstates a ceiling rather than
- * breaking a schedule.
- */
-const CRON_EXPRESSION = "0 5,17 * * * (05:00 and 17:00 UTC)";
-
 const TABS = [
   "ingestion",
   "archetypes",
@@ -230,10 +219,6 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
         {tab === "schedule" && schedule ? (
           <SchedulePanel
             schedule={schedule}
-            // Presence of the secret is what actually gates the route, so it is the honest
-            // thing to report — a schedule in vercel.ts that 401s is not enabled.
-            cronEnabled={Boolean(process.env.CRON_SECRET)}
-            cronExpression={CRON_EXPRESSION}
             status={{
               pipeline: await stageDue("pipeline", schedule),
               archetypes: await stageDue("archetypes", schedule),
