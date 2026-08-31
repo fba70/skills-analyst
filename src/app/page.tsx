@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowRight, ScanSearch, ShieldCheck, Sparkles } from "lucide-react";
 
 import { Logo, Wordmark } from "@/components/brand";
+import { AgentAccess } from "@/components/landing/agent-access";
 import { CorpusStats } from "@/components/landing/corpus-stats";
 import { Principles } from "@/components/landing/principles";
 import { TheLoop } from "@/components/landing/the-loop";
@@ -163,6 +164,12 @@ export default async function HomePage() {
           frame for.
         */}
         <TheLoop />
+
+        {/*
+          Between the mechanism and the promises, because it is the answer to "so how do I
+          actually use this" — a question the loop provokes and the commitments do not.
+        */}
+        <AgentAccess />
 
         <Principles />
 

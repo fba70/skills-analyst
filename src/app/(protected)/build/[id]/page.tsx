@@ -39,7 +39,7 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
     : null;
 
   return (
-    <div className="grid min-w-0 max-w-4xl gap-6">
+    <div className="grid min-w-0 gap-6">
       <div>
         <Button asChild variant="ghost" size="sm" className="-ml-2">
           <Link href="/build">
@@ -70,7 +70,9 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
             </Badge>
           ) : null}
         </div>
-        {draft.summary ? <p className="text-muted-foreground">{draft.summary}</p> : null}
+        {draft.summary ? (
+          <p className="text-muted-foreground max-w-3xl">{draft.summary}</p>
+        ) : null}
       </header>
 
       {draft.status === "failed" ? (

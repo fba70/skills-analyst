@@ -120,6 +120,27 @@
       "when": 1788172305270,
       "tag": "0016_modern_prism",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1788180116395,
+      "tag": "0017_bent_shooting_star",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1788180983009,
+      "tag": "0018_fair_magik",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788181797863,
+      "tag": "0019_mature_spitfire",
+      "breakpoints": true
     }
   ]
 }

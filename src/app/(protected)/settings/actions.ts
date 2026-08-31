@@ -22,6 +22,7 @@ import { db } from "@/server/db";
 import { skills, skillVersions, sources } from "@/server/db/schema";
 import { requireAdmin, setUserBanned, setUserRole } from "@/server/dal/admin";
 import { setSchedule, type ScheduleSettings } from "@/server/settings/schedule";
+import { setRateLimits, type RateLimitSettings } from "@/server/settings/rate-limits";
 import {
   approveRepo,
   rejectRepo,
@@ -703,6 +704,31 @@ export async function saveScheduleAction(next: ScheduleSettings): Promise<Action
         ` · archetype refresh ${
           saved.archetypes.enabled ? `on, every ${saved.archetypes.everyHours}h` : "off"
         }`,
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Rate limits (Doc 2 R8.8).
+ *
+ * Same shape as `saveScheduleAction` and for the same reason: an action is a POST endpoint,
+ * so the page guard protects the view and not the operation — `requireAdmin()` is re-checked
+ * here, where the write happens.
+ */
+export async function saveRateLimitsAction(
+  next: RateLimitSettings,
+): Promise<ActionResult> {
+  try {
+    const actor = await requireAdmin();
+    const saved = await setRateLimits(next, actor);
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      message: saved.mcpFree.enabled
+        ? `Free scope: ${saved.mcpFree.perMinute}/min, ${saved.mcpFree.perHour}/hour`
+        : "Free scope: unlimited (limiter off)",
     };
   } catch (error) {
     return failure(error);

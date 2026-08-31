@@ -36,10 +36,12 @@ export default async function BuildPage() {
   ]);
 
   return (
-    <div className="grid min-w-0 max-w-4xl gap-6">
+    <div className="grid min-w-0 gap-6">
       <div className="grid gap-2">
         <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Build a skill</h1>
-        <p className="text-muted-foreground">
+        {/* The measure belongs on the prose, never on the page frame — every route in the
+            app fills its shell, and a form is not a reason for this one to be the exception. */}
+        <p className="text-muted-foreground max-w-3xl">
           Start from what the corpus shows works in your category, add what is specific to
           you, and let the assistant write the first draft. It is validated by the same
           analyzers the registry uses before you see it.

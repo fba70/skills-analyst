@@ -62,7 +62,7 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
   );
 
   return (
-    <div className="grid min-w-0 max-w-4xl gap-6">
+    <div className="grid min-w-0 gap-6">
       <div>
         <Button asChild variant="ghost" size="sm" className="-ml-2">
           <Link href="/skills">
@@ -74,7 +74,9 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
 
       <header className="grid gap-3">
         <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">{skill.name}</h1>
-        {skill.summary ? <p className="text-muted-foreground">{skill.summary}</p> : null}
+        {skill.summary ? (
+          <p className="text-muted-foreground max-w-3xl">{skill.summary}</p>
+        ) : null}
         <div className="flex flex-wrap items-center gap-2">
           <Explain anchor="validation">
             <OverallVerdict verdicts={skill.verdicts} status={skill.status} />

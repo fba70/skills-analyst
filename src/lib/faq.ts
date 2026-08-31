@@ -18,6 +18,7 @@ export const FAQ_SECTIONS = [
   { id: "categories", title: "Categories" },
   { id: "archetypes", title: "Archetypes" },
   { id: "duplicates", title: "Duplicates" },
+  { id: "mcp", title: "Agent access (MCP)" },
 ] as const;
 
 export type FaqAnchor = (typeof FAQ_SECTIONS)[number]["id"];

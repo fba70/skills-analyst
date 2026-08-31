@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  customType,
   foreignKey,
   index,
   integer,
@@ -89,6 +90,14 @@ export const sources = pgTable(
 );
 
 /**
+ * Postgres `tsvector`. Drizzle has no built-in, and the column is never read in TypeScript —
+ * it exists to be matched against and ranked by, so `unknown` is the honest data type.
+ */
+const tsvector = customType<{ data: unknown; driverData: string }>({
+  dataType: () => "tsvector",
+});
+
+/**
  * A skill, deduplicated across sources. Near-duplicates cluster under one canonical
  * entry via `canonicalSkillId`, and every origin stays attributed through its versions.
  */
@@ -113,6 +122,33 @@ export const skills = pgTable(
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * Full-text search vector (Doc 2 R7.4, and the relevance term R2.9 was missing).
+     *
+     * Generated and stored, so it cannot drift from the row: there is no trigger to forget
+     * and no backfill to run after an edit. That constrains it to columns of this same row,
+     * which is why category labels are not in here — categories are a *filter* with a GIN
+     * index of their own, and folding them into the text would let a category name outrank
+     * a skill actually named after the query.
+     *
+     * Weights are the reason this is not a plain `to_tsvector`. `A` on the name, `B` on the
+     * summary, `C` on the slug means a skill *called* "terraform plan review" beats one that
+     * merely mentions the phrase — which is exactly the failure `ilike '%q%'` had, since a
+     * LIKE match carries no notion of where it matched.
+     *
+     * `'english'::regconfig` is passed explicitly and must stay: the one-argument
+     * `to_tsvector(text)` reads `default_text_search_config` and is therefore only STABLE,
+     * and a generated column requires IMMUTABLE. The two-argument form is immutable.
+     *
+     * The slug has its hyphens replaced rather than being fed in raw. The parser would split
+     * `terraform-plan-review` anyway, but it also emits the whole hyphenated string as a
+     * token, which then never matches anything a person types.
+     */
+    searchVector: tsvector("search_vector").generatedAlwaysAs(
+      sql`setweight(to_tsvector('english'::regconfig, coalesce("name", '')), 'A')
+       || setweight(to_tsvector('english'::regconfig, coalesce("summary", '')), 'B')
+       || setweight(to_tsvector('english'::regconfig, replace(coalesce("slug", ''), '-', ' ')), 'C')`,
+    ),
   },
   (t) => [
     /** Self-reference for the duplicate cluster; declared here to break the cycle. */
@@ -125,6 +161,20 @@ export const skills = pgTable(
     index("skills_status_idx").on(t.status),
     index("skills_canonical_idx").on(t.canonicalSkillId),
     index("skills_categories_idx").using("gin", t.categories),
+    index("skills_search_idx").using("gin", t.searchVector),
+    /**
+     * Trigram index on the name, for the half of search a tsvector cannot do.
+     *
+     * `to_tsquery` is lexeme matching: it stems, so "reviewing" finds "review", and it
+     * finds nothing at all for "kubernets" or for a partial word someone is still typing.
+     * `pg_trgm` matches on character trigrams instead, which is exactly the misspelling and
+     * prefix case — so the two indexes cover disjoint failures and the query ORs them.
+     *
+     * Name only. Running trigram similarity across every summary is a much larger index for
+     * a much worse signal: a fuzzy hit somewhere in a paragraph is usually noise, while a
+     * fuzzy hit on the title is usually the thing you meant.
+     */
+    index("skills_name_trgm_idx").using("gin", sql`${t.name} gin_trgm_ops`),
   ],
 );
 
