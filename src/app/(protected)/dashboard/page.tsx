@@ -1,13 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowRight, Download, PackageSearch, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 
 import { LicenseBadge } from "@/components/registry/license-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireSession } from "@/server/dal/session";
-import { mySkills, platformStats } from "@/server/dal/stats";
+import { listDrafts } from "@/server/builder/drafts";
+import { platformStats } from "@/server/dal/stats";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
@@ -30,7 +31,10 @@ export default async function DashboardPage() {
   const session = await requireSession();
   const firstName = session.user.name.split(/\s+/)[0] || session.user.email;
 
-  const [stats, owned] = await Promise.all([platformStats(), mySkills()]);
+  // Drafts, not `mySkills()`. Nothing writes an org-scoped row into `skills` — a draft
+  // becomes one only when it is published — so reading the corpus table here would show an
+  // empty list to someone who has just written three skills.
+  const [stats, drafts] = await Promise.all([platformStats(), listDrafts()]);
 
   return (
     <div className="grid min-w-0 gap-6">
@@ -133,55 +137,36 @@ export default async function DashboardPage() {
           </Card>
         </div>
 
-        {stats.variants > 0 || stats.tombstoned > 0 ? (
-          <p className="text-muted-foreground text-xs">
-            {stats.variants.toLocaleString()} near-duplicates are folded under a canonical
-            entry and stay reachable from it
-            {stats.tombstoned > 0
-              ? `; ${stats.tombstoned.toLocaleString()} withdrawn upstream, metadata retained`
-              : ""}
-            .
-          </p>
-        ) : null}
-
-        <div className="flex flex-wrap gap-2">
-          <Button asChild variant="outline" size="sm">
-            <Link href="/skills">
-              Browse the registry
-              <ArrowRight className="size-4" />
-            </Link>
-          </Button>
-          {/* The route out of the number above. A count with no way to read one is the
-              state the archetype pages were built to end. */}
-          <Button asChild variant="outline" size="sm">
-            <Link href="/archetypes">
-              Read the archetypes
-              <ArrowRight className="size-4" />
-            </Link>
-          </Button>
-        </div>
       </section>
 
       {/* ---- What's mine ---------------------------------------------------- */}
       <section className="grid gap-3">
-        <h2 className="text-base font-semibold tracking-tight">Your skills</h2>
-        {owned.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <h2 className="text-base font-semibold tracking-tight">Your skills</h2>
+          <Button asChild size="sm" className="ml-auto">
+            <Link href="/build">
+              <Sparkles className="size-4" />
+              Build your skill
+            </Link>
+          </Button>
+        </div>
+        {drafts.length > 0 ? (
           <ul className="grid gap-2">
-            {owned.map((skill) => (
-              <li key={skill.id}>
+            {drafts.map((draft) => (
+              <li key={draft.id}>
                 <Card>
                   <CardContent className="flex flex-wrap items-center gap-3 py-4">
-                    <Link href={`/skills/${skill.slug}`} className="min-w-0 flex-1">
-                      <span className="font-medium">{skill.name}</span>
-                      {skill.summary ? (
+                    <Link href={`/build/${draft.id}`} className="min-w-0 flex-1">
+                      <span className="font-medium">{draft.name}</span>
+                      {draft.summary ? (
                         <span className="text-muted-foreground line-clamp-1 block text-sm">
-                          {skill.summary}
+                          {draft.summary}
                         </span>
                       ) : null}
                     </Link>
-                    <Badge variant="outline">{skill.status}</Badge>
-                    {skill.qualityScore !== null ? (
-                      <Badge variant="secondary">{skill.qualityScore}/100</Badge>
+                    <Badge variant="outline">{draft.status}</Badge>
+                    {draft.qualityScore !== null ? (
+                      <Badge variant="secondary">{draft.qualityScore}/100</Badge>
                     ) : null}
                   </CardContent>
                 </Card>
@@ -212,29 +197,11 @@ function BuilderPlaceholder() {
           Nothing here yet
         </CardTitle>
         <CardDescription>
-          Skills you create will land here. The builder is not built yet — when it is, it
-          will scaffold a skill from what the corpus shows actually works in its category,
-          merge in your own workflow and constraints, and run the full validation pipeline
-          before you publish.
+          Skills you write will land here. The builder scaffolds from what the corpus shows
+          actually works in a category, merges in your own workflow and constraints, and
+          runs the validation analyzers before you see the draft.
         </CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-3">
-        <p className="text-muted-foreground text-sm">In the meantime:</p>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild variant="outline" size="sm">
-            <Link href="/skills">
-              <PackageSearch className="size-4" />
-              Browse the registry
-            </Link>
-          </Button>
-          <Button asChild variant="outline" size="sm">
-            <Link href="/skills?sort=quality">
-              <Download className="size-4" />
-              Download a high-quality skill
-            </Link>
-          </Button>
-        </div>
-      </CardContent>
     </Card>
   );
 }

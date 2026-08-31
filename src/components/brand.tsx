@@ -9,7 +9,7 @@ export function Logo({ className }: { className?: string }) {
     <svg
       viewBox="0 0 100 100"
       role="img"
-      aria-label="Skill Foundry"
+      aria-label="Skills Foundry"
       className={cn("size-6", className)}
     >
       <circle
@@ -52,7 +52,7 @@ export function Wordmark({
     <span className={cn("flex items-center gap-2", className)}>
       <Logo className="shrink-0" />
       <span className={cn("font-semibold tracking-tight whitespace-nowrap", nameClassName)}>
-        Skill Foundry
+        Skills Foundry
       </span>
     </span>
   );

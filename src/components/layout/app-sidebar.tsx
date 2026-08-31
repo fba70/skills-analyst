@@ -35,12 +35,12 @@ export function AppSidebar({ user, isAdmin = false }: AppSidebarProps) {
             mark at full size and still collapses to a centred icon. */}
         <Link
           href="/dashboard"
-          aria-label="Skill Foundry"
+          aria-label="Skills Foundry"
           className="hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-sidebar-ring flex items-center gap-3 overflow-hidden rounded-md px-1.5 py-1.5 transition-colors outline-hidden focus-visible:ring-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0"
         >
           <Logo className="size-11 shrink-0 group-data-[collapsible=icon]:size-8" />
           <span className="truncate text-2xl font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
-            Skill Foundry
+            Skills Foundry
           </span>
         </Link>
       </SidebarHeader>

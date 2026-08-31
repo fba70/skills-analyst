@@ -48,7 +48,7 @@ const consoleTransport: MailTransport = {
       [
         "",
         `┌${line}┐`,
-        row(`Skill Foundry — ${purposeLabel[purpose]}`),
+        row(`Skills Foundry — ${purposeLabel[purpose]}`),
         row(`to:   ${to}`),
         row(`code: ${code}`),
         `└${line}┘`,

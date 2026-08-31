@@ -1,6 +1,6 @@
 @AGENTS.md
 
-# Skill Foundry
+# Skills Foundry
 
 Platform that ingests agent skills, validates them, mines structural archetypes from
 the corpus, and feeds that back into a builder and an assistant. **The loop is the
@@ -180,6 +180,159 @@ Still better done once the corpus stops moving: the index would be rebuilt mid-f
 weights tuned against a corpus that is a sixth ingested are weights tuned against the wrong
 corpus.
 
+### The registry read the whole table to draw its sidebar
+
+`/skills` took **2.3 seconds** against 0.2 for `/archetypes`, and clicking it from the
+sidebar looked like nothing had happened. Two separate faults, fixed separately.
+
+**The query.** `getFilterOptions` selected *every indexed skill* — one row per skill, no
+limit, ~6,100 of them — pulled them all into node and tallied them with `Map`s. It then took
+the version ids from those same rows and asked for capability surfaces with a
+**6,100-element `IN (...)`**. Paging the list to ten results was pointless while rendering
+the filters beside it read the entire corpus, and the cost grew with the corpus rather than
+with the page: at R7.4's 500K target it would not have loaded at all.
+
+Every count is now a `GROUP BY` or a `count(*) filter`. The category facet already worked
+this way — it was the one part of the function that was right, and it is the model the rest
+now follows. **2.3s → 0.5s**, and the totals were checked against direct SQL rather than
+assumed: 9,561 indexed / 6,768 mirrored, identical before and after.
+
+> The capability counts are five `count(*) filter` expressions over the same jsonb key
+> lookup that `whereFor` uses to apply the filter. Same expression on both sides is what
+> keeps the sidebar's number and the filtered result in agreement.
+
+**The perceived stall.** Next renders a server component *before* it navigates, so a slow
+page leaves the previous one on screen and the click appears to do nothing. `loading.tsx`
+turns the segment into a Suspense boundary: navigation becomes instant and the wait moves
+somewhere visible. Added to `/skills`, the skill page, both archetype routes, and the
+dashboard, settings and builder.
+
+`PageSkeleton` is shaped like the page it replaces — heading, controls, list rows — so
+content does not jump when it arrives, and it carries `role="status"` so a screen reader is
+told the page is loading rather than finding it briefly empty.
+
+> A loader is a fix for the *perception*, never for the page. The query was fixed first; the
+> skeleton is there because half a second of blank screen still reads as a stall.
+
+### The builder (R4.1–R4.5, R5.5)
+
+`/build`, protected. Four steps — category, purpose, your context, sections — then one model
+call. `pnpm verify:builder` (11 checks, **costs money**: two real generations).
+
+**The shape is not ours.** Step four is the mined archetype for the category chosen in step
+one: its sections, in document order, each showing prevalence in both bands. A wizard that
+asked "which sections would you like?" would be a blank page with a progress bar, and R4.1
+is specifically about the corpus already knowing the answer.
+
+- **Drafts are their own table, not rows in `skills`.** `skill_versions.source_id` is NOT
+  NULL and points at a repository we sync, so reusing the corpus tables means inventing a
+  fake source per organisation — which `platformStats` would then count, `pendingSources`
+  would offer, and source-diversity reporting would fold in. The public corpus numbers would
+  move every time somebody opened the builder. A draft becomes a skill when it is published,
+  and that is when the corpus tables should hear about it.
+- **`org_id` is NOT NULL here**, unlike everywhere else, and the RLS policy correspondingly
+  has no `IS NULL` escape hatch. There is no such thing as a public draft, so a request with
+  no session sees nothing rather than seeing "the public ones".
+- **The inputs are committed before the model is called.** A generation that fails or
+  refuses costs the draft, never the author's typing. `generating` is a persisted state, not
+  a spinner: without it a reload mid-call shows an untouched draft and invites a second
+  billable attempt.
+- **Sonnet, not Haiku.** The classifier's small model is right for bounded-choice labelling
+  over thousands of rows; this is one call per authored skill and the output *is* the
+  product. A cheaper draft the author rewrites costs more than the model did.
+- **Temperature 0.4, not 0.** Labelling wants determinism for R7.2. Writing does not — at
+  zero, "write it again" hands back the same document and the button is a lie.
+- **Drafts are validated by the same analyzers the registry runs** (R4.5), through a new
+  `runAnalyzersOnBundle` seam. `AnalyzerInput` already took files rather than a storage key,
+  so a draft is judged before it is stored anywhere — no persisting an unvalidated skill in
+  order to validate it. R2.3 is excluded: it compares documentation against bundled code,
+  and a text-only first draft has none.
+
+**R5.5's refusal is a field in the structured output, not a filter around it.** A post-hoc
+check would mean paying to write the thing first and then reconstructing the refusal from
+prose. The model returns a body *or* a reason; either way an `events` row is written, which
+is what makes "the assistant refuses malicious authoring" checkable rather than asserted.
+Verified against a real brief asking for disguised credential exfiltration — refused, with
+the reason naming the disguise.
+
+**Domain is collected but is not part of the scaffold.** Worth stating because the opposite
+is the natural assumption: archetypes are mined on the **function axis only** — all 53 rows
+are `axis = 'function'`, and every mining and reading query filters on it. Structure follows
+function, so a contract review and a pull-request review share a skeleton; mining per domain
+would average a rubric together with a template and fit neither.
+
+What domain *does* affect is the two things the function axis cannot:
+
+- **content.** A review skill for legal and one for code share a shape and share no
+  vocabulary. The prompt receives it inside a `<domain>` tag that says, in the tag itself,
+  to use it for wording and examples and **not** to change the section structure — the
+  skeleton is the measured part and this is not.
+- **publishing.** R3.1 wants both axes on a skill and browse runs on domain, so a draft
+  promoted into the corpus without one would be uncategorised on the axis people filter by.
+
+It sits in step two beside the purpose rather than in a step of its own — a whole step for
+one optional dropdown is friction for no gain — and stays nullable, because a skill can be
+genuinely domain-neutral and a guess would mislabel it.
+
+**R5.2 traceability runs all the way down.** Each section carries its prevalence into the
+UI *and* into the prompt, so the model is told which sections earned their place by a
+measured margin and which are merely conventional. A category with no mined archetype falls
+back to a plain skeleton with `lift: null`, and both the form and the prompt say so — no
+inventing evidence for the categories that have least.
+
+> **A scope bug the builder found.** `archetype-read` pins `org_id is null` and calls itself
+> public, then resolved its exemplars through `withOrgScope`. That widened the list for a
+> signed-in viewer *and* made a public read impossible outside a request, because
+> `withOrgScope` resolves a session — which is how it surfaced: `buildScaffold` threw on
+> `next/navigation` in a plain node process. `getSkillsByIds` now takes `publicOnly`.
+
+Not built: multi-dialect export (R4.4), publishing a draft into the corpus, and the
+conversational refinement pass. The draft is written, validated and stored; turning one into
+a served skill is the next piece.
+
+### The FAQ is generated from the code, not written beside it
+
+`/faq`, public, third item in the sidebar and the anonymous header. It answers the questions
+the interface raises and never answered: what 100/100 means, why a badge is amber, why one
+skill downloads and another does not, what "quarantined" implies, where categories come
+from, what lift is.
+
+**Almost nothing on that page is prose about values — the values are imported.** Categories
+from `FUNCTIONS`/`DOMAINS`, capabilities from `CAPABILITY_META`, licence postures from the
+module the badges render from, section roles from `SECTION_ROLE_META`, severity weights and
+the substance curve from `lib/quality.ts`, the analyzer list *and versions* from
+`ANALYZER_VERSIONS`, the evidence gate from `EVIDENCE_GATE`, the confidence floor from the
+taxonomy vocabulary.
+
+That is the only way a page like this survives contact with a moving codebase. Documentation
+that restates constants is wrong within a month, and a reader who checks one number, finds
+it stale, and stops trusting the rest has lost more than the page ever gave them. Move a
+threshold and the page moves with it or fails to compile.
+
+> **`lib/quality.ts` came out of this.** The severity weights and the substance curve lived
+> inside `scoreOf`, and the badge's 90/70 colour bands lived in the registry page — so
+> explaining the score meant copying both. They are now one leaf module used by the scorer,
+> the badge and the FAQ. A legend that disagrees with the badge it explains is worse than no
+> legend.
+
+An analyzer added without a blurb still renders, with no description rather than being
+absent from the list. Missing prose is obvious; a missing row is not.
+
+**Badges link into it**, via `components/registry/explain.tsx`. Anchors are a typed
+`FaqAnchor` from `lib/faq.ts`, shared with the page's own headings, so renaming a section
+breaks the build rather than silently scrolling nowhere — a broken explanation is worse than
+an unexplained badge, because the reader has already decided to trust the answer.
+
+> **Where a badge may not be wrapped.** Each row in the registry list is inside a card-level
+> `<Link>` to the skill, and an anchor inside an anchor is invalid HTML: browsers disagree
+> about what the click means and the card's own navigation stops being predictable. So the
+> list gets **one** plain link near its filters, and only the detail pages wrap individual
+> badges. Checked, not assumed — the rendered list has zero nested anchors.
+
+Category badges keep their existing link into the registry filter. Browsing the rest of a
+category is more useful than a definition, so the definition gets its own quiet link rather
+than taking that over.
+
 ### Archetypes are public now (R3.2–R3.4)
 
 `/archetypes` and `/archetypes/[category]`, in the `(public)` group alongside the registry
@@ -298,8 +451,6 @@ is the natural place to hang it.
 
 ### Deliberately deferred
 
-- **R4.x builder** — the natural next phase, but it scaffolds *from* archetypes, and those
-  will shift as the corpus triples. Building against numbers about to move is rework.
 - **RC.2 spend caps** — real once the assistant (R5.x) makes LLM cost recurring and per-user.
   Today `MAX_BATCH` and the per-action caps are the whole control.
 - **Embeddings / pgvector** — needed for R5.2 retrieval and R3.1's low-confidence queue,
@@ -1324,6 +1475,7 @@ pnpm taxonomy --sample 20            # categories — COSTS MONEY, capped at 100
 pnpm taxonomy --status | --review | --resync
 pnpm verify:lists | verify:revocation | verify:export | verify:takedown
 pnpm verify:otp | verify:db-retry        # both free, no network, no database
+pnpm verify:builder                      # COSTS MONEY — two model calls
 pnpm validate:verify | db:verify-rls
 ```
 

@@ -1,5 +1,6 @@
 import { sectionRoleBlurb, sectionRoleLabel } from "@/lib/section-roles";
 import { BandLegend, LiftBar, LiftChip } from "@/components/archetypes/lift-bar";
+import { ExplainLink } from "@/components/registry/explain";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ArchetypeSkeleton } from "@/server/analytics/archetype-read";
@@ -76,7 +77,10 @@ export function SkeletonCard({ skeleton }: { skeleton: ArchetypeSkeleton }) {
               ))}
             </ol>
 
-            <BandLegend className="border-t pt-4" />
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+              <BandLegend />
+              <ExplainLink anchor="archetypes">How lift works</ExplainLink>
+            </div>
           </>
         )}
 

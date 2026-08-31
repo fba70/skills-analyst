@@ -1,0 +1,1 @@
+ALTER TABLE "skill_drafts" ADD COLUMN "domain_category" text;

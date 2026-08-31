@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Star } from "lucide-react";
 
+import { qualityBand } from "@/lib/quality";
+import { ExplainLink } from "@/components/registry/explain";
 import { LicenseBadge } from "@/components/registry/license-badge";
 import { labelFor } from "@/server/taxonomy/vocabulary";
 import { RegistryFilters } from "@/components/registry/registry-filters";
@@ -68,6 +70,20 @@ export default async function RegistryPage(props: PageProps<"/skills">) {
       </div>
 
       <RegistryFilters options={options} pageSizes={PAGE_SIZES} sorts={SORTS} />
+
+      {/*
+        One link, not per-badge.
+        
+        Each result below is wrapped in a card-level <Link> to the skill, and an anchor
+        inside an anchor is invalid HTML — browsers disagree about what the click means and
+        the card's own navigation stops being predictable. The detail pages wrap their
+        badges individually because nothing wraps them there.
+      */}
+      <p>
+        <ExplainLink anchor="quality">
+          What do the scores, licences and badges mean?
+        </ExplainLink>
+      </p>
 
       {result.total === 0 ? (
         <Card>
@@ -194,10 +210,13 @@ function QualityScore({ score }: { score: number | null }) {
       </Badge>
     );
   }
+  // Bands come from `lib/quality.ts`, shared with the scorer and the reference page — a
+  // legend that disagrees with the badge it explains is worse than no legend.
+  const band = qualityBand(score);
   const tone =
-    score >= 90
+    band === "strong"
       ? "text-primary border-primary/40 bg-primary/10"
-      : score >= 70
+      : band === "fair"
         ? "text-amber-600 border-amber-500/40 bg-amber-500/10 dark:text-amber-400"
         : "text-destructive border-destructive/40 bg-destructive/10";
   return (

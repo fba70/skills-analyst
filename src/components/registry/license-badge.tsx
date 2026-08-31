@@ -40,6 +40,20 @@ const POSTURES = {
 
 export type Posture = keyof typeof POSTURES;
 
+/**
+ * The four postures in the order they narrow, most permissive first.
+ *
+ * Exported so the reference page can enumerate them from the same source the badges render
+ * from. A hand-typed list on that page would be a fifth definition of the licence
+ * vocabulary and the first one to go stale.
+ */
+export const POSTURE_KEYS = [
+  "mirror_allowed",
+  "attribution_required",
+  "metadata_only",
+  "unresolved",
+] as const satisfies readonly Posture[];
+
 export function LicenseBadge({
   redistribution,
   spdx,

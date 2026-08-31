@@ -29,8 +29,8 @@ const fontSerif = Source_Serif_4({
 
 export const metadata: Metadata = {
   title: {
-    default: "Skill Foundry",
-    template: "%s · Skill Foundry",
+    default: "Skills Foundry",
+    template: "%s · Skills Foundry",
   },
   description:
     "Ingest, validate and analyse agent skills — then build new ones from what the corpus proves works.",

@@ -106,6 +106,23 @@ export const takedownStatus = pgEnum("takedown_status", [
 export const takedownScope = pgEnum("takedown_scope", ["skill", "source"]);
 
 /**
+ * Where a builder draft is in its life (Doc 2 R4.x).
+ *
+ * `generating` is a real state, not a spinner. The model call takes seconds and happens in
+ * a server action; without a persisted state a reload mid-generation would show an empty
+ * draft and invite a second, billable attempt at the same one.
+ *
+ * `failed` is kept rather than rolled back, because the inputs the author typed are worth
+ * more than the generation that did not land — they retry from the draft, not from scratch.
+ */
+export const draftStatus = pgEnum("draft_status", [
+  "collecting", // the author is still filling in the form
+  "generating", // handed to the model
+  "ready", // a body exists and has been validated
+  "failed", // generation or validation errored; inputs retained
+]);
+
+/**
  * What the licence lets us do with the content (Doc 2 R1.6).
  *
  * Analysis always happens — we fetch, analyse in memory, and keep the hash, the verdicts

@@ -114,7 +114,7 @@ function attributionText(input: {
     `This skill is redistributed under a licence that requires attribution.`,
     `Keep this notice with the skill wherever it is used or redistributed.`,
     ``,
-    `Retrieved via Skill Foundry.`,
+    `Retrieved via Skills Foundry.`,
   ]
     .filter((line) => line !== null)
     .join("\n");

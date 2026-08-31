@@ -69,11 +69,11 @@ function AnonymousShell({ children }: { children: React.ReactNode }) {
       <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4 sm:px-6">
         <Link
           href="/"
-          aria-label="Skill Foundry"
+          aria-label="Skills Foundry"
           className="flex items-center gap-2 overflow-hidden rounded-md transition-opacity hover:opacity-80"
         >
           <Logo className="size-8 shrink-0" />
-          <span className="truncate font-semibold tracking-tight">Skill Foundry</span>
+          <span className="truncate font-semibold tracking-tight">Skills Foundry</span>
         </Link>
 
         <nav className="ml-4 hidden items-center gap-1 sm:flex">
@@ -82,6 +82,9 @@ function AnonymousShell({ children }: { children: React.ReactNode }) {
           </Button>
           <Button asChild variant="ghost" size="sm">
             <Link href="/archetypes">Archetypes</Link>
+          </Button>
+          <Button asChild variant="ghost" size="sm">
+            <Link href="/faq">FAQ</Link>
           </Button>
         </nav>
 

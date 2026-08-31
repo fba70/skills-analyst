@@ -21,8 +21,15 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // `/skills` and `/archetypes` are deliberately absent: both are public (R8.1, and Doc 1
-  // licenses archetype snapshots CC BY-SA). Adding either back would redirect anonymous
-  // visitors away from the pages that exist to be read by anyone.
-  matcher: ["/dashboard/:path*", "/account/:path*", "/settings/:path*"],
+  // `/skills`, `/archetypes` and `/faq` are deliberately absent: all three are public
+  // (R8.1, and Doc 1 licenses archetype snapshots CC BY-SA). Adding any of them back would
+  // redirect anonymous visitors away from the pages that exist to be read by anyone — and
+  // the FAQ is what makes the other two legible.
+  matcher: [
+    "/dashboard/:path*",
+    "/account/:path*",
+    "/settings/:path*",
+    // Drafts belong to an organisation, so unlike the registry this one is gated.
+    "/build/:path*",
+  ],
 };

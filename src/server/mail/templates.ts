@@ -26,14 +26,14 @@ import type { OtpPurpose } from "./types";
  */
 
 const SUBJECTS: Record<OtpPurpose, string> = {
-  "sign-in": "Your Skill Foundry sign-in code",
-  "email-verification": "Verify your email for Skill Foundry",
-  "forget-password": "Reset your Skill Foundry password",
-  "change-email": "Confirm your new email for Skill Foundry",
+  "sign-in": "Your Skills Foundry sign-in code",
+  "email-verification": "Verify your email for Skills Foundry",
+  "forget-password": "Reset your Skills Foundry password",
+  "change-email": "Confirm your new email for Skills Foundry",
 };
 
 const INTROS: Record<OtpPurpose, string> = {
-  "sign-in": "Use this code to sign in to Skill Foundry.",
+  "sign-in": "Use this code to sign in to Skills Foundry.",
   "email-verification": "Use this code to verify your email address.",
   "forget-password": "Use this code to reset your password.",
   "change-email": "Use this code to confirm your new email address.",
@@ -57,7 +57,7 @@ export function otpHtml(code: string, purpose: OtpPurpose, minutes: number): str
             <tr>
               <td style="padding:28px 28px 8px 28px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
                 <div style="font-size:15px;font-weight:600;color:#111827;letter-spacing:0.12em;text-transform:uppercase;">
-                  Skill Foundry
+                  Skills Foundry
                 </div>
               </td>
             </tr>
