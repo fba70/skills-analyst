@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { KeyRound } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardAction,
@@ -8,7 +11,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { McpTokens } from "@/components/account/mcp-tokens";
 import { getActiveOrganization } from "@/server/dal/organizations";
 import { requireSession } from "@/server/dal/session";
 import { listTokens } from "@/server/mcp/tokens";
@@ -23,6 +25,7 @@ function titleCase(value: string | undefined): string {
 export default async function AccountPage() {
   const session = await requireSession();
   const [organization, tokens] = await Promise.all([getActiveOrganization(), listTokens()]);
+  const activeTokens = tokens.filter((token) => token.revokedAt === null).length;
 
   const rows: Array<{ label: string; value: string }> = [
     { label: "Name", value: session.user.name },
@@ -68,10 +71,40 @@ export default async function AccountPage() {
         workspace credential and not a platform control: any member may mint one, and
         Settings is admin-only three times over.
       */}
-      <McpTokens
-        tokens={tokens}
-        origin={process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}
-      />
+      {/*
+        A pointer, not the panel.
+
+        Token management is its own route: it is the part of the account area people arrive
+        looking for, and a menu entry that leads to the same page as the one above it tells a
+        reader nothing. The count is here because "do I have any" is the question this page
+        should answer without a click.
+      */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex flex-wrap items-center gap-2">
+            <KeyRound className="text-muted-foreground size-4" />
+            MCP access
+            <Badge variant="secondary">free</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          <p className="text-muted-foreground max-w-2xl text-sm">
+            {/* "No tokens yet" and "none that still work" are different facts, and a
+                workspace whose only token was just revoked would be told the wrong one. */}
+            Let an agent query this registry directly.{" "}
+            {activeTokens > 0
+              ? `${activeTokens} active token${activeTokens === 1 ? "" : "s"}.`
+              : tokens.length > 0
+                ? "No active tokens — every one has been revoked."
+                : "No tokens yet."}
+          </p>
+          <div>
+            <Button asChild size="sm">
+              <Link href="/account/mcp">Manage MCP tokens</Link>
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

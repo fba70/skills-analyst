@@ -174,6 +174,13 @@ export function McpTokens({ tokens, origin }: { tokens: TokenSummary[]; origin: 
 }`}
             </pre>
             <p>
+              The full walk-through, including a curl you can paste, is in the{" "}
+              <a href="/faq#mcp" className="underline underline-offset-4">
+                FAQ
+              </a>
+              .
+            </p>
+            <p>
               Six tools: <code className="text-xs">search_skills</code>,{" "}
               <code className="text-xs">get_skill</code>,{" "}
               <code className="text-xs">download_skill</code>,{" "}
