@@ -5,6 +5,7 @@ import { LicenseBadge, licensePostureDetail, POSTURE_KEYS } from "@/components/r
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CAPABILITY_META } from "@/lib/capabilities";
+import { getDocsOrigin } from "@/lib/app-url";
 import { FAQ_SECTIONS, type FaqAnchor } from "@/lib/faq";
 import {
   QUALITY_BANDS,
@@ -45,6 +46,16 @@ export const metadata: Metadata = {
  * trusting the rest has lost more than the page ever gave them. If a threshold moves, this
  * page moves with it or fails to compile.
  */
+/**
+ * The public host, for the copyable examples below.
+ *
+ * `getDocsOrigin()` rather than `getAppUrl()`, and the difference matters here more than
+ * anywhere else in the app: rendered on a laptop, `getAppUrl()` returns `localhost:3000`,
+ * which is the correct answer to "where is this deployment" and the wrong one to print in a
+ * snippet somebody is about to paste into their own client config.
+ */
+const APP_ORIGIN = getDocsOrigin();
+
 export default function FaqPage() {
   return (
     <div className="grid min-w-0 gap-8">
@@ -399,8 +410,57 @@ export default function FaqPage() {
             a public page that needs no account at all.
           </p>
           <p className="text-muted-foreground">
-            Create one in <strong>Account → MCP access</strong>. The token is shown once,
+            Create one at <a href="/account/mcp" className="underline underline-offset-4">Account → MCP access</a>. The token is shown once,
             because only a hash of it is stored; revoking takes effect on the next request.
+          </p>
+        </Q>
+
+        <Q q="How do I connect? Show me.">
+          <p>
+            Create a token at <a href="/account/mcp" className="underline underline-offset-4">Account → MCP access</a>, then point any MCP client
+            at the endpoint and send the token as a bearer header. That is the whole setup —
+            there is nothing to install.
+          </p>
+          <pre className="bg-muted/60 min-w-0 overflow-x-auto rounded-md p-3 font-mono text-xs">
+            {`{
+  "mcpServers": {
+    "skills-foundry": {
+      "url": "${APP_ORIGIN}/api/mcp",
+      "headers": { "Authorization": "Bearer sf_mcp_YOUR_TOKEN" }
+    }
+  }
+}`}
+          </pre>
+          <p className="text-muted-foreground">
+            Or check it from a terminal before wiring anything up:
+          </p>
+          <pre className="bg-muted/60 min-w-0 overflow-x-auto rounded-md p-3 font-mono text-xs">
+            {`curl -X POST ${APP_ORIGIN}/api/mcp \\
+  -H "Authorization: Bearer sf_mcp_YOUR_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -H "Accept: application/json, text/event-stream" \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'`}
+          </pre>
+        </Q>
+
+        <Q q="Is that an API key? Do I send my email and password?">
+          <p>
+            It is an API key in the ordinary sense — a long-lived secret you paste into a
+            client config. <strong>You never send your account credentials.</strong> There is
+            no password to send: sign-in here is an emailed code, and nothing in that flow is
+            reusable by a program.
+          </p>
+          <p className="text-muted-foreground">
+            The token is a separate secret in a separate table with its own revocation, and it
+            is deliberately <em>not</em> a session. A stolen session would be your account; a
+            stolen token reads the same public corpus you could read signed out, through a
+            rate-limited endpoint, and you revoke it without signing anyone out. It carries no
+            ability to publish, to spend, or to read another workspace.
+          </p>
+          <p className="text-muted-foreground">
+            Only a hash of it is stored, so it is shown exactly once when created and cannot be
+            recovered afterwards. Lost one? Revoke it and make another — you can hold several,
+            named per machine, so revoking the laptop does not stop CI.
           </p>
         </Q>
 

@@ -59,3 +59,27 @@ export function getTrustedOrigins(): string[] {
     ),
   ];
 }
+
+/**
+ * The address to **print in documentation**, which is a different question from the two above.
+ *
+ * `getAppUrl()` answers "where is this deployment reachable", and on a developer's laptop the
+ * honest answer is `http://localhost:3000`. That is right for auth and wrong for a copyable
+ * example, because the reader is not on that laptop: a config snippet or a curl showing
+ * localhost is one the reader pastes, cannot connect to, and blames the API for.
+ *
+ * So this deliberately never falls back to localhost. Documentation names the public host
+ * even when rendered locally — the example stays correct for its audience rather than for
+ * its renderer.
+ *
+ * `NEXT_PUBLIC_PRODUCTION_URL` is the override; the Vercel production host is the automatic
+ * answer once deployed; the literal is the last resort so a fresh checkout with no
+ * environment still prints something a reader can reach.
+ */
+export function getDocsOrigin(): string {
+  return (
+    normalize(process.env.NEXT_PUBLIC_PRODUCTION_URL) ??
+    normalize(process.env.NEXT_PUBLIC_VERCEL_PROJECT_PRODUCTION_URL) ??
+    "https://skills-foundry.vercel.app"
+  );
+}

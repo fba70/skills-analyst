@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ChevronsUpDown, LogOut, UserRound } from "lucide-react";
+import { ChevronsUpDown, KeyRound, LogOut, UserRound } from "lucide-react";
 
 import { authClient } from "@/lib/auth-client";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -103,6 +103,17 @@ export function NavUser({ name, email, image }: NavUserProps) {
             <Link href="/account">
               <UserRound className="size-4" />
               Account
+            </Link>
+          </DropdownMenuItem>
+          {/*
+            Its own row *because it is its own page*. The first version pointed here and at
+            /account, which is two labels and one destination — a menu entry has to lead
+            somewhere its label predicts, or it teaches the reader the menu is unreliable.
+          */}
+          <DropdownMenuItem asChild>
+            <Link href="/account/mcp">
+              <KeyRound className="size-4" />
+              MCP access
             </Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
