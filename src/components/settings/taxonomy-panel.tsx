@@ -49,8 +49,12 @@ export type QueueRow = {
 export type TaxonomyPanelProps = {
   coverage: CoverageRow[];
   queue: QueueRow[];
+  /** How deep the queue actually is. The page shows one slice of it. */
+  queueTotal: number;
   totals: { assignments: number; skillsLabelled: number; held: number; reviewed: number };
   remaining: number;
+  /** Indexed skills with no description to classify. Never queued, never paid for. */
+  notClassifiable: number;
   archetypeThreshold: number;
   maxBatch: number;
 };
@@ -62,7 +66,16 @@ const STRATEGIES = [
 ] as const;
 
 export function TaxonomyPanel(props: TaxonomyPanelProps) {
-  const { coverage, queue, totals, remaining, archetypeThreshold, maxBatch } = props;
+  const {
+    coverage,
+    queue,
+    queueTotal,
+    totals,
+    remaining,
+    notClassifiable,
+    archetypeThreshold,
+    maxBatch,
+  } = props;
   const functions = coverage.filter((row) => row.axis === "function");
   const domains = coverage.filter((row) => row.axis === "domain");
   const ready = functions.filter((row) => row.confident >= archetypeThreshold).length;
@@ -77,7 +90,21 @@ export function TaxonomyPanel(props: TaxonomyPanelProps) {
       </p>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Skills labelled" value={totals.skillsLabelled} detail={`${remaining} to go`} />
+        <Stat
+          label="Skills labelled"
+          value={totals.skillsLabelled}
+          /*
+           * `remaining` excludes skills with no description, so it can actually reach zero.
+           * They are reported beside it rather than folded in — one number is work left,
+           * the other is a fact about the corpus, and adding them together would make the
+           * taxonomy look permanently unfinished.
+           */
+          detail={
+            notClassifiable > 0
+              ? `${remaining} to go · ${notClassifiable} with no description`
+              : `${remaining} to go`
+          }
+        />
         <Stat label="Assignments" value={totals.assignments} />
         <Stat
           label="Held for review"
@@ -109,7 +136,7 @@ export function TaxonomyPanel(props: TaxonomyPanelProps) {
         />
       </div>
 
-      <ReviewQueue queue={queue} />
+      <ReviewQueue queue={queue} total={queueTotal} />
     </div>
   );
 }
@@ -264,11 +291,24 @@ function CoverageCard({
   );
 }
 
-function ReviewQueue({ queue }: { queue: QueueRow[] }) {
+/**
+ * The queue, with its depth stated on the card.
+ *
+ * The count is not decoration. Deciding a row deletes or pins it, the page revalidates, and
+ * the next-worst row slides into the freed slot — so the list comes back exactly as long as
+ * it was. Without a total beside it, every correct decision looked like it had been undone,
+ * and the only honest signal ("Held for review") was four cards further up.
+ */
+function ReviewQueue({ queue, total }: { queue: QueueRow[]; total: number }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Low-confidence queue</CardTitle>
+        <CardTitle className="flex flex-wrap items-baseline gap-2 text-base">
+          Low-confidence queue
+          <span className="text-muted-foreground text-xs font-normal tabular-nums">
+            showing {queue.length} of {total.toLocaleString()}
+          </span>
+        </CardTitle>
         <CardDescription>
           Assignments the classifier was unsure about, worst first. Confirming pins the
           category so a later re-run cannot overwrite it; removing deletes it, because a
@@ -278,7 +318,9 @@ function ReviewQueue({ queue }: { queue: QueueRow[] }) {
       <CardContent>
         {queue.length === 0 ? (
           <p className="text-muted-foreground text-sm">
-            Nothing waiting. Every assignment cleared the confidence floor.
+            {total === 0
+              ? "Nothing waiting. Every assignment cleared the confidence floor."
+              : "Nothing on this page — the rows here have been decided. Go back a page."}
           </p>
         ) : (
           <ul className="grid gap-3">
@@ -292,26 +334,33 @@ function ReviewQueue({ queue }: { queue: QueueRow[] }) {
   );
 }
 
+/**
+ * One held assignment.
+ *
+ * There is no "decided" state kept here, deliberately. An earlier version greyed the row
+ * out on success — but the same action revalidates the page, the server returns a queue
+ * that no longer contains this row, and the component unmounts a moment later. The grey
+ * flashed and vanished while the list refilled from the backlog, which read as the decision
+ * being undone rather than applied.
+ *
+ * The truthful signals are the ones that survive the refresh: the row is gone, the toast
+ * says what happened, and the count on the card header goes down.
+ */
 function QueueItem({ row }: { row: QueueRow }) {
-  const [done, setDone] = useState<"confirm" | "reject" | null>(null);
   const [isPending, startTransition] = useTransition();
 
   function decide(decision: "confirm" | "reject") {
     startTransition(async () => {
       const outcome = await reviewCategoryAction(row.id, decision);
-      if (outcome.ok) {
-        setDone(decision);
-        toast.success(outcome.message);
-      } else {
-        toast.error(outcome.message);
-      }
+      if (outcome.ok) toast.success(outcome.message);
+      else toast.error(outcome.message);
     });
   }
 
   return (
     <li
       className={`border-border grid gap-2 rounded-md border p-3 transition-opacity ${
-        done ? "opacity-40" : ""
+        isPending ? "opacity-50" : ""
       }`}
     >
       <div className="flex flex-wrap items-center gap-2">
@@ -334,7 +383,7 @@ function QueueItem({ row }: { row: QueueRow }) {
         <Button
           size="sm"
           variant="outline"
-          disabled={isPending || done !== null}
+          disabled={isPending}
           onClick={() => decide("confirm")}
         >
           {isPending ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
@@ -343,7 +392,7 @@ function QueueItem({ row }: { row: QueueRow }) {
         <Button
           size="sm"
           variant="ghost"
-          disabled={isPending || done !== null}
+          disabled={isPending}
           onClick={() => decide("reject")}
         >
           <X className="size-3" />

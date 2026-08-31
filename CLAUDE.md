@@ -914,6 +914,119 @@ on the upsert is for. `skills.categories` stays as the denormalised read path an
 only servable labels at the **current** taxonomy version; `pnpm taxonomy --resync`
 recomputes it after a version bump.
 
+### Low-confidence labels were feeding archetype mining
+
+The confidence floor was applied in three places and missing from the three that matter most
+for R3.2. `listSkills` filtered on it and `skills.categories` held only servable labels, but
+`analytics/archetype.ts` (both `representatives` and `skillTotal`) and
+`analytics/templates.ts`'s `categoryEvidence` read **every** assignment — so archetypes were
+mined partly from labels the classifier itself had flagged as unreliable.
+
+Measured before the fix: **384 of 4,095** function assignments, and **127 of 601** in
+`explain`. A fifth of one category's evidence being guesswork does not blur the claim, it
+makes it a claim about a different category.
+
+All three now apply `confidence >= REVIEW_FLOOR or reviewed_at is not null` — the registry's
+rule, because the miner and the registry must agree on what a category *contains*. A
+curator-reviewed row counts whatever its score: a human already decided.
+
+Effect on the evidence, which is smaller than the input change and says something:
+`review` 446 → 402 skills but 258 → 257 structures; `explain` 601 → 474 skills, 307 → 304
+structures. **The excluded labels were nearly all on skills that duplicate a shape already
+present**, so the gate is unaffected and every category still passes. Nothing needs
+re-mining urgently; the next `--mine-all` picks it up.
+
+> A backtick inside a `sql` template literal terminates it. Two of these comments were
+> written with `code spans` and produced four `TS1005 ',' expected` errors in a query that
+> looked fine. Prose about a query belongs in the JSDoc above it, not in the SQL.
+
+### What is actually in the low-confidence queue
+
+Worth knowing before anyone tries to automate it. Of 1,130 held assignments over 748
+distinct skills:
+
+- **None are near-duplicate variants.** `canonical_skill_id is not null` matches zero of
+  them, so `analytics/dedupe.ts` has not clustered these — their text genuinely differs.
+- **The worst end is repeated non-skills.** In the worst 100 rows there are 64 distinct
+  names, and **67 of 100 have a missing or under-40-character summary**: `demo`, `root`,
+  `s`, `input-repo`, `Recent Activity` (17 copies), `AGENTS.md` (8). The same *kind* of
+  artefact from many repos rather than copies of one file.
+
+So the classifier is not being unsure about skills — it is being asked to categorise things
+that are not skills, and correctly refusing.
+
+### The no-description rule, and why it is tiny
+
+`src/server/taxonomy/classifiable.ts`. `pnpm taxonomy --sweep [--dry]`.
+
+**A length threshold does not work, and the measurements are the reason the rule is three
+lines instead of one clever one.** Taking the best confidence per skill:
+
+| rule | held skills cleared | **confident skills wrongly dropped** |
+|---|---|---|
+| summary shorter than 40 chars | 137 | **93** |
+| summary shorter than 20 chars | 45 | 11 |
+| two words or fewer | 164 | **71** |
+| **empty, or a single bare token** | **12** | **2** |
+
+Short is not the same as uninformative: "Django performance code review" is 30 characters
+and perfectly classifiable. **The queue is not mostly junk** — that was true of the worst
+100 rows sampled by eye, not of the 1,130. Most held rows have ordinary descriptions and the
+classifier is unsure for reasons no length test can see.
+
+So the rule catches only what is *structurally* empty, and it cleared **26 assignments
+across 13 skills** — 1,130 → 1,104. That is the honest size of this problem. A threshold
+tuned to clear the queue would have bought queue depth with correctness.
+
+Three places apply it, and it is **a selector, not a state** — no column, no migration, so a
+skill whose description improves upstream becomes eligible again on the next sync:
+
+- **selection**, so the model is never called for a skill with nothing to read (saves the
+  call, not just the row);
+- **the review queue**, so a row nobody could decide never appears;
+- **`remaining`**, which now excludes them and can therefore reach zero. They are reported
+  separately as "19 with no description" — one number is work left, the other is a fact
+  about the corpus, and adding them together would make the taxonomy look permanently
+  unfinished.
+
+Deleted, not marked reviewed: `reviewed_at` is a pin (`setWhere: reviewedAt is null`), so
+marking these would freeze a guess and stop a better-described version ever being
+classified. Same reasoning as `reviewCategory("reject")`.
+
+> **The remaining 1,104 are not a backlog anyone will clear.** They are already excluded
+> from the registry and, since the floor fix above, from archetype mining — which is exactly
+> "keep the flag, do not use it for signals". What is left to decide is `REVIEW_FLOOR`
+> itself, not the rows.
+
+### The low-confidence queue is paged, because it is 1,130 deep
+
+`reviewQueue` returns a `Paged<QueueItem>` and the card says **"showing 20 of 1,130"**. It
+used to take a bare `limit` and return the worst 20 with no total, which made the panel
+actively misleading: deciding a row deletes or pins it, the page revalidates, the next-worst
+row slides into the freed slot, and the list comes back exactly as long as before. Every
+correct decision looked like it had been undone. The only honest signal — "Held for review"
+— sat four cards further up.
+
+Three fixes, none of them clever:
+
+- the count is on the card it describes, and the tab now gets the shared `ListControls` and
+  `Paginator` like every other paginated list;
+- the sort is `confidence, id`. Confidence alone is not a total order — hundreds of rows
+  share a score — and deciding rows removes them from the set *while* a curator pages
+  through it, which is exactly the workload that exposes an unstable sort;
+- the optimistic grey-out is gone. It was wiped by the revalidation it triggered, so it
+  flashed and vanished as the list refilled, which read as an undo. The signals that survive
+  the refresh are the row disappearing, the toast, and the count going down.
+
+> `pnpm taxonomy --review N` now means **page N**, not N rows. It had to change: `pageWindow`
+> clamps to the shared admin page sizes, so `--review 3` was silently printing 10. A flag
+> that quietly ignores its argument is worse than one that changes meaning.
+
+**The number is the real finding.** At `REVIEW_FLOOR` 60 the classifier holds roughly a
+fifth of its output for a human, and 1,130 rows is not clearable by hand — with ~2,300
+skills still unlabelled and sync running, it grows. That is a threshold decision, not a UI
+problem, and it belongs with the archetype work after ingestion finishes.
+
 ### Structural fingerprints — the evidence archetypes read
 
 `skill_structures` (migration 0006) stores one derived row per skill version: heading tree
@@ -1143,6 +1256,49 @@ excluded, because both mean the statement *ran* and its transaction rolled back 
 correct unit is the whole transaction, and retrying one statement would re-issue it into a
 transaction Postgres has already aborted. `08007` is excluded for the sharper version of the
 same reason: it says nobody knows whether the commit landed.
+
+### The crash a retry could never have caught
+
+A 60-pass ingestion run died at pass 26 with `read ETIMEDOUT`, thrown from
+`Client._handleErrorEvent`. **No retry, `try`/`catch` or promise handler could have stopped
+it**, because it was not a rejected promise — it was an EventEmitter emitting `error` with
+nothing listening, which throws and takes the process with it. Worth stating plainly: the
+backoff work above does not cover this and never would have.
+
+The cause is an asymmetry in `pg` that is easy to miss:
+
+| client state | `error` listener | safe? |
+|---|---|---|
+| idle in the pool | `pg-pool` attaches `idleListener` | yes — *if the pool itself has an `error` listener* |
+| checked out by `pool.query` | `pg-pool` attaches `client.once("error", …)` | yes |
+| checked out by `pool.connect()` | **nothing** | **no** |
+
+That last row is every `db.transaction()`, because Drizzle takes a client from `connect()`
+and holds it for the callback. And `Client._handleErrorEvent` ends with an *unconditional*
+`this.emit("error", err)` — it fires even after `_errorAllQueries` has already rejected the
+in-flight query, so a short transaction is exposed just as much as a long one.
+
+Three parts to the fix, in `db/index.ts` and `db/client-guard.ts`:
+
+- **`keepAlive: true`** (`pg` defaults it off). The pipeline spends minutes inside one
+  GitHub fetch with no database traffic; a NAT on the path drops the silent socket and the
+  next read fails. Keepalive probes stop the connection going unobserved.
+- **`pool.on("error")`**, which is required rather than tidy — an emit with no listener
+  throws, so a pool without a handler turns any blip on an idle connection into an exit.
+- **A guard listener on every client from `connect()`**, removed on release so nothing
+  accumulates per checkout. It only logs, and that is correct: the error has already been
+  delivered where it matters — `_errorAllQueries` rejects any in-flight query, and
+  `_queryable = false` makes the next statement reject — so the transaction fails as a
+  rejected promise, which the calling code already handles. The event is a second delivery
+  of the same fact, and the only thing to do with it is not die.
+
+Not crashing is the whole fix. Per-skill error handling in `syncSource` and stage isolation
+in the pipeline already survive one failed transaction; what they could not survive was the
+process going away underneath them.
+
+> `verify:db-retry` reproduces the crash before asserting the fix — a bare EventEmitter is
+> emitted at and must throw. Without that first check, the guarded case would pass even if
+> the fixture had stopped reproducing the bug.
 
 ## Commands
 

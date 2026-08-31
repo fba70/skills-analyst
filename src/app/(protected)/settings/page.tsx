@@ -95,7 +95,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "sources" ? listSourceHealth(query) : null,
     tab === "users" ? listPlatformUsers(query) : null,
     tab === "taxonomy" ? taxonomySummary() : null,
-    tab === "taxonomy" ? reviewQueue(20) : null,
+    tab === "taxonomy" ? reviewQueue(query) : null,
     tab === "submit" ? sourceDiversity(12) : null,
     tab === "ingestion" ? staleSlices() : null,
     tab === "ingestion" ? pipelineBacklog() : null,
@@ -105,7 +105,9 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   ]);
 
   // Every tab except Ingestion is a paginated list.
-  const paged = held ?? quarantined ?? sourceHealth ?? users ?? takedownList;
+  // The taxonomy queue joins the paginated lists. It is 1,130 deep, and showing 20 of it
+  // with no total was what made a correct decision look like it had been undone.
+  const paged = held ?? quarantined ?? sourceHealth ?? users ?? takedownList ?? queue;
 
   return (
     <div className="grid min-w-0 gap-6">
@@ -227,9 +229,11 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
         {tab === "taxonomy" && taxonomy && queue ? (
           <TaxonomyPanel
             coverage={taxonomy.counts}
-            queue={queue}
+            queue={queue.items}
+            queueTotal={queue.total}
             totals={taxonomy.totals}
             remaining={taxonomy.remaining}
+            notClassifiable={taxonomy.notClassifiable}
             archetypeThreshold={ARCHETYPE_THRESHOLD}
             maxBatch={MAX_BATCH}
           />

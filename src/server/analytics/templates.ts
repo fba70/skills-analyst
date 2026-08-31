@@ -5,6 +5,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/server/db";
 
 import { EXTRACTOR_VERSION } from "./structure";
+import { REVIEW_FLOOR } from "@/server/taxonomy/vocabulary";
 
 /**
  * Template clustering — how much *distinct structural knowledge* the corpus holds.
@@ -243,6 +244,10 @@ export async function categoryEvidence() {
       join skill_versions sv on sv.id = st.skill_version_id
       join sources src on src.id = sv.source_id
       where c.axis = 'function'
+        -- The same servable-assignment floor the miner applies. This function answers
+        -- "does this category have enough evidence to mine", so counting labels the miner
+        -- will not read would report a gate as cleared that has not been.
+        and (c.confidence >= ${REVIEW_FLOOR} or c.reviewed_at is not null)
         and sk.status = 'indexed'
     )
     select category,
