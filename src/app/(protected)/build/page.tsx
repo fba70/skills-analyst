@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { builderCategories } from "@/server/builder/scaffold";
 import { listDrafts } from "@/server/builder/drafts";
+import { budgetState } from "@/server/billing/spend";
+import { formatMicros } from "@/lib/llm-pricing";
 import { requireSession } from "@/server/dal/session";
 import { labelFor } from "@/server/taxonomy/vocabulary";
 
@@ -23,8 +25,15 @@ export const metadata: Metadata = { title: "Build a skill" };
  * twelve wasted round trips to render a list of buttons.
  */
 export default async function BuildPage() {
-  await requireSession();
-  const [categories, drafts] = await Promise.all([builderCategories(), listDrafts()]);
+  const session = await requireSession();
+  const orgId = session.session.activeOrganizationId ?? null;
+  const [categories, drafts, budget] = await Promise.all([
+    builderCategories(),
+    listDrafts(),
+    // Shown before the author invests in a form they may not be able to submit — the other
+    // half of RC.2's "fail-closed with clear UX".
+    budgetState("builder", orgId),
+  ]);
 
   return (
     <div className="grid min-w-0 max-w-4xl gap-6">
@@ -36,6 +45,29 @@ export default async function BuildPage() {
           analyzers the registry uses before you see it.
         </p>
       </div>
+
+      {budget.usedPercent >= 60 ? (
+        <Card className={budget.remainingMicros <= 0 ? "border-destructive/40" : undefined}>
+          <CardContent className="py-3 text-sm">
+            {budget.remainingMicros <= 0 ? (
+              <>
+                This workspace has used its {formatMicros(budget.capMicros)} monthly AI
+                budget. It resets on{" "}
+                {budget.resetsAt.toLocaleDateString("en-GB", {
+                  day: "numeric",
+                  month: "long",
+                })}
+                . Drafts already written are unaffected.
+              </>
+            ) : (
+              <>
+                {formatMicros(budget.remainingMicros)} of {formatMicros(budget.capMicros)} AI
+                budget left this month.
+              </>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       {drafts.length > 0 ? (
         <div className="grid gap-2">

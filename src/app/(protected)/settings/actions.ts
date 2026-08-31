@@ -21,6 +21,7 @@ import {
 import { db } from "@/server/db";
 import { skills, skillVersions, sources } from "@/server/db/schema";
 import { requireAdmin, setUserBanned, setUserRole } from "@/server/dal/admin";
+import { setSchedule, type ScheduleSettings } from "@/server/settings/schedule";
 import {
   approveRepo,
   rejectRepo,
@@ -680,4 +681,30 @@ async function resolveTakedownTarget(
     skillId: skill.id,
     sourceId: skill.sourceId,
   };
+}
+
+
+/**
+ * Saves the ingest and refresh schedule (Doc 3, R1.7).
+ *
+ * `requireAdmin()` again, not because the page is guarded but because this is a POST
+ * endpoint that decides whether the platform fetches anything at all — the single most
+ * consequential toggle in the product.
+ */
+export async function saveScheduleAction(next: ScheduleSettings): Promise<ActionResult> {
+  try {
+    const actor = await requireAdmin();
+    const saved = await setSchedule(next, actor);
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      message:
+        `Ingestion ${saved.pipeline.enabled ? `on, every ${saved.pipeline.everyHours}h` : "off"}` +
+        ` · archetype refresh ${
+          saved.archetypes.enabled ? `on, every ${saved.archetypes.everyHours}h` : "off"
+        }`,
+    };
+  } catch (error) {
+    return failure(error);
+  }
 }

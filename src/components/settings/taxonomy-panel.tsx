@@ -270,7 +270,7 @@ function CoverageCard({
             {rows.map((row) => (
               <li key={row.value} className="grid gap-1">
                 <div className="flex items-baseline justify-between gap-2 text-sm">
-                  <span className="truncate">{labelFor(axis, row.value)}</span>
+                  <span className="min-w-0 truncate">{labelFor(axis, row.value)}</span>
                   <span className="text-muted-foreground shrink-0 tabular-nums text-xs">
                     {row.confident}
                     {threshold && row.confident >= threshold ? " ✓" : ""}
@@ -369,7 +369,7 @@ function QueueItem({ row }: { row: QueueRow }) {
         </Badge>
         <span className="text-sm font-medium">{labelFor(row.axis, row.value)}</span>
         <span className="text-muted-foreground text-xs">{row.axis}</span>
-        <span className="text-muted-foreground ml-auto truncate text-xs">{row.slug}</span>
+        <span className="text-muted-foreground ml-auto min-w-0 truncate text-xs">{row.slug}</span>
       </div>
 
       {row.summary ? (

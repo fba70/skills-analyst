@@ -9,6 +9,9 @@ import { ListControls, SettingsTabs } from "@/components/settings/list-controls"
 import { QuarantinePanel } from "@/components/settings/quarantine-panel";
 import { ReviewPanel } from "@/components/settings/review-panel";
 import { SourcesPanel } from "@/components/settings/sources-panel";
+import { LoopPanel } from "@/components/settings/loop-panel";
+import { SchedulePanel } from "@/components/settings/schedule-panel";
+import { SpendPanel } from "@/components/settings/spend-panel";
 import { SubmitPanel } from "@/components/settings/submit-panel";
 import { TakedownPanel } from "@/components/settings/takedown-panel";
 import { TaxonomyPanel } from "@/components/settings/taxonomy-panel";
@@ -19,6 +22,9 @@ import { discoveryPolicy } from "@/server/crawl/policy";
 import { crawlCoverage } from "@/server/crawl/run";
 import { sourceDiversity } from "@/server/analytics/templates";
 import { archetypeSummary } from "@/server/analytics/archetype-run";
+import { archetypeActivity, loopEvents, loopMetrics } from "@/server/analytics/loop";
+import { getSchedule, stageDue } from "@/server/settings/schedule";
+import { budgetState, spendBreakdown } from "@/server/billing/spend";
 import { listTakedowns, takedownCounts } from "@/server/compliance/takedown";
 import { pipelineBacklog, recentRuns } from "@/server/pipeline/run";
 import { staleSlices } from "@/server/validation/rescan";
@@ -36,6 +42,17 @@ import { ARCHETYPE_THRESHOLD, reviewQueue, taxonomySummary } from "@/server/taxo
 
 export const metadata: Metadata = { title: "Settings" };
 
+/**
+ * Mirrored from `vercel.ts` for display only.
+ *
+ * The expression itself cannot be imported — `vercel.ts` is build configuration, not
+ * application code — so this is a copy, and it exists because the schedule page would
+ * otherwise be unable to tell an operator the one number that bounds everything on it. If
+ * the cron changes, this changes with it; getting it wrong misstates a ceiling rather than
+ * breaking a schedule.
+ */
+const CRON_EXPRESSION = "0 5,17 * * * (05:00 and 17:00 UTC)";
+
 const TABS = [
   "ingestion",
   "archetypes",
@@ -45,6 +62,9 @@ const TABS = [
   "quarantine",
   "sources",
   "takedowns",
+  "spend",
+  "loop",
+  "schedule",
   "users",
 ] as const;
 type Tab = (typeof TABS)[number];
@@ -88,7 +108,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, archetypeList, takedownList] =
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, archetypeList, takedownList, platformBudget, breakdown, metrics, activity, loopLog, schedule] =
     await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
@@ -102,6 +122,12 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "ingestion" ? recentRuns(8) : null,
     tab === "archetypes" ? archetypeSummary() : null,
     tab === "takedowns" ? listTakedowns(query) : null,
+    tab === "spend" ? budgetState("corpus_taxonomy", null) : null,
+    tab === "spend" ? spendBreakdown() : null,
+    tab === "loop" ? loopMetrics() : null,
+    tab === "loop" ? archetypeActivity() : null,
+    tab === "loop" ? loopEvents() : null,
+    tab === "schedule" ? getSchedule() : null,
   ]);
 
   // Every tab except Ingestion is a paginated list.
@@ -148,6 +174,9 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
           { value: "review", label: `Review (${curation.held})` },
           { value: "quarantine", label: `Quarantine (${curation.quarantined})` },
           { value: "sources", label: "Sources" },
+          { value: "loop", label: "Loop" },
+          { value: "schedule", label: "Schedule" },
+          { value: "spend", label: "Spend" },
           {
             value: "takedowns",
             // The open count is in the label because an unanswered notice has a clock on
@@ -198,6 +227,28 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
             </div>
           </div>
         ) : null}
+        {tab === "schedule" && schedule ? (
+          <SchedulePanel
+            schedule={schedule}
+            // Presence of the secret is what actually gates the route, so it is the honest
+            // thing to report — a schedule in vercel.ts that 401s is not enabled.
+            cronEnabled={Boolean(process.env.CRON_SECRET)}
+            cronExpression={CRON_EXPRESSION}
+            status={{
+              pipeline: await stageDue("pipeline", schedule),
+              archetypes: await stageDue("archetypes", schedule),
+            }}
+          />
+        ) : null}
+
+        {tab === "loop" && metrics && activity && loopLog ? (
+          <LoopPanel metrics={metrics} activity={activity} events={loopLog} />
+        ) : null}
+
+        {tab === "spend" && platformBudget && breakdown ? (
+          <SpendPanel platform={platformBudget} breakdown={breakdown} />
+        ) : null}
+
         {tab === "takedowns" ? (
           <TakedownPanel takedowns={takedownList?.items ?? []} />
         ) : null}

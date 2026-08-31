@@ -42,23 +42,40 @@ function skeletonsMatch(a: unknown, b: Archetype["skeleton"]): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/**
+ * The changelog line, which R6.2's acceptance criterion makes load-bearing.
+ *
+ * "…acceptance/rejection statistics are inputs **and the archetype changelog cites them**."
+ * So a mine that consumed authoring signal has to say so on the row, naming the sections
+ * that moved and by how much. Without that, telemetry becomes an invisible influence on
+ * published guidance — which is the thing R7.1's auditability exists to prevent, and
+ * exactly the shape a poisoning attack would want.
+ */
 function describeChange(
   previous: Archetype["skeleton"] | null,
   next: Archetype["skeleton"],
   minerChanged: boolean,
+  telemetryCitation: string | null,
 ): string {
-  if (!previous) return "first mine";
-
-  const before = new Set(previous.sections.map((s) => s.role));
-  const after = new Set(next.sections.map((s) => s.role));
-  const added = [...after].filter((r) => !before.has(r));
-  const removed = [...before].filter((r) => !after.has(r));
-
   const parts: string[] = [];
-  if (added.length > 0) parts.push(`sections added: ${added.join(", ")}`);
-  if (removed.length > 0) parts.push(`sections dropped: ${removed.join(", ")}`);
-  if (minerChanged) parts.push(`miner ${MINER_VERSION}`);
-  if (parts.length === 0) parts.push("prevalence shifted without changing the section set");
+
+  if (!previous) {
+    parts.push("first mine");
+  } else {
+    const before = new Set(previous.sections.map((s) => s.role));
+    const after = new Set(next.sections.map((s) => s.role));
+    const added = [...after].filter((r) => !before.has(r));
+    const removed = [...before].filter((r) => !after.has(r));
+
+    if (added.length > 0) parts.push(`sections added: ${added.join(", ")}`);
+    if (removed.length > 0) parts.push(`sections dropped: ${removed.join(", ")}`);
+    if (minerChanged) parts.push(`miner ${MINER_VERSION}`);
+    if (parts.length === 0 && !telemetryCitation) {
+      parts.push("prevalence shifted without changing the section set");
+    }
+  }
+
+  if (telemetryCitation) parts.push(telemetryCitation);
   return parts.join("; ");
 }
 
@@ -120,10 +137,14 @@ export async function mineAndStore(
   }
 
   const version = (previous?.version ?? 0) + 1;
+  const { describeTelemetry, categoryTelemetry } = await import("@/server/builder/telemetry");
   const changelog = describeChange(
     (previous?.skeleton as Archetype["skeleton"] | undefined) ?? null,
     archetype.skeleton,
     minerChanged,
+    archetype.telemetry.orgs > 0
+      ? describeTelemetry(await categoryTelemetry(category))
+      : null,
   );
 
   await db.transaction(async (tx) => {
@@ -143,6 +164,8 @@ export async function mineAndStore(
          * from whoever was in it in August — a plausible-looking lie about provenance.
          */
         contributors: archetype.contributors,
+        /** R6.2's inputs, pinned with the skeleton they shaped. */
+        telemetry: archetype.telemetry,
       },
       antiPatterns: archetype.antiPatterns,
       exemplarSkillIds: archetype.exemplars.map((e) => e.skillId),

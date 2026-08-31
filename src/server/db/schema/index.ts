@@ -14,4 +14,7 @@ export * from "./taxonomy";
 export * from "./archetypes";
 export * from "./compliance";
 export * from "./drafts";
+export * from "./telemetry";
+export * from "./spend";
+export * from "./settings";
 export * from "./events";

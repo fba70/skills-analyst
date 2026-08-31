@@ -72,6 +72,30 @@ export function SkeletonCard({ skeleton }: { skeleton: ArchetypeSkeleton }) {
                       {sectionRoleBlurb(section.role)}
                     </p>
                     <LiftBar strong={section.strongPrevalence} weak={section.weakPrevalence} />
+                    {section.telemetry ? (
+                      /*
+                       * Shown beside the lift, never folded into it (R6.2).
+                       *
+                       * The two answer different questions — the bar is what other people
+                       * published, this is what happened when someone used this skeleton —
+                       * and a reader who cannot tell them apart cannot judge either. The
+                       * adjustment is stated as a number because R6.5 bounds it, and a
+                       * bound nobody can see is not a bound anyone can check.
+                       */
+                      <p className="text-muted-foreground mt-1.5 text-xs">
+                        Authors kept it in {section.telemetry.survivalRate}% of{" "}
+                        {section.telemetry.drafts} drafts across {section.telemetry.orgs}{" "}
+                        workspaces
+                        {section.telemetry.delta !== 0 ? (
+                          <>
+                            {" "}
+                            · counted as {section.telemetry.delta > 0 ? "+" : ""}
+                            {section.telemetry.delta} toward inclusion
+                          </>
+                        ) : null}
+                        .
+                      </p>
+                    ) : null}
                   </div>
                 </li>
               ))}

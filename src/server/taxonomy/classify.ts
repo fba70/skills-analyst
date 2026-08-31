@@ -225,6 +225,16 @@ export type ClassifyResult = {
  * one bad skill should stop a batch, and `classifyBatch` decides it should not.
  */
 export async function classifySkill(input: ClassifyInput): Promise<ClassifyResult> {
+  /**
+   * Corpus classification is **platform** spend, not any customer's (RC.2).
+   *
+   * It runs over the public corpus on our own initiative, so it draws on the separate
+   * global budget. Billing it to whichever organisation happened to trigger a run would let
+   * one customer's allowance decide whether the corpus gets analysed.
+   */
+  const { assertWithinBudget, recordUsage } = await import("@/server/billing/spend");
+  await assertWithinBudget("corpus_taxonomy", null);
+
   const { output, usage } = await generateText({
     model: MODEL,
     // `instructions` is v7's name for `system`. Carrying the cache breakpoint means the
@@ -241,6 +251,14 @@ export async function classifySkill(input: ClassifyInput): Promise<ClassifyResul
   });
 
   lastUsage = usage;
+
+  await recordUsage({
+    purpose: "corpus_taxonomy",
+    orgId: null,
+    model: MODEL,
+    usage,
+    subjectType: "skill_categories",
+  });
 
   return {
     // The schema constrains shape, not membership — an id outside the vocabulary is still
