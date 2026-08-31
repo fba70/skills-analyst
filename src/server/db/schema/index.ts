@@ -18,3 +18,4 @@ export * from "./telemetry";
 export * from "./spend";
 export * from "./settings";
 export * from "./events";
+export * from "./tokens";

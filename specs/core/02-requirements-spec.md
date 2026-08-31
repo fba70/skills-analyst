@@ -2,7 +2,7 @@
 
 **Status:** Draft v1.0 · **Date:** 2026-08-27 · **Owner:** TBD
 **Companion documents:** `01-business-concept.md` (vision, incentives, monetization, licensing) · `03-implementation-spec.md` (architecture, platform & interface selection) · `04-source-ingestion-analysis.md` (source taxonomy, registry assessments, license chain, Phase-0 waves)
-**Changelog:** v1.3 — §10b implementation status added, audited against the running system on 2026-08-31 · v1.1 — R1.1/R1.4/R1.6 sharpened from the source analysis (Doc 4) · v1.2 — §7.7 Distribution & Access added (public registry, export, install compatibility); R1.5 and R2.6 acceptance criteria sharpened; §7.3 R3.2 evidence rule and §10 phasing note added — all from the Phase-1 implementation review
+**Changelog:** v1.6 — R8.8 free scope requires a free account (revocable token) as a quota identity, resolving the §11 open question; free scope delivered · v1.5 — R8.8 rate limits specified as admin-tunable settings per scope, not constants · v1.4 — R8.8 MCP interface for external agents added to §7.7, with its free/paid scope split, phasing note, risk row and open questions · v1.3 — §10b implementation status added, audited against the running system on 2026-08-31 · v1.1 — R1.1/R1.4/R1.6 sharpened from the source analysis (Doc 4) · v1.2 — §7.7 Distribution & Access added (public registry, export, install compatibility); R1.5 and R2.6 acceptance criteria sharpened; §7.3 R3.2 evidence rule and §10 phasing note added — all from the Phase-1 implementation review
 
 > Scope of this document: functional and non-functional requirements for the platform. The *why and the money* live in Doc 1; the *how on our stack* lives in Doc 3. Where a requirement here depends on a commercial decision (tiers, gating) it references Doc 1 rather than restating it.
 
@@ -29,7 +29,7 @@ A platform that (a) continuously ingests skills from multiple open sources, (b) 
 ## 4. Non-Goals
 
 - **Not a runtime/execution platform.** We don't run skills; we index, analyze, validate, generate. (Separate initiative; huge sandboxing scope.)
-- **Not a general MCP server registry.** MCP servers are adjacent but a different artifact class with different trust semantics. (v2 candidate.)
+- **Not a general MCP server registry.** MCP servers are adjacent but a different artifact class with different trust semantics. (v2 candidate.) *(v1.4 — note the direction: this rules out **indexing** MCP servers as corpus content. It does not rule out **being** one. R8.8 exposes this registry over MCP, which is a distribution channel for the skills we already validate, not a second artifact class to validate.)*
 - **Not a paid marketplace with billing/licensing enforcement.** We record licenses and surface them; we don't monetize or enforce. (Premature.)
 - **Not a hosting service for private enterprise skill repos** in v1. Design must not preclude it (see P2), but multi-tenant private corpora are out of scope.
 - **No human review board in v1.** Validation is automated + community flagging; a curated "verified" tier with human review is a later layer.
@@ -256,6 +256,71 @@ and R2.6's integrity guarantee is untestable without a delivery path.*
   user; this is that.
 - **R8.6 Bulk / API access to metadata** for the public corpus, rate-limited and
   licence-respecting. Distinct from R3.7, which is the research dataset export.
+- **R8.8 MCP interface for external agents** *(free scope P1; paid scopes P2, gated on RC.1)*:
+  An MCP server exposing the registry to agents directly, so an agent can find a skill,
+  judge whether it is safe, and install it without a human in the loop. This is the
+  agent-native form of R8.6 and of Doc 1 §5's Verdict & Archetype API — the same data under
+  the same rules, over the protocol agents already speak. It is a *caller*, not a second
+  copy of the platform: every tool resolves scope and entitlement through the DAL, so an
+  answer cannot differ between the web app and MCP for the same principal.
+
+  **The split is by scope, never by degradation.** The free scope answers *is this one skill
+  safe, and what is it*; the paid scope answers *give me all of them, continuously*. That is
+  Doc 1 §4.2's verdict rule applied to a protocol — per-skill free always, bulk commercial —
+  and RC.1 makes the free half un-gateable by configuration rather than by policy. A tier
+  that returned a coarser verdict, a delayed verdict, or fewer findings would be the one
+  shape of paywall this platform has committed against.
+
+  | scope | tools | access |
+  |---|---|---|
+  | **Free** *(P1)* | search; skill detail with provenance, licence posture, quality score and capability surface; per-skill validation verdicts with analyzer versions and evidence; the published CC BY-SA archetype snapshot per category; download where licence posture permits | **free account**, revocable token, rate-limited per token |
+  | **Paid** *(P2)* | bulk and high-volume lookup, including verdict lookup **by content hash**; the live archetype feed rather than the snapshot; org-scoped tools (private tenant corpus, org archetypes, install-policy evaluation); authoring tools that call a model; change subscriptions (R8.7) | authenticated, entitlement-checked, metered |
+
+  Authoring tools sit behind RC.2's spend caps on **every** plan, not only the free one — an
+  agent can call a tool in a loop, and a budget that a paying customer can exhaust without a
+  refusal is not a budget.
+
+  - *AC (v1.6):* A client with a **free-account token** can search, read a verdict and
+    download a `mirror_allowed` skill. A request with no token, an unknown token or a revoked
+    one is refused with a 401 that names where to get one. A client calling a bulk or
+    org-scoped tool is refused with an error naming the entitlement it lacks — never a silent
+    empty result, which an agent cannot distinguish from "nothing matched".
+
+    **The token is a quota identity, not a paywall, and the distinction is load-bearing.**
+    R8.1 is untouched: the web pages, the download route and every trust surface stay
+    anonymous, and everything these tools return is readable in a browser without an account.
+    What the token buys is a *name to count against* — an anonymous protocol offers only an
+    IP, which is shared behind a NAT and rotated at will, so a limit built on it bounds
+    accidents and not abuse. RC.1 is satisfied because nothing is gated that a person cannot
+    read for free; what is gated is the machine channel's identity.
+
+    It must not become a session. A leaked session is an account; a leaked MCP token reads
+    the public corpus through a rate-limited endpoint and is revoked without signing anyone
+    out — so it is a separate secret in a separate table with its own revocation.
+  - *AC:* Licence posture and takedown state govern bytes exactly as in R8.2 and R7.5: a
+    `metadata_only` or `unresolved` skill returns its origin link and never content through
+    any tool, and a withdrawn skill returns the withdrawal refusal rather than a not-found.
+  - *AC:* **Corpus text is returned as data, never as instruction.** Skill bodies,
+    descriptions and quarantine reasons reach the calling agent in a labelled field carrying
+    their provenance and verdict. R7.3 hardens our analyzers against the corpus; this is the
+    outbound half of the same problem — handing attacker-controlled text to somebody else's
+    agent — and it is the one requirement here with no equivalent anywhere else in the spec.
+  - *AC:* Entitlement is resolved in the DAL (RC.1) and every call is metered into the same
+    `llm_usage`/audit ledger as any other billable operation (RC.3, R7.1), so an MCP session
+    is reconstructible after the fact.
+  - *AC (v1.5):* **Rate limits are settings, not constants.** A per-scope quota — free and
+    each paid tier — is stored in `platform_settings` and editable by an admin without a
+    deploy, exactly as the ingest schedule is (see the standing *policy becomes data* note).
+    An absent row means the coded defaults; a change writes an audit event naming what moved.
+    A refused call says which limit was hit and when it resets, because an agent that cannot
+    tell "slow down" from "you may not do this" will either retry a hard failure forever or
+    give up on a soft one.
+
+    The reason this cannot wait for the paid scope: the free scope has no principal to
+    attribute a quota to, and an agent calling in a loop is the cheapest way to make an
+    un-metered public endpoint expensive. That is the denial-of-wallet shape `CRON_SECRET`
+    already exists to prevent on the ingest route — the same exposure, on a surface built to
+    be called by machines.
 
 **P2**
 
@@ -297,7 +362,14 @@ and R2.6's integrity guarantee is untestable without a delivery path.*
     guarantee cannot be exercised without an export path.
 - **Phase 2 (intelligence):** Archetype extraction (R3.2–3.4) + Builder (R4.1–4.5).
 - **Phase 3 (assistant + loop):** Assistant (R5.1–5.5) + closing the loop (R6.1–6.5).
-- **Phase 4 (hardening & scale):** Sandbox behavioral testing (R2.10), eval harness (R2.11), composition analysis (R2.13), A/B archetypes (R6.6), verified tier.
+- **Phase 4 (hardening & scale):** Sandbox behavioral testing (R2.10), eval harness (R2.11), composition analysis (R2.13), A/B archetypes (R6.6), verified tier, the paid scopes of R8.8.
+
+*(v1.4)* R8.8's **free** scope is not Phase 4. It reads what R8.1 and R8.2 already serve and
+needs no entitlement machinery, so it can ship as soon as the corpus is worth pointing an
+agent at — and it is the cheapest distribution the registry has, since an agent that can
+query the corpus is one that stops guessing. The **paid** scope waits for RC.1: gating
+without entitlements in the DAL would mean gating in the MCP layer, which is the one place
+it must never live.
 
 Dependency note: R3.2 needs ≥50 validated skills/category → Phase 1 corpus volume gates Phase 2 quality. R6.x needs builder telemetry → Phase 3 by definition.
 
@@ -425,6 +497,7 @@ and five telemetry signals recorded. `pnpm walk:loop` repeats it.
 | R8.5 Corpus statistics | P1 | **done** — landing page and dashboard. |
 | R8.6 Bulk / API metadata access | P1 | **absent** |
 | R8.7 Webhooks | P2 | **absent** |
+| R8.8 MCP interface | P1 free / P2 paid | **free scope done** — six tools over `mcp-handler`, each wrapping the same `src/server/**` function the web pages call; untrusted-content fencing; admin-tunable rate limits (`pnpm verify:rate-limit`, 17 checks) keyed on a free-account token. **Paid scope absent**, and blocked on RC.1: there is nothing to check an entitlement against. |
 
 ### 8. Cross-cutting
 
@@ -470,6 +543,8 @@ The tier structure, pricing, and licensing rationale are defined in Doc 1 §4–
 - **[Engineering]** LLM analyzer cost envelope for R2.3 at full-corpus scale; sampling strategy vs. exhaustive scanning.
 - **[Product]** Should quarantine reasons be fully public, or summarized (to avoid handing attackers a bypass oracle)?
 - **[Design]** How aggressively the assistant should push archetype conformance vs. author freedom (marked-deviation UX, R4.3).
+- **[Engineering]** R8.8 deployment shape — an MCP endpoint inside the app, or a separate deployable that talks to the same DAL? Affects rate-limit identity for the anonymous free scope, which today has no principal to attribute a quota to.
+- ~~**[Product]** Whether the free MCP scope should require a (free) account purely for rate-limit identity.~~ **Resolved (v1.6): yes.** An IP is not an identity — shared behind a NAT, rotated at will — so a limit keyed on it bounds accidents and nothing else. A free account issues a revocable token and costs a would-be user nothing they could not already read anonymously in a browser. R8.1 is unaffected: the pages, the downloads and every trust surface stay open.
 
 ## 12. Risks
 
@@ -481,4 +556,5 @@ The tier structure, pricing, and licensing rationale are defined in Doc 1 §4–
 | Feedback poisoning of archetypes | Corrupted guidance at scale | R6.5 bounded deltas, identity-weighted telemetry, changelog transparency |
 | Upstream API rate limits / source churn | Stale corpus | R1.7 token pooling, webhooks, tombstoning, source-health alerts |
 | Legal exposure from mirroring | Takedowns, liability | R1.6 license gating, R7.5 takedown workflow, metadata-only fallback |
+| Corpus text steering a *consuming* agent (R8.8) | Our distribution channel becomes an injection vector into someone else's agent | Structured tool output that labels skill text as data with its provenance; verdict and capability surface travel with the content, so the caller can gate on them before executing anything |
 

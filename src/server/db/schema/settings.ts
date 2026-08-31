@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
 
 import { user } from "./auth";
 
@@ -37,3 +37,53 @@ export const platformSettings = pgTable("platform_settings", {
   updatedBy: text("updated_by").references(() => user.id, { onDelete: "set null" }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Rate-limit counters (Doc 2 R8.8).
+ *
+ * ## Postgres, not Redis, and the trade is stated rather than hidden
+ *
+ * There is no Redis in this stack, and adding one to count requests would be new
+ * infrastructure to operate for a table with two integer columns. The cost is a round trip
+ * per call and a write on every request — real, and acceptable at a volume where the thing
+ * being protected is *also* a database query. If MCP traffic ever outgrows this, the fix is
+ * a cache in front, not a different schema.
+ *
+ * ## One row per identity per bucket, not one row per window
+ *
+ * A row per window is the obvious design and it grows without bound: every minute mints a
+ * new row for every caller, and nothing ever reads the old ones again. Here the row carries
+ * its own `windowStart` and the upsert resets the count when the window has rolled, so the
+ * table holds one row per caller per bucket for as long as that caller keeps calling.
+ *
+ * The consequence is a **fixed window**, which permits a burst of up to twice the limit
+ * across a boundary — 60 calls at 11:59:59 and 60 more at 12:00:00. A sliding window would
+ * not, at the cost of keeping two counters and interpolating. For a first limit whose job is
+ * stopping a runaway agent loop rather than resisting a determined attacker, the simpler
+ * one is the right trade, and saying so here is better than someone rediscovering it from a
+ * graph.
+ *
+ * ## Why DELETE is permitted here and nowhere else
+ *
+ * `platform_settings` and `llm_usage` withhold DELETE because they are records of decisions
+ * and charges — an application that can erase its own audit trail has none. These are
+ * neither. A counter is ephemeral operational state whose whole purpose expires with its
+ * window, and pruning callers that have gone away is maintenance rather than history loss.
+ * The audit trail for rate limiting lives in `events`, where the *policy* changes are.
+ */
+export const rateLimitBuckets = pgTable(
+  "rate_limit_buckets",
+  {
+    /** Who is being counted — `ip:1.2.3.4` today, a token or org id once RC.1 exists. */
+    bucketKey: text("bucket_key").notNull(),
+    /** What is being counted, e.g. `mcp_free:minute`. Bucket width is part of the scope. */
+    scope: text("scope").notNull(),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    count: integer("count").notNull().default(0),
+  },
+  (t) => [
+    primaryKey({ columns: [t.bucketKey, t.scope] }),
+    /** For pruning callers that stopped calling; never read on the request path. */
+    index("rate_limit_buckets_window_idx").on(t.windowStart),
+  ],
+);

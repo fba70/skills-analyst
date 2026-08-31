@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 
 import {
   capabilitySurfaces,
@@ -38,6 +38,14 @@ export type PageSize = (typeof PAGE_SIZES)[number];
 export const DEFAULT_PAGE_SIZE: PageSize = 10;
 
 export const SORTS = {
+  /**
+   * Only meaningful with a query, and the default whenever there is one.
+   *
+   * With no query there is nothing to be relevant *to*, so this falls back to quality
+   * ordering rather than being hidden — a sort control whose options appear and disappear
+   * as you type is worse than one option that quietly degrades to the obvious answer.
+   */
+  relevance: "Relevance",
   quality: "Quality",
   /**
    * Named for what it measures. Stars belong to the *repository*, so every skill in a repo
@@ -62,6 +70,17 @@ export type SkillFilters = {
   capability?: string;
   /** A category slug from either axis (R3.1) — `function:review`, `domain:marketing`. */
   category?: string;
+  /**
+   * Further `axis:value` category constraints, **ANDed** with `category`.
+   *
+   * The single `category` is what the registry's one sidebar control produces. This exists
+   * because a caller that fills a schema rather than clicking a control — R8.8's MCP client
+   * — can and should ask for both axes at once: "a review skill, in the legal domain" is a
+   * question the taxonomy can answer and the UI has no room to pose.
+   */
+  categories?: string[];
+  /** Floor on the composite quality score (R2.9). */
+  minQuality?: number;
   sort?: SortKey;
   page?: number;
   pageSize?: PageSize;
@@ -142,6 +161,72 @@ function latestSignal(kind: "stars") {
  *     their provenance and their attribution; they are reachable from the canonical
  *     entry, not alongside it (Doc 2 R1.4).
  */
+/**
+ * The parsed query. `websearch_to_tsquery` and not `to_tsquery`, deliberately.
+ *
+ * `to_tsquery` demands operator syntax and **throws** on ordinary prose — a user typing
+ * `code review` gets a syntax error, not a result. `websearch_to_tsquery` accepts what
+ * people actually type, understands quoted phrases, `or`, and a leading `-` for exclusion,
+ * and never raises. `plainto_tsquery` also never raises but silently ANDs everything and
+ * discards quotes, so a phrase search stops being possible.
+ */
+function tsQuery(search: string) {
+  return sql`websearch_to_tsquery('english'::regconfig, ${search})`;
+}
+
+/**
+ * Relevance in 0–1, from whichever of the two indexes has more to say.
+ *
+ * `ts_rank_cd` is unnormalised by default and returns whatever it returns — measured on
+ * this corpus, roughly 0.8 to 2.7 — which cannot be weighed against anything. Flag **32**
+ * applies `rank / (rank + 1)`, bounding it to [0,1) so the weights below mean something.
+ *
+ * `greatest` with the trigram similarity is what makes an exact name win. A skill *called*
+ * `code-review` scores `similarity = 1.0` where `ts_rank_cd` puts it third behind
+ * `code-review-checklist`, which merely contains more matching lexemes. Ranking a skill
+ * named after the query below one that mentions it more often is the precise failure this
+ * whole change exists to fix, so the name match has to be able to win outright.
+ */
+function relevance(search: string) {
+  return sql`greatest(
+    ts_rank_cd(${skills.searchVector}, ${tsQuery(search)}, 32),
+    similarity(${skills.name}, ${search})
+  )`;
+}
+
+/**
+ * R2.9's ranking function: `f(quality, security tier, relevance)`.
+ *
+ * A function rather than an ORDER BY list, because the requirement is a *composite* — a
+ * list of tiebreakers lets the first column decide everything and the rest never speak.
+ *
+ * **The security-tier term is the filter, not a coefficient**, and that is the honest
+ * reading of R2.9 today: `whereFor` admits only `status = 'indexed'` skills, i.e. only
+ * those whose current version passed validation, so nothing below the security floor is in
+ * the result set to be ranked at all. A weighted tier term needs tiers, and the verified
+ * tier is R2.14 / Phase 4. When it lands it gets a coefficient here; inventing one now
+ * would mean ranking on a column that holds the same value for every row.
+ *
+ * Popularity is deliberately **absent** from this function. R2.9 states that popularity
+ * must never outrank a failed or unscored skill, and the simplest way to guarantee that is
+ * for stars to have no vote here — they remain an explicit sort a user can choose.
+ */
+const RELEVANCE_WEIGHT = 1;
+/**
+ * Quality is a quarter of relevance, so it orders *within* a band of similar matches and
+ * cannot lift an unrelated skill over a relevant one. At full weight a perfect-scoring
+ * skill would outrank a near-exact name match; at zero, search would repeat the bug it is
+ * fixing from the other direction and return the worst-written page that mentions the word.
+ */
+const QUALITY_WEIGHT = 0.25;
+
+function searchRank(search: string) {
+  return sql`(
+    ${RELEVANCE_WEIGHT} * ${relevance(search)}
+    + ${QUALITY_WEIGHT} * (coalesce(${skills.qualityScore}, 0)::float / 100)
+  )`;
+}
+
 function whereFor(filters: SkillFilters): SQL | undefined {
   const clauses: Array<SQL | undefined> = [
     eq(skills.status, "indexed"),
@@ -150,11 +235,18 @@ function whereFor(filters: SkillFilters): SQL | undefined {
 
   const search = filters.query?.trim();
   if (search) {
+    /**
+     * Two indexes, ORed, because they fail in opposite directions.
+     *
+     * The tsvector knows words and stemming and finds nothing for a typo; the trigram index
+     * knows characters and has no notion of a word. Postgres can BitmapOr the two GIN
+     * indexes, so this stays index-backed — unlike the `ilike '%q%'` it replaces, where a
+     * leading `%` meant no index could ever be used and every search was a sequential scan.
+     */
     clauses.push(
       or(
-        ilike(skills.name, `%${search}%`),
-        ilike(skills.summary, `%${search}%`),
-        ilike(skills.slug, `%${search}%`),
+        sql`${skills.searchVector} @@ ${tsQuery(search)}`,
+        sql`${skills.name} % ${search}`,
       ),
     );
   }
@@ -170,21 +262,27 @@ function whereFor(filters: SkillFilters): SQL | undefined {
       ),
     );
   }
-  if (filters.category) {
-    // `axis:value`, so one query parameter serves both axes without a second control.
-    // Only *servable* assignments filter: a held low-confidence guess should not silently
-    // decide what a user sees, which is the whole reason the review floor exists.
-    const [axis, ...rest] = filters.category.split(":");
+  // `axis:value`, so one parameter serves both axes without a second control. Multiple
+  // entries are ANDed — each gets its own EXISTS, because a skill carries several
+  // assignments and a single subquery cannot require two of them at once.
+  //
+  // Only *servable* assignments filter: a held low-confidence guess must not silently decide
+  // what a caller sees, which is the whole reason the review floor exists.
+  for (const entry of [filters.category, ...(filters.categories ?? [])]) {
+    if (!entry) continue;
+    const [axis, ...rest] = entry.split(":");
     const value = rest.join(":");
-    if (axis && value) {
-      clauses.push(sql`exists (
-        select 1 from ${skillCategories} sc
-        where sc.skill_id = ${skills.id}
-          and sc.axis = ${axis}
-          and sc.value = ${value}
-          and (sc.confidence >= ${REVIEW_FLOOR} or sc.reviewed_at is not null)
-      )`);
-    }
+    if (!axis || !value) continue;
+    clauses.push(sql`exists (
+      select 1 from ${skillCategories} sc
+      where sc.skill_id = ${skills.id}
+        and sc.axis = ${axis}
+        and sc.value = ${value}
+        and (sc.confidence >= ${REVIEW_FLOOR} or sc.reviewed_at is not null)
+    )`);
+  }
+  if (typeof filters.minQuality === "number") {
+    clauses.push(sql`${skills.qualityScore} >= ${filters.minQuality}`);
   }
   if (filters.capability) {
     // The surface is jsonb: `{ network: { present: true, evidence: [...] }, ... }`.
@@ -198,8 +296,17 @@ function whereFor(filters: SkillFilters): SQL | undefined {
   return and(...clauses.filter(Boolean));
 }
 
-function orderFor(sort: SortKey | undefined) {
-  switch (sort) {
+function orderFor(sort: SortKey | undefined, search: string | undefined) {
+  // Relevance is the default the moment there is something to be relevant to. Someone who
+  // typed a query is asking about that query; answering with "our highest-scoring skills,
+  // some of which match" is the behaviour this replaces.
+  const effective = sort ?? (search ? "relevance" : "quality");
+
+  if (effective === "relevance" && search) {
+    return [desc(searchRank(search)), asc(skills.name)];
+  }
+
+  switch (effective) {
     case "stars":
       /**
        * Interleaved by source, not blocked by it.
@@ -225,6 +332,7 @@ function orderFor(sort: SortKey | undefined) {
       ];
     case "recent":
       return [desc(skillVersions.syncedAt), desc(skills.qualityScore)];
+    // `relevance` with no query lands here, which is the documented fallback.
     default:
       return [desc(skills.qualityScore), asc(skills.name)];
   }
@@ -267,7 +375,7 @@ export async function listSkills(filters: SkillFilters = {}): Promise<SkillListP
       .innerJoin(skillVersions, eq(skillVersions.id, skills.currentVersionId))
       .leftJoin(sources, eq(sources.id, skillVersions.sourceId))
       .where(where)
-      .orderBy(...orderFor(filters.sort))
+      .orderBy(...orderFor(filters.sort, filters.query?.trim() || undefined))
       .limit(pageSize)
       .offset((page - 1) * pageSize);
 

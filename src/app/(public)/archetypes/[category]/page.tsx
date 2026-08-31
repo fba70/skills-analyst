@@ -44,7 +44,7 @@ export default async function ArchetypePage(props: PageProps<"/archetypes/[categ
   if (!archetype) notFound();
 
   return (
-    <div className="grid min-w-0 max-w-4xl gap-6">
+    <div className="grid min-w-0 gap-6">
       <div>
         <Button asChild variant="ghost" size="sm" className="-ml-2">
           <Link href="/archetypes">
@@ -59,7 +59,7 @@ export default async function ArchetypePage(props: PageProps<"/archetypes/[categ
           <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">{archetype.label}</h1>
           <Badge variant="outline">v{archetype.version}</Badge>
         </div>
-        <p className="text-muted-foreground">{archetype.description}</p>
+        <p className="text-muted-foreground max-w-3xl">{archetype.description}</p>
         <p className="text-muted-foreground text-sm">
           Derived from {archetype.distinctStructures.toLocaleString()} distinct structures
           across {archetype.sourceCount} sources ·{" "}

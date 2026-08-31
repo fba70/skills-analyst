@@ -10,6 +10,7 @@ import { QuarantinePanel } from "@/components/settings/quarantine-panel";
 import { ReviewPanel } from "@/components/settings/review-panel";
 import { SourcesPanel } from "@/components/settings/sources-panel";
 import { LoopPanel } from "@/components/settings/loop-panel";
+import { RateLimitPanel } from "@/components/settings/rate-limit-panel";
 import { SchedulePanel } from "@/components/settings/schedule-panel";
 import { SpendPanel } from "@/components/settings/spend-panel";
 import { SubmitPanel } from "@/components/settings/submit-panel";
@@ -23,6 +24,7 @@ import { crawlCoverage } from "@/server/crawl/run";
 import { sourceDiversity } from "@/server/analytics/templates";
 import { archetypeSummary } from "@/server/analytics/archetype-run";
 import { archetypeActivity, loopEvents, loopMetrics } from "@/server/analytics/loop";
+import { getRateLimits } from "@/server/settings/rate-limits";
 import { getSchedule, stageDue } from "@/server/settings/schedule";
 import { budgetState, spendBreakdown } from "@/server/billing/spend";
 import { listTakedowns, takedownCounts } from "@/server/compliance/takedown";
@@ -54,6 +56,7 @@ const TABS = [
   "spend",
   "loop",
   "schedule",
+  "limits",
   "users",
 ] as const;
 type Tab = (typeof TABS)[number];
@@ -97,7 +100,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, archetypeList, takedownList, platformBudget, breakdown, metrics, activity, loopLog, schedule] =
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, archetypeList, takedownList, platformBudget, breakdown, metrics, activity, loopLog, schedule, rateLimits] =
     await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
@@ -117,6 +120,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "loop" ? archetypeActivity() : null,
     tab === "loop" ? loopEvents() : null,
     tab === "schedule" ? getSchedule() : null,
+    tab === "limits" ? getRateLimits() : null,
   ]);
 
   // Every tab except Ingestion is a paginated list.
@@ -165,6 +169,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
           { value: "sources", label: "Sources" },
           { value: "loop", label: "Loop" },
           { value: "schedule", label: "Schedule" },
+          { value: "limits", label: "Rate limits" },
           { value: "spend", label: "Spend" },
           {
             value: "takedowns",
@@ -225,6 +230,9 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
             }}
           />
         ) : null}
+
+        {/* R8.8's limit, as a setting. The panel says which scope is actually in effect. */}
+        {tab === "limits" && rateLimits ? <RateLimitPanel limits={rateLimits} /> : null}
 
         {tab === "loop" && metrics && activity && loopLog ? (
           <LoopPanel metrics={metrics} activity={activity} events={loopLog} />

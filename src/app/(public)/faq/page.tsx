@@ -356,6 +356,112 @@ export default function FaqPage() {
           </p>
         </Q>
       </Section>
+
+      {/*
+        Agent access.
+
+        The rest of this page explains what a badge means to a person reading it. This
+        section explains the same corpus to the thing that will actually consume most of it,
+        and it belongs on the public FAQ rather than behind a login: someone deciding whether
+        to point an agent here needs to know the terms *before* creating an account.
+      */}
+      <Section id="mcp" title="Agent access (MCP)">
+        <Q q="Can an agent query this registry directly?">
+          <p>
+            Yes. There is an MCP server at <code className="text-sm">/api/mcp</code>, so an
+            agent can search the corpus, read a skill&rsquo;s verdicts and provenance, fetch a
+            category archetype and resolve a download — without a person in the loop.
+          </p>
+          <p className="text-muted-foreground">
+            Six tools: <code className="text-xs">search_skills</code>,{" "}
+            <code className="text-xs">get_skill</code>,{" "}
+            <code className="text-xs">download_skill</code>,{" "}
+            <code className="text-xs">list_archetypes</code>,{" "}
+            <code className="text-xs">get_archetype</code> and{" "}
+            <code className="text-xs">corpus_stats</code>. Search takes structured filters —
+            function category, domain, capability, licence posture, minimum quality — rather
+            than one free-text box, because an agent fills a schema better than it phrases a
+            query.
+          </p>
+        </Q>
+
+        <Q q="What does it cost, and why do I need an account?">
+          <p>
+            It is <strong>free</strong>. The account is not a paywall — it is a name to count
+            requests against.
+          </p>
+          <p className="text-muted-foreground">
+            An anonymous caller offers only an IP address, which is shared by everyone behind
+            one office router and changed by anyone who wants to. A rate limit built on that
+            bounds accidents and nothing else. A free account issues a revocable token, so the
+            limit applies to <em>you</em> rather than to a network. Nothing behind the token is
+            hidden from the web: every verdict, licence and provenance record it returns is on
+            a public page that needs no account at all.
+          </p>
+          <p className="text-muted-foreground">
+            Create one in <strong>Account → MCP access</strong>. The token is shown once,
+            because only a hash of it is stored; revoking takes effect on the next request.
+          </p>
+        </Q>
+
+        <Q q="What is paid, then?">
+          <p>
+            The split is by <strong>scope</strong>, never by quality of answer. Looking up one
+            skill is free forever; asking for all of them, continuously, is the commercial
+            part.
+          </p>
+          <ul className="grid gap-1.5">
+            <li className="text-sm">
+              <strong>Free</strong> — search, skill detail with verdicts and provenance,
+              archetype snapshots, downloads where the licence permits.
+            </li>
+            <li className="text-muted-foreground text-sm">
+              <strong>Paid</strong> — bulk and by-content-hash lookup, the live archetype feed
+              rather than the published snapshot, workspace-private corpora, and tools that
+              call a model. Not built yet.
+            </li>
+          </ul>
+          <p className="text-muted-foreground">
+            A tier that returned a coarser verdict, a delayed one, or fewer findings is the one
+            shape of paywall this platform has committed against. Security information about a
+            public skill is never the thing being sold.
+          </p>
+        </Q>
+
+        <Q q="Is it safe to let an agent read skills from here?">
+          <p>
+            Safer than fetching them yourself, and the tools are built so you can check rather
+            than trust.
+          </p>
+          <p className="text-muted-foreground">
+            A skill is a document written by a stranger for the express purpose of steering an
+            agent, so every tool returns corpus text inside a labelled{" "}
+            <code className="text-xs">&lt;untrusted-corpus-content&gt;</code> fence carrying its
+            source, its validation status and its quality score — data to be evaluated, never
+            instructions to follow. The fence is closed with a one-time random marker, so a
+            skill cannot write its own closing tag and escape it.
+          </p>
+          <p className="text-muted-foreground">
+            Alongside it you get the verdicts and the capability surface — whether the bundled
+            code touches the network, the filesystem, a shell or credentials — which is what an
+            install decision should actually be made on.
+          </p>
+        </Q>
+
+        <Q q="What happens when I hit the rate limit?">
+          <p>
+            You get HTTP <code className="text-sm">429</code> with a{" "}
+            <code className="text-sm">Retry-After</code> header, and a message naming which
+            window you hit and the exact time it lifts.
+          </p>
+          <p className="text-muted-foreground">
+            It is stated that way on purpose. An agent that cannot tell a throttle from a
+            permission failure will either retry a hard failure for ever or abandon a request
+            that would have worked a minute later, and both look like our fault from the
+            outside.
+          </p>
+        </Q>
+      </Section>
     </div>
   );
 }

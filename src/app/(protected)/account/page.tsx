@@ -8,8 +8,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { McpTokens } from "@/components/account/mcp-tokens";
 import { getActiveOrganization } from "@/server/dal/organizations";
 import { requireSession } from "@/server/dal/session";
+import { listTokens } from "@/server/mcp/tokens";
 
 export const metadata: Metadata = { title: "Account" };
 
@@ -20,7 +22,7 @@ function titleCase(value: string | undefined): string {
 
 export default async function AccountPage() {
   const session = await requireSession();
-  const organization = await getActiveOrganization();
+  const [organization, tokens] = await Promise.all([getActiveOrganization(), listTokens()]);
 
   const rows: Array<{ label: string; value: string }> = [
     { label: "Name", value: session.user.name },
@@ -31,10 +33,10 @@ export default async function AccountPage() {
   ];
 
   return (
-    <div className="grid w-full max-w-2xl gap-6">
+    <div className="grid w-full min-w-0 gap-6">
       <div className="grid gap-2">
         <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Account</h1>
-        <p className="text-muted-foreground">Your profile and workspace.</p>
+        <p className="text-muted-foreground max-w-3xl">Your profile and workspace.</p>
       </div>
 
       <Card>
@@ -60,6 +62,16 @@ export default async function AccountPage() {
           </dl>
         </CardContent>
       </Card>
+
+      {/*
+        MCP access lives on the account page rather than in Settings, because it is a
+        workspace credential and not a platform control: any member may mint one, and
+        Settings is admin-only three times over.
+      */}
+      <McpTokens
+        tokens={tokens}
+        origin={process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}
+      />
     </div>
   );
 }
