@@ -3,6 +3,8 @@ import { ArrowRight, ScanSearch, ShieldCheck, Sparkles } from "lucide-react";
 
 import { Logo, Wordmark } from "@/components/brand";
 import { CorpusStats } from "@/components/landing/corpus-stats";
+import { Principles } from "@/components/landing/principles";
+import { TheLoop } from "@/components/landing/the-loop";
 import { ThemeToggleButton } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { getSession } from "@/server/dal/session";
@@ -48,9 +50,23 @@ export default async function HomePage() {
           <Wordmark nameClassName="hidden min-[360px]:inline" />
         </Link>
         <nav className="flex shrink-0 items-center gap-1 sm:gap-2">
-          {/* The registry is public (R8.1), so it is offered before the account is. */}
+          {/*
+            The same three destinations the anonymous shell in `(public)/layout.tsx`
+            offers, in the same order. All three are public (R8.1), and the home page was
+            the one surface that hid two of them — which made the FAQ and the archetypes
+            read as parts of a signed-in area they have never been in.
+          */}
           <Button asChild variant="ghost" className="hidden sm:inline-flex">
-            <Link href="/skills">Browse skills</Link>
+            <Link href="/skills">Registry</Link>
+          </Button>
+          <Button asChild variant="ghost" className="hidden md:inline-flex">
+            <Link href="/archetypes">Archetypes</Link>
+          </Button>
+          {/* FAQ never steps aside. It is three characters wide, and it is the one
+              destination that explains what every badge and number on this page means —
+              a reader on a phone needs it more than a wide-screen one, not less. */}
+          <Button asChild variant="ghost">
+            <Link href="/faq">FAQ</Link>
           </Button>
           <ThemeToggleButton />
           {session ? (
@@ -111,6 +127,17 @@ export default async function HomePage() {
           </div>
         </section>
 
+        {/*
+          Evidence second, immediately under the claim it backs.
+
+          The hero says the corpus is validated and worth building from. The numbers are
+          what makes that checkable, and a reader who has to scroll past three explanations
+          to reach them has been asked to take the claim on faith first. The terms they
+          contain — quarantined, licence posture, archetype — each carry a link to the FAQ
+          for the reader who wants the definition rather than the number.
+        */}
+        <CorpusStats stats={stats} />
+
         {/* Subgrid is what keeps the three columns honest: icon, heading and body each
             get their own shared row, so a heading that wraps to two lines cannot push
             its own body text out of line with the others. */}
@@ -128,14 +155,17 @@ export default async function HomePage() {
         </section>
 
         {/*
-          Evidence last, and that ordering is deliberate.
+          The mechanism, then the promises, then the evidence.
 
-          The hero makes a claim and the pillars explain the mechanism; a reader who is
-          still on the page by this point is the one asking whether any of it is real. Put
-          the numbers above the pillars and they arrive before the reader knows what a
-          "quarantined skill" is or why licence mix matters.
+          The pillars above are three claims in one line each; a reader who wants to know
+          what the thing *does* has to be told the sequence, and a reader deciding whether
+          to trust it has to be told the rules before being shown numbers they have no
+          frame for.
         */}
-        <CorpusStats stats={stats} />
+        <TheLoop />
+
+        <Principles />
+
       </main>
 
       <footer className="text-muted-foreground px-4 py-6 text-sm sm:px-6">

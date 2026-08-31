@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { LicenseBadge } from "@/components/registry/license-badge";
+import { faqHref } from "@/lib/faq";
 import type { PlatformStats } from "@/server/dal/stats";
 
 /**
@@ -28,8 +29,10 @@ import type { PlatformStats } from "@/server/dal/stats";
  *
  * `/dashboard` renders the same `platformStats()` in Cards, which is right for an operator
  * surface sitting inside application chrome. Here the register is a marketing page: larger
- * quiet numbers, no card borders, no icons. Sharing the query and not the components is the
- * correct split — the facts must not diverge, the framing should.
+ * numbers, no icons, and blocks that are tinted rather than framed — a full Card border
+ * around each figure would put five boxes on the front door competing with the two
+ * distributions below it. Sharing the query and not the components is the correct split:
+ * the facts must not diverge, the framing should.
  */
 export function CorpusStats({ stats }: { stats: PlatformStats }) {
   const withinTarget = stats.hoursSinceSync !== null && stats.hoursSinceSync < 24;
@@ -47,7 +50,7 @@ export function CorpusStats({ stats }: { stats: PlatformStats }) {
         </p>
       </div>
 
-      <dl className="grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-3 lg:grid-cols-5">
+      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-5">
         <Figure
           value={stats.indexed.toLocaleString()}
           label="Skills indexed"
@@ -121,38 +124,41 @@ export function CorpusStats({ stats }: { stats: PlatformStats }) {
 
       {/*
         The way in, next to the number that earns it. A count of mined archetypes with no
-        route to reading one is the state this whole section was built to stop being in.
+        route to understanding one is the state this section was built to stop being in.
+
+        It points at the FAQ rather than straight at `/archetypes`. Both are public, but the
+        figure above is the one a first-time reader has least frame for — "12 of 13, from
+        2,223 distinct structures" needs *what an archetype is* before it needs the list of
+        them. The header carries the direct link for anyone who already knows.
       */}
       <p className="text-sm">
         <Link
-          href="/archetypes"
+          href={faqHref("archetypes")}
           className="hover:text-foreground underline underline-offset-4"
         >
-          Read what the corpus says a good skill looks like
+          FAQ: what an archetype is, and how one is mined
         </Link>
       </p>
 
-      {stats.variants > 0 || stats.tombstoned > 0 ? (
-        <p className="text-muted-foreground text-xs">
-          {stats.variants > 0 ? (
-            <>
-              {stats.variants.toLocaleString()} near-duplicates are folded under a canonical
-              entry and stay reachable from it
-            </>
-          ) : null}
-          {stats.variants > 0 && stats.tombstoned > 0 ? "; " : null}
-          {stats.tombstoned > 0 ? (
-            <>
-              {stats.tombstoned.toLocaleString()} withdrawn upstream, metadata retained
-            </>
-          ) : null}
-          .
-        </p>
-      ) : null}
     </section>
   );
 }
 
+/**
+ * One figure, as a block rather than as free-floating text.
+ *
+ * Five numbers side by side with nothing between them read as one run-on sentence: the eye
+ * has to use the gap to work out where a value ends and the next label begins, and the gap
+ * is the weakest separator there is. A tinted ground gives each one an edge to sit inside.
+ *
+ * The accent rule is on the **bottom** only, under the detail line, so it closes the block
+ * instead of decorating it. A full border would make five equal boxes competing with the
+ * distributions below; one weighted edge separates without adding a fifth frame to the page.
+ *
+ * `content-start` matters: the grid stretches every cell to the tallest, and without it a
+ * two-line label would push its own value away from the top of the card while its
+ * neighbours stayed put.
+ */
 function Figure({
   value,
   label,
@@ -163,7 +169,7 @@ function Figure({
   detail: string;
 }) {
   return (
-    <div className="grid gap-1">
+    <div className="bg-muted/40 border-primary/40 grid content-start gap-1 rounded-lg border-b-2 p-4">
       <dd className="text-2xl font-semibold tracking-tight tabular-nums sm:text-3xl">
         {value}
       </dd>

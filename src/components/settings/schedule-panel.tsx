@@ -26,14 +26,9 @@ import { Label } from "@/components/ui/label";
  */
 export function SchedulePanel({
   schedule,
-  cronEnabled,
-  cronExpression,
   status,
 }: {
   schedule: ScheduleSettings;
-  /** Presence of `CRON_SECRET` — the route fails closed without it, so this gates everything. */
-  cronEnabled: boolean;
-  cronExpression: string;
   status: { pipeline: StageDue; archetypes: StageDue };
 }) {
   const [draft, setDraft] = useState<ScheduleSettings>(schedule);
@@ -53,31 +48,6 @@ export function SchedulePanel({
 
   return (
     <div className="grid gap-4">
-      {!cronEnabled ? (
-        <Card className="border-destructive/40">
-          <CardContent className="py-3 text-sm">
-            <strong>CRON_SECRET is not set</strong>, so the scheduled route refuses every
-            call and nothing below runs on a timer. The route fails closed on a missing
-            secret on purpose — the alternative is an open endpoint that makes us fetch
-            hundreds of repositories on demand.
-          </CardContent>
-        </Card>
-      ) : null}
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">How this works</CardTitle>
-          <CardDescription>
-            The scheduler ticks on a fixed expression —{" "}
-            <code className="text-xs">{cronExpression}</code> — set in{" "}
-            <code className="text-xs">vercel.ts</code>. These settings decide whether a tick
-            does anything. <strong>They throttle; they cannot accelerate.</strong> Asking for
-            a shorter interval than the cron ticks changes nothing until the expression
-            itself changes.
-          </CardDescription>
-        </CardHeader>
-      </Card>
-
       <StageCard
         title="Ingestion pipeline"
         description="Sync, validate, fingerprint, dedup signatures, cluster. Free — no model calls, so this is safe to leave switched on."
