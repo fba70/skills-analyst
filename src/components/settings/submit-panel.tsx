@@ -278,7 +278,7 @@ function DiversityCard({
               return (
                 <li key={row.source} className="grid gap-1">
                   <div className="flex items-baseline justify-between gap-2 text-sm">
-                    <span className="truncate">{row.source}</span>
+                    <span className="min-w-0 truncate">{row.source}</span>
                     <span
                       className={`shrink-0 tabular-nums text-xs ${
                         low ? "text-destructive font-medium" : "text-muted-foreground"

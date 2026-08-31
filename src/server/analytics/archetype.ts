@@ -72,8 +72,12 @@ import { REVIEW_FLOOR } from "@/server/taxonomy/vocabulary";
  * 2.1.0 — the mine records **who it was derived from** (R3.4). Attribution is evidence,
  *   so it is pinned into the row beside the skeleton rather than recomputed at render
  *   time against a corpus that has moved on since the numbers were taken.
+ * 2.2.0 — creation telemetry (R6.2) is an input. Section inclusion is decided on
+ *   `lift + delta`, where the delta is bounded by R6.5 and null until a category clears the
+ *   distinct-organisation floor. The loop closes here: what the corpus published and what
+ *   authors kept are now both read, and kept separable so a reader can tell them apart.
  */
-export const MINER_VERSION = "2.1.0";
+export const MINER_VERSION = "2.2.0";
 
 /** R3.2's gate, in the terms that actually resist a monoculture. */
 export const MIN_STRUCTURES = 50;
@@ -234,6 +238,16 @@ async function representatives(category: string): Promise<Representative[]> {
   });
 }
 
+/** What authoring taught us about a section (R6.2). Null until the bounds are cleared. */
+export type SectionTelemetryRef = {
+  drafts: number;
+  orgs: number;
+  survivalRate: number;
+  firstPassRate: number;
+  /** The bounded adjustment applied to `lift` when deciding inclusion (R6.5). */
+  delta: number;
+};
+
 export type SkeletonSection = {
   role: SectionRole;
   /** Percent of strong-band structures carrying it. */
@@ -245,6 +259,15 @@ export type SkeletonSection = {
   typicalPosition: number;
   /** Present in nearly every strong example — treat as expected rather than optional. */
   required: boolean;
+  /**
+   * Authoring signal, kept **beside** the lift rather than folded into it (R6.2).
+   *
+   * The two measure different things — lift is what other people published, survival is
+   * what happened when someone used this skeleton — and averaging them would produce a
+   * number that answers neither question. Inclusion uses `lift + delta`; the page can show
+   * both and say which is which.
+   */
+  telemetry: SectionTelemetryRef | null;
 };
 
 export type SkeletonTrait = {
@@ -290,6 +313,12 @@ export type Archetype = {
     };
   };
   antiPatterns: SkeletonTrait[];
+  /** The authoring signal this mine consumed, for the changelog and the page (R6.2). */
+  telemetry: {
+    drafts: number;
+    orgs: number;
+    withheldReason: string | null;
+  };
   exemplars: Array<{ skillId: string; slug: string; name: string; qualityScore: number }>;
   /**
    * Every source behind the numbers above, best-represented first (R3.4).
@@ -410,6 +439,18 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
   const roleSet = new Set<SectionRole>();
   for (const rep of reps) for (const role of rep.roles) roleSet.add(role);
 
+  /**
+   * Creation telemetry (R6.2), if the category has cleared R6.5's bounds.
+   *
+   * Read once and applied per section below. `categoryTelemetry` has already deduplicated
+   * per identity, rate-limited per organisation, trimmed the outliers and clamped the
+   * delta — this function only has to decide what to do with a number it can trust to be
+   * small.
+   */
+  const { categoryTelemetry } = await import("@/server/builder/telemetry");
+  const telemetry = await categoryTelemetry(category);
+  const signalFor = new Map(telemetry.sections.map((entry) => [entry.role, entry]));
+
   const sections: SkeletonSection[] = [];
   for (const role of roleSet) {
     const strongCount = strong.filter((r) => r.roles.includes(role)).length;
@@ -418,9 +459,22 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
     const weakPrevalence = pct(weakCount, weak.length);
     const lift = strongPrevalence - weakPrevalence;
 
+    const signal = signalFor.get(role) ?? null;
+
+    /**
+     * Inclusion is decided on lift **plus** the bounded authoring delta.
+     *
+     * This is the loop closing: a section the corpus is lukewarm about but that authors
+     * consistently keep can cross the threshold, and one the corpus likes but authors
+     * consistently delete can fall below it. `MAX_LIFT_DELTA` is five points, so telemetry
+     * can move a borderline section and can never invent or erase one outright — which is
+     * exactly the bounded-delta-per-cycle R6.5 asks for.
+     */
+    const effectiveLift = lift + (signal?.delta ?? 0);
+
     // The two rules that keep this prescriptive: it has to be common among good skills,
     // and it has to *distinguish* them. Either alone produces noise dressed as advice.
-    if (strongPrevalence < MIN_STRONG_PREVALENCE || lift < MIN_LIFT) continue;
+    if (strongPrevalence < MIN_STRONG_PREVALENCE || effectiveLift < MIN_LIFT) continue;
 
     const positions = strong
       .map((r) => r.roleOrder.indexOf(role))
@@ -433,6 +487,7 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
       lift,
       typicalPosition: median(positions),
       required: strongPrevalence >= 80,
+      telemetry: signal,
     });
   }
 
@@ -519,6 +574,11 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
       },
     },
     antiPatterns,
+    telemetry: {
+      drafts: telemetry.drafts,
+      orgs: telemetry.orgs,
+      withheldReason: telemetry.withheldReason,
+    },
     exemplars,
     contributors: contributorsOf(reps),
   };

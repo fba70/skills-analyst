@@ -4,7 +4,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 
 import { events, skillDrafts } from "@/server/db/schema";
 import { db } from "@/server/db";
-import { withOrgScope } from "@/server/dal/scope";
+import { withExplicitOrgScope, withOrgScope } from "@/server/dal/scope";
 import { SEVERITY_WEIGHTS, substanceFactor } from "@/lib/quality";
 import { labelFor } from "@/server/taxonomy/vocabulary";
 
@@ -28,6 +28,7 @@ export type DraftSummary = {
   status: string;
   archetypeCategory: string;
   domainCategory: string | null;
+  publishedSkillId: string | null;
   qualityScore: number | null;
   updatedAt: Date;
 };
@@ -38,11 +39,15 @@ export type DraftDetail = DraftSummary & {
   purpose: string;
   context: string | null;
   sectionInputs: Record<string, string>;
+  scaffoldSections: string[];
   body: string | null;
   frontmatter: Record<string, unknown>;
   model: string | null;
   failureReason: string | null;
   validation: DraftValidation | null;
+  /** Set once the draft has become a skill (R6.1). Never cleared. */
+  publishedSkillId: string | null;
+  publishedAt: Date | null;
 };
 
 export type DraftValidation = {
@@ -62,6 +67,7 @@ export async function listDrafts(limit = 10): Promise<DraftSummary[]> {
         status: skillDrafts.status,
         archetypeCategory: skillDrafts.archetypeCategory,
         domainCategory: skillDrafts.domainCategory,
+        publishedSkillId: skillDrafts.publishedSkillId,
         qualityScore: skillDrafts.qualityScore,
         updatedAt: skillDrafts.updatedAt,
       })
@@ -71,8 +77,19 @@ export async function listDrafts(limit = 10): Promise<DraftSummary[]> {
   );
 }
 
-export async function getDraft(id: string): Promise<DraftDetail | null> {
-  return withOrgScope(async (tx) => {
+/**
+ * `orgId` scopes explicitly instead of resolving a session.
+ *
+ * For callers that already know the organisation — publishing is handed one — and for
+ * background work with no session at all. `withOrgScope` would re-derive what the caller
+ * already has, and re-deriving it needs `next/navigation`, which is why the alternative
+ * exists at all.
+ */
+export async function getDraft(id: string, orgId?: string): Promise<DraftDetail | null> {
+  const scope = orgId
+    ? <T,>(fn: Parameters<typeof withOrgScope<T>>[0]) => withExplicitOrgScope(orgId, fn)
+    : withOrgScope;
+  return scope(async (tx) => {
     const [row] = await tx.select().from(skillDrafts).where(eq(skillDrafts.id, id)).limit(1);
     if (!row) return null;
     return {
@@ -88,11 +105,14 @@ export async function getDraft(id: string): Promise<DraftDetail | null> {
       purpose: row.purpose,
       context: row.context,
       sectionInputs: (row.sectionInputs ?? {}) as Record<string, string>,
+      scaffoldSections: (row.scaffoldSections ?? []) as string[],
       body: row.body,
       frontmatter: (row.frontmatter ?? {}) as Record<string, unknown>,
       model: row.model,
       failureReason: row.failureReason,
       validation: (row.validation ?? null) as DraftValidation | null,
+      publishedSkillId: row.publishedSkillId,
+      publishedAt: row.publishedAt,
       qualityScore: row.qualityScore,
       updatedAt: row.updatedAt,
     };
@@ -108,6 +128,8 @@ export type CreateDraftInput = {
   domain: string | null;
   dialect: string;
   sectionInputs: Record<string, string>;
+  /** Roles the scaffold proposed, so R6.2 can later ask which survived. */
+  scaffoldSections: string[];
 };
 
 /**
@@ -122,13 +144,20 @@ export async function createDraft(input: CreateDraftInput): Promise<string> {
   const session = await requireSession();
   const orgId = session.session.activeOrganizationId;
   if (!orgId) throw new Error("No active workspace.");
+  return applyCreate(input, orgId, session.user.id);
+}
 
-  return withOrgScope(async (tx) => {
+async function applyCreate(
+  input: CreateDraftInput,
+  orgId: string,
+  userId: string,
+): Promise<string> {
+  return withExplicitOrgScope(orgId, async (tx) => {
     const [row] = await tx
       .insert(skillDrafts)
       .values({
         orgId,
-        createdBy: session.user.id,
+        createdBy: userId,
         name: input.name.trim(),
         slug: slugify(input.name),
         purpose: input.purpose.trim(),
@@ -137,6 +166,7 @@ export async function createDraft(input: CreateDraftInput): Promise<string> {
         domainCategory: input.domain,
         dialect: input.dialect as typeof skillDrafts.dialect.enumValues[number],
         sectionInputs: input.sectionInputs,
+        scaffoldSections: input.scaffoldSections,
         status: "collecting",
       })
       .returning({ id: skillDrafts.id });
@@ -166,7 +196,29 @@ export type GenerateResult =
  * makes "the assistant refuses malicious authoring" a claim anyone can check.
  */
 export async function generateForDraft(draftId: string): Promise<GenerateResult> {
-  const draft = await getDraft(draftId);
+  // Resolved here rather than passed in: the caller is a server action that already has a
+  // session, and the budget must be charged to the workspace that owns the draft (RC.2).
+  const { requireSession } = await import("@/server/dal/session");
+  const session = await requireSession();
+  const orgId = session.session.activeOrganizationId;
+  if (!orgId) return { ok: false, message: "No active workspace." };
+  return applyGenerate(draftId, orgId);
+}
+
+/**
+ * Test seams, matching `publishForTest` and `upholdForTest` elsewhere.
+ *
+ * They skip `requireSession()` and nothing else — the rows written, the model called and
+ * the budget charged are identical. `requireSession` reaches `next/navigation`, which
+ * cannot load in a plain node process, and that is the only reason these exist.
+ */
+export const createForTest = (input: CreateDraftInput, orgId: string, userId: string) =>
+  applyCreate(input, orgId, userId);
+export const generateForTest = (draftId: string, orgId: string) =>
+  applyGenerate(draftId, orgId);
+
+async function applyGenerate(draftId: string, orgId: string): Promise<GenerateResult> {
+  const draft = await getDraft(draftId, orgId);
   if (!draft) return { ok: false, message: "Draft not found." };
   if (draft.status === "generating") {
     return { ok: false, message: "This draft is already being written." };
@@ -175,7 +227,7 @@ export async function generateForDraft(draftId: string): Promise<GenerateResult>
   const scaffold = await buildScaffold(draft.archetypeCategory);
   if (!scaffold) return { ok: false, message: "Unknown category." };
 
-  await withOrgScope(async (tx) => {
+  await withExplicitOrgScope(orgId, async (tx) => {
     await tx
       .update(skillDrafts)
       .set({ status: "generating", failureReason: null, updatedAt: new Date() })
@@ -184,6 +236,7 @@ export async function generateForDraft(draftId: string): Promise<GenerateResult>
 
   try {
     const generated = await generateDraft({
+      orgId,
       scaffold,
       purpose: draft.purpose,
       context: draft.context,
@@ -193,7 +246,7 @@ export async function generateForDraft(draftId: string): Promise<GenerateResult>
     });
 
     if (generated.refusal) {
-      await withOrgScope(async (tx) => {
+      await withExplicitOrgScope(orgId, async (tx) => {
         await tx
           .update(skillDrafts)
           .set({ status: "failed", failureReason: generated.refusal, updatedAt: new Date() })
@@ -218,7 +271,7 @@ export async function generateForDraft(draftId: string): Promise<GenerateResult>
       dialect: draft.dialect,
     });
 
-    await withOrgScope(async (tx) => {
+    await withExplicitOrgScope(orgId, async (tx) => {
       await tx
         .update(skillDrafts)
         .set({
@@ -253,8 +306,28 @@ export async function generateForDraft(draftId: string): Promise<GenerateResult>
 
     return { ok: true, refused: false, draftId };
   } catch (error) {
+    /**
+     * A budget refusal is not a failure of the draft (RC.2).
+     *
+     * The inputs are fine and will work next month or after the cap is raised, so the draft
+     * stays `collecting` rather than being marked `failed` — a red "not written" card with
+     * a billing message underneath would tell the author to fix something that is not
+     * broken. The message is passed through verbatim because it already carries the cap,
+     * the spend and the reset date, which is the clear UX the requirement asks for.
+     */
+    const { BudgetExceededError } = await import("@/server/billing/spend");
+    if (error instanceof BudgetExceededError) {
+      await withExplicitOrgScope(orgId, async (tx) => {
+        await tx
+          .update(skillDrafts)
+          .set({ status: "collecting", failureReason: error.message, updatedAt: new Date() })
+          .where(eq(skillDrafts.id, draftId));
+      });
+      return { ok: false, message: error.message };
+    }
+
     const message = (error as Error).message.slice(0, 300);
-    await withOrgScope(async (tx) => {
+    await withExplicitOrgScope(orgId, async (tx) => {
       await tx
         .update(skillDrafts)
         .set({ status: "failed", failureReason: message, updatedAt: new Date() })

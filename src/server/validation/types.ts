@@ -59,6 +59,14 @@ export type AnalyzerInput = {
   resolvedName: string | null;
   resolvedSummary: string | null;
   /**
+   * Whose content this is, or null for the public corpus.
+   *
+   * Only the costed analyzers use it, and only to decide which budget a call is billed to
+   * (RC.2): an organisation's own skill counts against their monthly cap, public-corpus
+   * work counts against the platform's. Rule-based analyzers ignore it entirely.
+   */
+  orgId?: string | null;
+  /**
    * Why the frontmatter block failed to parse, if it did.
    *
    * "Absent" and "malformed" are different faults with different fixes, and collapsing

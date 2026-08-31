@@ -97,7 +97,7 @@ function RepoCard({ repo }: { repo: HeldRepo }) {
           <ul className="text-muted-foreground grid gap-0.5 font-mono text-xs">
             {repo.samplePaths.slice(0, 4).map((path) => (
               /* Plain text: these paths come from a third party. */
-              <li key={path} className="truncate">
+              <li key={path} className="min-w-0 truncate">
                 {path}
               </li>
             ))}

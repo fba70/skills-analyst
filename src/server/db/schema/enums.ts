@@ -13,6 +13,16 @@ export const sourceKind = pgEnum("source_kind", [
   "awesome_list",
   "clawhub",
   "manual_submission",
+  /**
+   * Authored here (R6.1).
+   *
+   * A published draft still needs a source, because `skill_versions.source_id` is NOT NULL
+   * and R6.1 forbids a privileged path — so it gets a real one, per organisation, and the
+   * kind says truthfully where the skill came from rather than pretending it was submitted.
+   * The row is `enabled = false` and org-scoped, so the scheduler never offers it and public
+   * corpus statistics never count it.
+   */
+  "builder",
 ]);
 
 export const sourceHealth = pgEnum("source_health", [
@@ -106,6 +116,25 @@ export const takedownStatus = pgEnum("takedown_status", [
 export const takedownScope = pgEnum("takedown_scope", ["skill", "source"]);
 
 /**
+ * What an LLM call was for (Doc 2 RC.2, RC.3).
+ *
+ * The split matters because the budgets do. RC.2 asks for **per-org monthly caps** on the
+ * assistant and validation, and **a separate global platform budget** for corpus-analyzer
+ * spend — so a taxonomy run over the public corpus must not consume a customer's allowance,
+ * and a customer authoring skills must not exhaust the platform's analysis budget.
+ */
+export const llmPurpose = pgEnum("llm_purpose", [
+  /** The builder writing a draft (R4.1/R5.1). Org-scoped, counts against the org cap. */
+  "builder",
+  /** R2.3 description-consistency on an org's own skill. Org-scoped. */
+  "validation",
+  /** Taxonomy classification over the public corpus. Platform budget. */
+  "corpus_taxonomy",
+  /** R2.3 over the public corpus. Platform budget. */
+  "corpus_validation",
+]);
+
+/**
  * Where a builder draft is in its life (Doc 2 R4.x).
  *
  * `generating` is a real state, not a spinner. The model call takes seconds and happens in
@@ -145,6 +174,15 @@ export const licenseSource = pgEnum("license_source", [
   "clearlydefined",
   "scancode",
   "unresolved",
+  /**
+   * Written here, so there was no chain to walk (R6.1).
+   *
+   * Distinct from `unresolved`, which means "we looked and could not tell" and forces a
+   * metadata-only posture. An authored skill's licence is not unknown — it is the author's
+   * to choose, and the bytes are theirs, in their own workspace. Conflating the two would
+   * make the platform refuse to store the thing it just helped write.
+   */
+  "authored",
 ]);
 
 /** Upstream popularity and usage signals, kept as a time series. */

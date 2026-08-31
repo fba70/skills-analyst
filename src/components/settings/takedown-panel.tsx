@@ -261,7 +261,7 @@ function TakedownCard({ row }: { row: TakedownListRow }) {
     <Card>
       <CardHeader>
         <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-          <span className="truncate">{target}</span>
+          <span className="min-w-0 truncate">{target}</span>
           <Badge variant={STATUS_VARIANT[row.status] ?? "outline"}>{row.status}</Badge>
           <Badge variant="outline">{row.scope}</Badge>
           <Badge variant="outline">{row.grounds.replace(/_/g, " ")}</Badge>

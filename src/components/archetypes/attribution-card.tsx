@@ -94,7 +94,7 @@ export function AttributionCard({ contributors }: { contributors: Contributor[] 
 function ContributorRow({ contributor }: { contributor: Contributor }) {
   const label = (
     <>
-      <span className="truncate font-mono text-sm">{contributor.source}</span>
+      <span className="min-w-0 truncate font-mono text-sm">{contributor.source}</span>
       {contributor.curated ? (
         <Badge variant="secondary" className="shrink-0 text-[11px]">
           curated

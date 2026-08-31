@@ -65,8 +65,10 @@ export function PipelinePanel({
 }) {
   const stale = freshness.reduce((sum, row) => sum + row.total, 0);
 
+  // Full width, stacked: the pipeline card carries run-history lines that read as prose,
+  // and half a row is not enough for them at any sidebar state.
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="grid gap-4">
       <PipelineCard backlog={backlog} runs={runs} cronEnabled={cronEnabled} />
 
       <Card>
@@ -93,7 +95,7 @@ export function PipelinePanel({
                 key={row.analyzer}
                 className="flex flex-wrap items-baseline justify-between gap-2 text-sm"
               >
-                <span className="truncate">
+                <span className="min-w-0 truncate">
                   {row.analyzer.replace(/-/g, " ")}
                   <span className="text-muted-foreground ml-2 text-xs">
                     v{row.currentVersion}
@@ -347,7 +349,7 @@ function PipelineCard({
                       {Math.round(run.elapsedMs / 1000)}s
                     </span>
                   ) : null}
-                  <span className="text-muted-foreground ml-auto truncate">
+                  <span className="text-muted-foreground min-w-0 flex-1 truncate text-right">
                     {run.stages.find((s) => s.stage === "sync")?.detail ?? ""}
                   </span>
                 </li>

@@ -38,32 +38,17 @@ export const maxDuration = 800;
 export const dynamic = "force-dynamic";
 
 /**
- * Sources per scheduled pass.
+ * The knobs that used to live here are now in `platform_settings`.
  *
- * At two passes a day this is the freshness budget, not a catch-up rate: twelve sources
- * refreshed daily, chosen oldest-first, which is what R7.4's 24-hour window needs once
- * initial ingestion is done.
+ * Sources per pass and the per-source skill ceiling were both constants in this file,
+ * measured against the function ceiling after a pass timed out at 800 seconds on a single
+ * repository. They kept their values and moved into the settings table with their defaults
+ * intact — see `settings/schedule.ts`, which is now where the reasoning lives.
  *
- * Still well inside the function ceiling, because `MAX_SKILLS_PER_SOURCE` means no single
- * source can run away with the budget — that is the guard that makes a larger number safe
- * here, and its absence is what made the previous pass time out.
+ * The move is Doc 3's "cadence is data, not deploys": tuning ingestion against a live
+ * corpus through a redeploy is too slow to learn anything, and switching it *off* through a
+ * redeploy is worse than that.
  */
-const SOURCES_PER_PASS = 6;
-
-/**
- * A scheduled pass will not start a source larger than this.
- *
- * Measured, not guessed: the first live cron run hit `FUNCTION_INVOCATION_TIMEOUT` after
- * the full 800 seconds on a single repository, and would have retried the same one every
- * ten minutes forever, because a timed-out source is never marked synced.
- *
- * A source must be fetched completely — a partial enumeration would make R1.5 tombstone
- * everything it did not reach — so the only safe bound is deciding before the fetch begins.
- * Anything larger is held for review and synced deliberately with `pnpm sync <url>`, which
- * has no ceiling. 120 skills is comfortably inside 13 minutes at the fetch concurrency the
- * ingest policy allows.
- */
-const MAX_SKILLS_PER_SOURCE = 120;
 
 /**
  * Confirms the caller is Vercel Cron and not the open internet.
@@ -97,18 +82,60 @@ export async function GET(request: Request) {
   const startedAt = Date.now();
 
   try {
-    const report = await runPipeline({
-      trigger: "cron",
-      sources: SOURCES_PER_PASS,
-      maxSkillsPerSource: MAX_SKILLS_PER_SOURCE,
-      // Leave room for the stages behind sync inside the function's ceiling.
-      syncBudgetMs: 6 * 60_000,
-    });
+    const { getSchedule, stageDue } = await import("@/server/settings/schedule");
+    const schedule = await getSchedule();
+
+    /**
+     * The cron fires on a fixed expression; the settings decide whether it does anything.
+     *
+     * Nothing in a database can change `vercel.ts`, so a tick that arrives before a stage
+     * is due returns having done nothing. That makes the settings a throttle and an off
+     * switch, never an accelerator — and the response says which, because a scheduler that
+     * silently no-ops is indistinguishable from one that is broken.
+     */
+    const [pipelineDue, archetypesDue] = await Promise.all([
+      stageDue("pipeline", schedule),
+      stageDue("archetypes", schedule),
+    ]);
+
+    const skipped: Record<string, string> = {};
+    let report: Awaited<ReturnType<typeof runPipeline>> | null = null;
+
+    if (pipelineDue.due) {
+      report = await runPipeline({
+        trigger: "cron",
+        sources: schedule.pipeline.sourcesPerPass,
+        maxSkillsPerSource: schedule.pipeline.maxSkillsPerSource,
+        // Leave room for the stages behind sync inside the function's ceiling.
+        syncBudgetMs: 6 * 60_000,
+      });
+    } else {
+      skipped.pipeline = pipelineDue.reason;
+    }
+
+    /**
+     * Archetype refresh, which G2 asks to happen at least weekly.
+     *
+     * Free — mining reads stored fingerprints and calls no model — but it rewrites the
+     * guidance the builder scaffolds from, which is why it ships switched off and why it
+     * runs *after* the pipeline: a refresh should see the skills this pass just ingested.
+     */
+    let archetypes: string | null = null;
+    if (archetypesDue.due) {
+      const { mineAll } = await import("@/server/analytics/archetype-run");
+      const results = await mineAll();
+      const stored = results.filter((r) => r.stored);
+      archetypes = `${stored.length} of ${results.length} categories re-mined`;
+    } else {
+      skipped.archetypes = archetypesDue.reason;
+    }
 
     return Response.json({
-      ok: report.ok,
+      ok: report?.ok ?? true,
       elapsedMs: Date.now() - startedAt,
-      stages: report.stages,
+      stages: report?.stages ?? [],
+      archetypes,
+      skipped,
     });
   } catch (error) {
     // A 500 is what makes a failing schedule visible in Vercel's cron log. Swallowing it

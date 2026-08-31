@@ -82,7 +82,7 @@ export function CapabilitySurface({
                 <ul className="text-muted-foreground grid gap-0.5 font-mono text-xs">
                   {value.evidence.slice(0, 4).map((line) => (
                     /* Plain text, never a link: evidence can quote hostile content. */
-                    <li key={line} className="truncate">
+                    <li key={line} className="min-w-0 truncate">
                       {line}
                     </li>
                   ))}

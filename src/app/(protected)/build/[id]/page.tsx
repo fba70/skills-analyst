@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getDraft } from "@/server/builder/drafts";
+import { getSkillsByIds } from "@/server/dal/skills";
 import { requireSession } from "@/server/dal/session";
 import { labelFor } from "@/server/taxonomy/vocabulary";
 
@@ -30,6 +31,12 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
   // 404 rather than a permission error — which is also the right thing to leak.
   const draft = await getDraft(id);
   if (!draft) notFound();
+
+  // Resolved rather than stored on the draft: a published skill can be renamed or withdrawn,
+  // and a stale slug would be a link to nowhere on the page that created it.
+  const publishedSlug = draft.publishedSkillId
+    ? ((await getSkillsByIds([draft.publishedSkillId]))[0]?.slug ?? null)
+    : null;
 
   return (
     <div className="grid min-w-0 max-w-4xl gap-6">
@@ -140,7 +147,14 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         </Card>
       ) : null}
 
-      <DraftActions draftId={draft.id} busy={draft.status === "generating"} />
+      <DraftActions
+        draftId={draft.id}
+        slug={draft.slug}
+        busy={draft.status === "generating"}
+        canPublish={Boolean(draft.body)}
+        blocked={draft.validation?.blocked ?? false}
+        publishedSlug={publishedSlug}
+      />
     </div>
   );
 }

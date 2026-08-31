@@ -11,6 +11,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 import { organization, user } from "./auth";
+import { skills } from "./corpus";
 import { draftStatus, skillDialect } from "./enums";
 
 /**
@@ -96,6 +97,15 @@ export const skillDrafts = pgTable(
     context: text("context"),
     /** Section role → what the author wants in it. Their words, never overwritten. */
     sectionInputs: jsonb("section_inputs").notNull().default(sql`'{}'::jsonb`),
+    /**
+     * The section roles the scaffold proposed, in order.
+     *
+     * Recorded because R6.2 asks which suggested sections authors keep versus delete, and
+     * that is unanswerable without knowing what was suggested. Archetypes move between a
+     * draft being scaffolded and published, so re-deriving the list later would compare the
+     * author's choices against a skeleton they never saw.
+     */
+    scaffoldSections: jsonb("scaffold_sections").notNull().default(sql`'[]'::jsonb`),
 
     status: draftStatus("status").notNull().default("collecting"),
 
@@ -107,6 +117,19 @@ export const skillDrafts = pgTable(
     generatedAt: timestamp("generated_at", { withTimezone: true }),
     /** Set when the model refused (R5.5) or the call failed. Shown to the author. */
     failureReason: text("failure_reason"),
+
+    /**
+     * The skill this draft became (R6.1).
+     *
+     * Set on publish and never cleared. Keeping the draft alongside the skill is what makes
+     * lineage legible in both directions: the skill's provenance names the draft, and the
+     * draft names the skill, so "what was this authored from" and "what did this become"
+     * are both one hop.
+     */
+    publishedSkillId: uuid("published_skill_id").references(() => skills.id, {
+      onDelete: "set null",
+    }),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
 
     /** Last validation pass over the generated body (R4.5). Findings included. */
     validation: jsonb("validation"),

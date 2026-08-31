@@ -50,6 +50,7 @@ export type SubmitDraftInput = {
   domain: string;
   dialect: string;
   sectionInputs: Record<string, string>;
+  scaffoldSections: string[];
 };
 
 /**
@@ -81,6 +82,7 @@ export async function submitDraftAction(
       domain: input.domain || null,
       dialect: input.dialect,
       sectionInputs: input.sectionInputs,
+      scaffoldSections: input.scaffoldSections,
     });
 
     const result = await generateForDraft(draftId);
@@ -115,6 +117,42 @@ export async function regenerateDraftAction(
     return {
       ok: true,
       data: { refused: result.refused, reason: result.refused ? result.reason : undefined },
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+
+/**
+ * Publishes a draft into the workspace corpus (R6.1).
+ *
+ * Thin on purpose: the interesting part is that `publishDraft` writes the same rows a sync
+ * writes and hands the version to the same validator, so there is nothing for an action to
+ * add beyond the session check and cache invalidation.
+ */
+export async function publishDraftAction(
+  draftId: string,
+): Promise<ActionResult<{ slug: string; status: string; qualityScore: number; reasons: string[] }>> {
+  try {
+    await requireSession();
+    const { publishDraft } = await import("@/server/builder/publish");
+    const result = await publishDraft(draftId);
+    if (!result.ok) return { ok: false, message: result.message };
+
+    revalidatePath(`/build/${draftId}`);
+    revalidatePath("/build");
+    revalidatePath("/dashboard");
+    revalidatePath("/skills");
+
+    return {
+      ok: true,
+      data: {
+        slug: result.slug,
+        status: result.status,
+        qualityScore: result.qualityScore,
+        reasons: result.reasons,
+      },
     };
   } catch (error) {
     return failure(error);

@@ -137,48 +137,370 @@ Better Auth's table shapes are not guesswork: re-derive them with `getAuthTables
 `better-auth/db` whenever a plugin is added or the version moves, then generate a
 migration. Do not hand-tune those columns.
 
-## Where things stand — 2026-08-30
+## Where things stand — audited 2026-08-31 (numbers refreshed 18:00 UTC)
 
-Snapshot for picking this up cold. Numbers move; the shape does not.
+Snapshot for picking this up cold. Numbers move; the shape does not. Full requirement-level
+audit is **`specs/core/02-requirements-spec.md` §10b** — that table is the source of truth,
+this is the summary.
 
 | | |
 |---|---|
-| Corpus | 5,110 indexed · 60 quarantined |
-| Sources | 92 synced of 610 enabled — **ingestion is ~15% done** |
-| Taxonomy | 4,121 skills labelled, 11,289 assignments, 3 unlabelled |
-| Archetypes | 12 of 13 function categories, at v5 · miner 2.1.0 · **public at `/archetypes`** |
-| Spent on LLM work | ~$12 (taxonomy 4,124 calls, R2.3 six calls) |
+| Corpus | 11,639 indexed · 144 quarantined · 4 tombstoned · 10,585 canonical / 1,202 near-duplicate variants |
+| Sources | 259 synced of 611 enabled, 352 never synced — **ingestion is ~42% done** |
+| Taxonomy | 4,101 skills labelled, 11,241 assignments · 1,105 held below the floor |
+| Structures | 11,827 fingerprints — keeping pace with the corpus |
+| Archetypes | 12 of 13 function categories at v5 · miner 2.1.0 · public at `/archetypes` |
+| Builder | live at `/build` · 1 skill published through the whole loop, 5 telemetry signals |
+| Spend, cumulative | ~$12 (taxonomy 4,124 calls, R2.3 six calls, builder). The `llm_usage` ledger only starts at RC.2, so it shows $0.05 — the rest predates metering. |
 
 **Ingestion runs from a local terminal** (`pnpm pipeline --loop 60`), not from the schedule.
 A 2,000-skill repository needs longer than any function ceiling, and locally there is none.
 The cron is sized for *freshness* (twice daily, six sources, `MAX_SKILLS_PER_SOURCE` 120) and
-will pick up the stale-source queue once catch-up is done.
+will pick up the stale-source queue once catch-up is done. Last three passes all completed;
+the most recent created 421 versions from five sources.
 
-**Cost to finish**: ~$24–49 to classify the ~8,000–16,800 skills the remaining 518 sources
-will produce, plus ~$4 for R2.3 across the corpus. Prompt caching does **not** help — Haiku
-4.5 needs a 4,096-token prefix and ours is ~1,940; enlarging it means bumping
-`TAXONOMY_VERSION` and re-classifying everything already labelled, which costs more than it
-saves. Measured, not assumed — see `taxonomy/classify.ts`.
+**The taxonomy is the thing lagging, and the gap is widening.** Fingerprints track the corpus;
+labels do not — **6,364 indexed canonical skills carry no category**, up from ~5,400 at the
+last audit, because sync keeps adding skills and classification costs money and is
+deliberately manual. That directly starves archetype mining, which reads only labelled,
+above-floor assignments: archetypes currently rest on roughly a third of the indexed corpus.
+~$0.29 per 100, so roughly **$18 to catch up** — and that number grows with every sync pass.
+
+> **The user has deliberately deferred this spend until sync finishes.** Do not run
+> `pnpm taxonomy --sample` without being asked. Labelling a moving corpus means paying twice.
+
+### What is actually built
+
+Ingest → validate → analyze → build works end to end. Every P0 in §7.1, §7.2, §7.3 and §7.7
+is delivered or delivered-with-a-named-gap, plus all five cross-cutting P0s (auditability,
+reproducibility, least-privilege, compliance, private-corpus isolation).
+
+### §7.6 — the loop runs; the outcome half does not
+
+R6.1, R6.2 and R6.5 are done: a skill authored here is published back through the same
+pipeline, what happened while authoring it is recorded, and archetype regeneration reads that
+alongside corpus prevalence. What is still missing is the **outcome** half:
+
+- **R6.3 outcome telemetry** — no post-publication signal is attributed to an archetype
+  version, so "what good looks like" stays a claim about the corpus rather than about
+  results.
+
+Everything else on the list is smaller than this.
 
 ### What to build next, in order
 
-**1. ~~Archetype pages~~ · ~~Takedown workflow~~ — both done. Sections below.**
+**Nothing here is the real critical path.** Ingestion is 42% done and the taxonomy is 6,364
+skills behind it, and both of those gate the quality of every archetype the product sells.
+The build list below is what to do *while that runs* — not instead of it.
 
-**2. Search (R7.4)** — the only thing left on this list, and still `ilike '%q%'`: no index,
-no relevance ranking. Two problems, not one. A leading `%` means no btree can serve it and
-there is no textual index on `skills` anyway, so every search is a sequential scan; and
-results fall through to the default quality sort, so a skill *named* the query ranks below
-an unrelated higher-scoring one that merely mentions it. Fine at 5,110 rows; the budget is
-p95 < 500 ms at 500K.
+**1. ~~Publish-back (R6.1) + export (R4.4)~~ — done. Section below.**
 
-Fixing it means a `tsvector` column with a GIN index (probably plus `pg_trgm` for partial
-and misspelt terms) and a ranking *function* rather than a sort — R2.9 constrains it to
+**2. ~~Creation telemetry (R6.2) + R6.5 bounds~~ — done. Section below.**
+
+**3. ~~Spend caps (RC.2)~~ — done. Section below.**
+
+**4. ~~Schedule as data + loop observability (R6.4)~~ — done. Sections below. Archetype
+refresh ships OFF and stays off until someone has watched a mine run at this corpus size.**
+
+**5. Search (R7.4).** Still `ilike '%q%'` — no index, no relevance ranking. A leading `%`
+means no btree can serve it and there is no textual index on `skills` anyway, so every
+search is a sequential scan; results then fall through to the quality sort, so a skill
+*named* the query ranks below an unrelated higher-scoring one that merely mentions it. Also
+the reason R2.9's ranking function has no relevance term.
+
+Fixing it means a `tsvector` column with a GIN index (probably plus `pg_trgm` for partial and
+misspelt terms) and a ranking *function* rather than a sort — R2.9 constrains it to
 `f(quality, security tier, relevance)`, so `ts_rank` is an input and never the whole answer.
-`CREATE INDEX CONCURRENTLY` needs `DATABASE_URL_UNPOOLED`.
+`CREATE INDEX CONCURRENTLY` needs `DATABASE_URL_UNPOOLED`. Still better done once the corpus
+stops moving: weights tuned against a 42%-ingested corpus are tuned against the wrong one.
 
-Still better done once the corpus stops moving: the index would be rebuilt mid-flight, and
-weights tuned against a corpus that is a sixth ingested are weights tuned against the wrong
-corpus.
+**6. Per-version permalinks (R8.4).** A verdict cannot be cited today, and archetype
+exemplar lists are public and expected to keep resolving.
+
+### Smaller named gaps, from the §10b audit
+
+- **R1.1** — no ClawHub connector; registry reconciliation unbuilt.
+- **R2.5** — no community flagging into the quarantine queue.
+- **R2.8** — no collision-risk check against existing skills in the same category.
+- **R4.2 / R4.3** — no live editor; archetype deviations are not visibly marked.
+- **R5.1 / R5.3 / R5.4** — elicitation is a form not a conversation; no gap detection; no
+  per-suggestion accept/reject, so no structured feedback events.
+- **RC.1** — entitlements are absent rather than enforced-in-the-DAL. Nothing is gated today,
+  so the free-tier guarantee holds by construction and none of the mechanism exists.
+- **RC.4** — no billing webhooks; there is nothing to sync entitlements from yet.
+
+### Deliberately deferred
+
+- **Embeddings / pgvector** — needed for R5.2 retrieval at scale, R3.5's emerging-category
+  clusters and R3.1's low-confidence queue. Not before the corpus settles.
+- **R2.10 sandbox / R2.11 eval harness** — Phase 4, and both need infrastructure this
+  project does not have yet.
+- **Finishing the code-search crawl** — 38 shards saturated and unsplittable on the size
+  axis; a second axis is needed. 382k markers is mostly noise and the curated channels
+  produce a better corpus, so this stays parked.
+
+### Re-run these as the corpus grows — all free, all incremental
+
+```
+pnpm taxonomy --sample 100     # only unlabelled skills; ~$0.29 per 100 — COSTS MONEY
+pnpm taxonomy --sweep          # clears held rows nothing can decide; free
+pnpm archetypes --mine-all     # free; append-only, lands as v6 with a changelog
+pnpm rescan --status           # verdict freshness after any analyzer bump
+pnpm structures --templates    # structural diversity; the monoculture check
+```
+
+Comparing archetype **v5 against v6** after full ingestion answers the open question of how
+much the sampled weak band was distorting the current numbers.
+
+### Spend caps (RC.2) and metering (RC.3)
+
+`src/lib/llm-pricing.ts` (rates), `src/server/billing/spend.ts` (caps), `llm_usage` ledger,
+Settings → **Spend**. `pnpm verify:spend` (15 checks, **free** — a budget is arithmetic and a
+refusal, and a test that burned real money to check a spend cap would be self-defeating).
+
+**Two budgets, because RC.2 asks for two and they protect different things.** A per-org
+monthly cap on builder and validation stops one customer running up a bill; a separate
+global platform budget for corpus analysis stops our own batch work doing the same. Mixing
+them would let either failure cause the other — a busy month of authoring must not halt
+corpus analysis, and a taxonomy run must not spend a customer's allowance.
+
+Defaults are `$5` per org and `$50` platform, from `LLM_ORG_MONTHLY_CAP_USD` and
+`LLM_PLATFORM_MONTHLY_CAP_USD`.
+
+- **Fail-closed means refusing, not degrading.** `assertWithinBudget` throws *before* the
+  model call at all three call sites. No cheaper-model fallback, no soft warning that still
+  spends. The error carries the cap, the spend and the reset date — RC.2 asks for clear UX,
+  and a refusal a user cannot act on is the least clear failure there is.
+- **The check is before, the ledger is after**, because cost is only knowable once tokens
+  are counted. One call can therefore carry the total slightly past the cap; the next is
+  refused. Reserving estimated tokens up front is a lot of machinery to avoid an overshoot
+  bounded by one call, and it would refuse work whenever the estimate ran high.
+- **Micro-dollars, integer.** A call often costs a fraction of a cent; floats accumulated
+  over thousands of rows drift, and a budget that disagrees with the sum of its own ledger
+  is worse than no budget.
+- **Cache multipliers are priced.** Reads are 0.1× the input rate and writes 1.25×. Charging
+  every input token at the base rate would overstate a cached workload roughly tenfold — and
+  the taxonomy classifier is mostly cache reads. `usage.inputTokens` is the *total*, so
+  billing it alongside the cache detail double-counts.
+- **An unknown model over-charges.** `UNKNOWN_MODEL_RATE` is the most expensive rate we know
+  of, because a budget that silently ignores a model it does not recognise is not a budget.
+- **The ledger is append-only.** `llm_usage` has SELECT and INSERT policies and **no DELETE**
+  — an application that can delete its own charges has no audit trail. Maintenance goes
+  through `DATABASE_URL_UNPOOLED`, the owner connection migrations already use.
+
+> **Three bugs the verification caught, all of which would have shipped silently.**
+>
+> **`recordUsage` wrote unscoped**, so every org-scoped row was refused by RLS — and because
+> the function deliberately swallows its own failures, that refusal was a log line. Builder
+> spend would never have been metered and the per-org cap could never have been reached:
+> RC.2 satisfied on paper only. This is the exact failure the function's own comment warns
+> about.
+>
+> **The first verify script spent the real $50 platform budget** and then could not clean up,
+> because of the no-DELETE policy above — blocking corpus analysis until it was removed by
+> hand. Fixtures must be cheap *and* removable.
+>
+> **Its second version set caps via `process.env` above static imports.** ESM hoists imports,
+> so the assignment ran after `spend.ts` had read the environment and did nothing. The import
+> must stay dynamic.
+
+Also worth knowing: a per-workspace spend alert is an **org-scoped** `events` row, so an
+unscoped operator query does not see it. The Settings panel shows the platform budget and the
+per-purpose breakdown, both of which read the open `llm_usage` table.
+
+### The schedule is data now, and archetype refresh is off
+
+Settings → **Schedule**. `platform_settings` + `src/server/settings/schedule.ts`.
+`pnpm verify:schedule` (9 checks, free).
+
+The first instalment of the standing "policy becomes data" note. Sources per pass and the
+per-source skill ceiling were constants inside the cron route; they kept their values and
+moved into a settings table with their reasoning. Doc 3's argument — *cadence is data, not
+deploys* — but the sharper version is that switching ingestion **off** through a redeploy is
+worse than tuning it through one.
+
+> **What "every N hours" actually is.** Vercel Cron fires on a fixed expression in
+> `vercel.ts` (`0 5,17 * * *`) and nothing in a database changes that. The setting is a
+> **minimum interval** the route checks when the cron fires: a tick that arrives early
+> returns having done nothing. It throttles and switches off; it cannot accelerate. Asking
+> for six hours against a twelve-hour cron gets twelve. The panel says so, because this is
+> the easiest lie on that screen and the one an operator would discover weeks later.
+
+**Archetype refresh ships OFF.** It is free — mining reads stored fingerprints and calls no
+model — but it republishes the guidance every future draft is scaffolded from, and nothing
+has watched it run at this corpus size. G2 wants it weekly; it gets switched on after a
+deliberate `pnpm archetypes --mine-all` and a read of the changelog, not before.
+
+Defaults live in `SCHEDULE_DEFAULTS` and an absent row means exactly them — the table is
+empty on a fresh deployment, and a reader that guessed `enabled: true` would fetch
+repositories before anyone had configured one. A partial row merges field by field, so a
+value written before a knob existed cannot make that knob `undefined`.
+
+> **`platform_settings` has no DELETE policy**, deliberately: a setting is changed, never
+> removed, because deleting a row silently restores a default — the one transition an
+> operator would not expect and could not see in the audit log. The first version of
+> `verify:schedule` cleaned up with a delete, which RLS refused *silently*, and left the
+> live scheduler holding the script's own clamp-test values (one hour, 25 sources, 10 skills
+> a source). It now restores through the owner connection and **asserts the schedule is left
+> exactly as it was found**.
+
+Every change writes a `schedule.changed` event naming what moved. "Why did ingestion stop
+three weeks ago" has exactly one good answer, and it is a row.
+
+### Loop observability (R6.4), and the first real run
+
+Settings → **Loop**. `src/server/analytics/loop.ts`. G3 (first-pass validation, target 80%),
+G4 (sessions using a corpus suggestion, target 60%), each archetype's current version with
+the changelog that explains it, and **unconsumed signal per category**.
+
+**The stall alert is the part that earns its place.** A dashboard of green numbers is easy to
+build and easy to stop reading; the question nobody thinks to ask is *signal is arriving and
+nothing is learning from it*. Mining is a manual command, so a category can accumulate
+authoring feedback for weeks while its guidance sits where it was. Nothing errors. Twenty
+unconsumed signals raises it and names the free command that fixes it.
+
+Shares carry their sample size, and below ten sessions they are marked thin — a percentage
+over three drafts is one draft's opinion to two significant figures, and G3/G4 are targets
+someone will eventually report against.
+
+> **Two bugs the live data exposed, both the same shape.** The panel first reported *0 drafts
+> written, 1 published* — nonsense that was actually the isolation working: `skill_drafts`
+> holds the author's purpose and notes, so an operator cannot read it and should not. There
+> is now deliberately **no "drafts written" figure**; every number comes from
+> `builder_signals`, which is readable across organisations precisely because it carries
+> nothing private.
+>
+> The activity feed silently omitted `builder.published`, because that event is org-scoped
+> and the feed reads unscoped. It now lists platform-scoped kinds only and says so — a feed
+> that quietly drops the most interesting event in the loop while looking complete is worse
+> than a shorter one.
+
+### The loop has actually run
+
+`pnpm walk:loop` — **costs money**, one generation. Not a test: it takes a real skill the
+whole way and leaves it behind, because the point is to have the loop run rather than to
+assert that it could.
+
+First run, 2026-08-31:
+
+```
+Terraform plan review → /skills/terraform-plan-review
+  scaffold   review archetype v5 · 258 structures from 45 sources
+  generate   7,712 chars · quality 100/100 · 0 findings · sonnet-5
+  publish    indexed · structural-lint@1.4.0, secret-scan, prompt-injection,
+             capability-surface — all pass
+  lineage    archetype review v5 · authoredHere: true
+  telemetry  5 signals, all survived, firstPass=true
+  spend      $0.05, metered against the workspace cap
+```
+
+All five archetype-offered sections survived into the published document, which is the first
+real evidence that the `review` skeleton is worth following rather than merely mined.
+
+### Creation telemetry (R6.2) and its bounds (R6.5)
+
+`src/server/builder/telemetry.ts`. `pnpm verify:telemetry | verify:spend | verify:schedule` (8 checks) and three more in
+`verify:publish`. Both free.
+
+One row per `(draft, section role)` at publish: was the section **offered**, did the author
+**author** notes for it, did it **survive** into the published body, and did that document
+pass validation **first time** (G3). `mineArchetype` then decides inclusion on
+`lift + delta` — so a section the corpus is lukewarm about but that authors consistently
+keep can cross the threshold, and one the corpus likes but authors delete can fall below it.
+That is the loop closing.
+
+**Lift and telemetry are kept separable, never averaged.** They answer different questions —
+what other people published versus what happened when someone used this skeleton — and a
+single blended number answers neither. The archetype page shows both and says which is
+which.
+
+**Structure only, never content.** Every column is a boolean or a value from a closed
+vocabulary we defined: a function category and a section role. No skill text, no names, no
+author input. That is what makes R6.2 compatible with **RC.5 and OQ-C2**, which forbid
+org-private corpora feeding public archetypes even in aggregate — "the `troubleshooting`
+heading survived" is a fact about our own vocabulary, not about a customer's workflow.
+
+> **`builder_signals` has the only split RLS policy in the schema**: writes are org-scoped,
+> reads are open to `app_runtime`. Cross-organisation aggregation is the entire point of
+> R6.2, and a read policy on `app.org_id` would let an archetype learn from one tenant at a
+> time — useless, and the shape RC.5 forbids. It is safe *because of the column list*, and
+> the migration says so: add a column carrying tenant content and this policy becomes wrong.
+
+**R6.5 is four defences, not a flag**, and each stops a different attack — implementing one
+and calling it done leaves the rest open:
+
+| defence | mechanism | attack it stops |
+|---|---|---|
+| dedup per identity | unique index on `(draft_id, section_role)` | republishing to vote twice |
+| rate limit | `MAX_DRAFTS_PER_ORG` applied **in SQL before counting** | one org making many drafts |
+| outlier trimming | drop the extreme **organisations**, not drafts | a coordinated tail dragging the mean |
+| bounded delta | ±`MAX_LIFT_DELTA` (5 points) per mine | everything that beat the first three |
+
+Trimming is per organisation rather than per draft because the unit of manipulation is an
+account: trim drafts and one org can supply both tails and keep its own middle. The rate
+limit runs before aggregation for the same reason — an org contributing 200 votes and *then*
+being trimmed as one outlier has already moved the mean.
+
+`MIN_DISTINCT_ORGS` sits under all four. Below it nothing is applied, which serves R6.5 **and**
+privacy: an aggregate over one or two organisations could describe a single tenant. One
+mechanism, two requirements, and relaxing it for either would break the other.
+
+**The changelog cites the statistics**, because R6.2's acceptance criterion says it must.
+Telemetry that silently influenced published guidance would be exactly what R7.1's
+auditability exists to prevent — and exactly the shape a poisoning attack would want.
+
+### Publish-back (R6.1) and export (R4.4)
+
+`publishDraft` writes the same rows `syncSource` writes and hands the version id to
+**`validatePending`** — the same function the pipeline runs over externally synced skills.
+R6.1 says a skill created here enters the same pipeline with no privileged path, and the
+only honest way to satisfy that is to call the same code rather than reimplement a lighter
+version and trust it stays equivalent. `pnpm verify:publish` (15 checks, free) asserts on
+*verdict rows existing*, not on the status field — a status can be set by anything; verdicts
+can only exist if the real validator ran.
+
+- **Org-scoped, not public.** Publishing means "a real, validated, downloadable skill in
+  your workspace". Promoting to the public corpus is a licence-and-review decision nobody
+  has made.
+- **The source is real**, because `skill_versions.source_id` is NOT NULL and the schema is
+  right to insist. Each org gets one `builder` source: `enabled = false` so the scheduler
+  never offers it, org-scoped so public statistics never count it. Both fall out of existing
+  behaviour rather than needing special cases.
+- **`licenseSource: "authored"`** is a new enum value, distinct from `unresolved`. "We looked
+  and could not tell" forces a metadata-only posture and would make the platform refuse to
+  store the thing it just helped write.
+- **Lineage** — archetype category and version on the version's provenance, and
+  `publishedSkillId` on the draft, so "what was this authored from" and "what did this
+  become" are each one hop.
+
+> **Two bugs the verification script found, both of which would have shipped.**
+>
+> `validatePending` selected with a plain `db` handle and **no org scope**, so RLS answered
+> `org_id IS NULL` only — an org-scoped version was **invisible to the validator**. Publish
+> would have created a skill, called the validator, and silently validated nothing, leaving
+> it at `pending` for ever. The write path was already correct (`validateOne` sets
+> `app.org_id` from the row); only the read was missing, which is the failure mode that
+> hides best. `ValidateOptions.orgId` fixes it.
+>
+> The `events` audit row was inserted after the transaction with a plain `db` handle and was
+> refused by RLS outright. It now goes inside the transaction, which is also where it
+> belongs — a skill existing with no record of who published it is the gap R7.1 exists to
+> close.
+
+**Export** renders one draft into one archive, a directory per format, because SKILL.md and
+AGENTS.md both sit at a project root and a flat archive would silently overwrite. Formats
+differ only in the envelope: AGENTS.md has no frontmatter *by specification*, a Cursor rule
+uses Cursor's keys (`description`, `globs`, `alwaysApply`). No model pass to "adapt tone" —
+that would be an uninstructed edit of the author's words and would make two exports differ.
+
+Descriptions are JSON-quoted on the way out. Ten corpus skills were quarantined because an
+unquoted colon made YAML read a nested mapping, and a builder that emitted them raw would
+manufacture the defect its own validator flags. `verify:publish` uses a description with a
+colon in it for exactly this reason.
+
+> `EXPORT_DIALECTS` lives in `src/lib/dialects.ts`, not beside the renderer. The checkbox
+> list is a client component and the renderer is `server-only`; the build refused the import,
+> correctly. Same split as `capabilities.ts`, `quality.ts` and `section-roles.ts`.
 
 ### The registry read the whole table to draw its sidebar
 
@@ -213,6 +535,37 @@ told the page is loading rather than finding it briefly empty.
 
 > A loader is a fix for the *perception*, never for the page. The query was fixed first; the
 > skeleton is there because half a second of blank screen still reads as a stall.
+
+### `truncate` on a flex child needs `min-w-0`, or it widens the whole card
+
+Settings → Ingestion overflowed its card when the sidebar was open: the green run button was
+pushed past the card's right border and clipped, and the run-history lines were cut mid-word
+(`… 3 deferred, tin`). It looked like a clipping bug and was the opposite — the card's
+*content* was genuinely wider than the card, and the browser painted it outside the border.
+
+**One line caused it.** `truncate` is `overflow:hidden` + `text-overflow:ellipsis` +
+**`white-space:nowrap`**, and a flex or grid child defaults to `min-width:auto` — meaning it
+refuses to shrink below its own min-content width. A `nowrap` child therefore has a
+min-content width equal to the entire unbroken string, which propagates up through every
+ancestor and widens the card. The element that was supposed to truncate is the element that
+makes truncation impossible.
+
+`min-w-0` on the truncating child is the whole fix, and it was missing at eight sites:
+`settings/pipeline-panel` (2), `settings/taxonomy-panel` (2), `settings/takedown-panel`,
+`settings/submit-panel`, `settings/review-panel`, `registry/capability-surface`,
+`archetypes/attribution-card`. Grid children have the same default, so a `truncate` inside a
+`grid` container needs it too — this is not a flexbox-only rule.
+
+> Tailwind's `grid-cols-*` already emits `minmax(0, 1fr)`, so the **track** can shrink. That
+> is what made this confusing to read: the card's border box stayed at the column width while
+> its contents did not, which looks like clipping rather than overflow. Do not go looking for
+> a missing `overflow-hidden`; look for the child that cannot shrink.
+
+The pipeline panel is now **full width with the cards stacked** rather than
+`lg:grid-cols-2`. The run-history lines read as prose and half a row was never enough for
+them at any sidebar state. The `min-w-0` fixes stay regardless — the layout change alone
+would only hide the bug at wide widths, and it would come back on a phone, a collapsed
+sidebar, or the next two-column card someone adds.
 
 ### The builder (R4.1–R4.5, R5.5)
 
@@ -448,28 +801,6 @@ skill that lists as servable and 409s on download.
 **Still admin-entered.** A notice arrives by email and a curator records it. A public
 submission form is the obvious next step and is not built; R1.8's public-submission plumbing
 is the natural place to hang it.
-
-### Deliberately deferred
-
-- **RC.2 spend caps** — real once the assistant (R5.x) makes LLM cost recurring and per-user.
-  Today `MAX_BATCH` and the per-action caps are the whole control.
-- **Embeddings / pgvector** — needed for R5.2 retrieval and R3.1's low-confidence queue,
-  not before.
-- **Finishing the code-search crawl** — 38 shards are saturated and unsplittable on the size
-  axis; a second axis (path, date, language) is needed. 382k markers is mostly noise and the
-  curated channels produce a better corpus, so this stays parked.
-
-### Re-run these as the corpus grows — all free, all incremental
-
-```
-pnpm taxonomy --sample 100     # only unlabelled skills; ~$0.29 per 100
-pnpm archetypes --mine-all     # free; append-only, lands as v6 with a changelog
-pnpm rescan --status           # verdict freshness after any analyzer bump
-pnpm structures --templates    # structural diversity; the monoculture check
-```
-
-Comparing archetype **v5 against v6** after full ingestion answers the open question of how
-much the 13%-sampled weak band distorted the current numbers.
 
 ## Open TODOs carried from the specs
 
@@ -1473,7 +1804,8 @@ pnpm validate --consistency --limit 10   # R2.3 audit — COSTS MONEY, capped at
 pnpm structures --extract 500        # structural fingerprints — free, no model
 pnpm taxonomy --sample 20            # categories — COSTS MONEY, capped at 100/run
 pnpm taxonomy --status | --review | --resync
-pnpm verify:lists | verify:revocation | verify:export | verify:takedown
+pnpm verify:lists | verify:revocation | verify:export | verify:takedown | verify:publish
+pnpm verify:telemetry
 pnpm verify:otp | verify:db-retry        # both free, no network, no database
 pnpm verify:builder                      # COSTS MONEY — two model calls
 pnpm validate:verify | db:verify-rls

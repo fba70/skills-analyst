@@ -87,6 +87,9 @@ export function BuilderWizard({ categories }: { categories: Category[] }) {
         domain,
         dialect,
         sectionInputs,
+        // What the archetype proposed, recorded so R6.2 can later ask which of these
+        // survived into the published skill.
+        scaffoldSections: scaffold?.sections.map((section) => section.role) ?? [],
       });
 
       if (!result.ok) {

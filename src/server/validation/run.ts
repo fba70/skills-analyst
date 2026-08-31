@@ -5,6 +5,7 @@ import { SEVERITY_WEIGHTS, substanceFactor } from "@/lib/quality";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 
 import { db } from "@/server/db";
+import { withExplicitOrgScope } from "@/server/dal/scope";
 import {
   capabilitySurfaces,
   events,
@@ -117,6 +118,18 @@ export type ValidateOptions = {
    */
   includeCostly?: boolean;
   limit?: number;
+  /**
+   * Validate an organisation's own content (R6.1).
+   *
+   * Without this the selection below runs unscoped, and RLS answers with `org_id IS NULL`
+   * only — so an org-scoped version is **invisible to the validator**. A published draft
+   * would be created, handed to this function, and silently not validated, leaving the
+   * skill stuck at `pending` for ever.
+   *
+   * The write path was already correct: `validateOne` sets `app.org_id` from the row it is
+   * judging. Only the read was missing, which is the failure mode that hides best.
+   */
+  orgId?: string | null;
   onProgress?: (message: string) => void;
 };
 
@@ -129,27 +142,32 @@ export async function validatePending(
     ? (["pending", "validating", "indexed", "quarantined", "revalidating"] as const)
     : (["pending", "validating", "revalidating"] as const);
 
-  const rows = await db
-    .select({
-      id: skillVersions.id,
-      orgId: skillVersions.orgId,
-      skillId: skillVersions.skillId,
-      slug: skills.slug,
-      dialect: skills.dialect,
-      name: skills.name,
-      summary: skills.summary,
-      contentHash: skillVersions.contentHash,
-      contentStored: skillVersions.contentStored,
-      provenance: skillVersions.provenance,
-    })
-    .from(skillVersions)
-    .innerJoin(skills, eq(skills.id, skillVersions.skillId))
-    .where(
-      options.versionIds?.length
-        ? inArray(skillVersions.id, options.versionIds)
-        : inArray(skillVersions.status, [...statuses]),
-    )
-    .limit(options.limit ?? 1000);
+  const select = (client: typeof db) =>
+    client
+      .select({
+        id: skillVersions.id,
+        orgId: skillVersions.orgId,
+        skillId: skillVersions.skillId,
+        slug: skills.slug,
+        dialect: skills.dialect,
+        name: skills.name,
+        summary: skills.summary,
+        contentHash: skillVersions.contentHash,
+        contentStored: skillVersions.contentStored,
+        provenance: skillVersions.provenance,
+      })
+      .from(skillVersions)
+      .innerJoin(skills, eq(skills.id, skillVersions.skillId))
+      .where(
+        options.versionIds?.length
+          ? inArray(skillVersions.id, options.versionIds)
+          : inArray(skillVersions.status, [...statuses]),
+      )
+      .limit(options.limit ?? 1000);
+
+  const rows = options.orgId
+    ? await withExplicitOrgScope(options.orgId, (tx) => select(tx))
+    : await select(db);
 
   const outcomes: ValidationOutcome[] = [];
 
@@ -206,6 +224,8 @@ async function validateOne(
     // "no frontmatter block" is not an error for a dialect that has none, so the analyzer
     // decides what it means rather than the parser.
     parseError,
+    // Which budget a costed analyzer bills to (RC.2). Null for the public corpus.
+    orgId: row.orgId,
   };
 
   // The costly pass is skipped entirely for a bundle with no executable content: there is
