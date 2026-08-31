@@ -32,7 +32,6 @@ export const metadata: Metadata = {
  */
 export default async function ArchetypesPage() {
   const entries = await archetypeIndex();
-  const mined = entries.filter((entry) => entry.version !== null);
 
   return (
     <div className="grid min-w-0 gap-6">
@@ -43,11 +42,6 @@ export default async function ArchetypesPage() {
           asserted. Each archetype contrasts skills from a curated allow-list of repositories
           against everything else, and keeps only the elements that <em>separate</em> them.
           An element common to both is a description of markdown, not advice.
-        </p>
-        <p className="text-muted-foreground text-sm">
-          {mined.length} of {entries.length} function categories have cleared the evidence
-          gate ({EVIDENCE_GATE.structures} distinct structures across {EVIDENCE_GATE.sources}{" "}
-          sources).
         </p>
       </div>
 

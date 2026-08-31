@@ -89,8 +89,19 @@ export default async function DashboardPage() {
           />
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Card>
+        {/*
+          Two cards read as one panel, so their rows have to sit on the same lines.
+
+          Two things were pushing them apart. The headers are free text of different
+          lengths, so one description wrapping to an extra line moved everything under it;
+          `grid-rows-subgrid` puts both headers in a shared row and both bodies in another,
+          which sizes them together instead of independently. And the licence rows had no
+          share bar, so they were shorter than the quality rows and drifted further out of
+          line with each one. Both lists now render through `Distribution`, so a row is a
+          row whatever is in its label.
+        */}
+        <div className="grid gap-4 lg:grid-cols-2 lg:grid-rows-[auto_1fr]">
+          <Card className="lg:row-span-2 lg:grid lg:grid-rows-subgrid">
             <CardHeader>
               <CardTitle className="text-base">Quality</CardTitle>
               <CardDescription>
@@ -102,6 +113,7 @@ export default async function DashboardPage() {
             <CardContent>
               <Distribution
                 rows={stats.qualityBands.map((row) => ({
+                  key: row.band,
                   label: row.band,
                   count: row.count,
                 }))}
@@ -109,7 +121,7 @@ export default async function DashboardPage() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="lg:row-span-2 lg:grid lg:grid-rows-subgrid">
             <CardHeader>
               <CardTitle className="text-base">Licences</CardTitle>
               <CardDescription>
@@ -120,19 +132,13 @@ export default async function DashboardPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <ul className="grid gap-2">
-                {stats.licenceMix.map((row) => (
-                  <li
-                    key={row.posture}
-                    className="flex items-center justify-between gap-2 text-sm"
-                  >
-                    <LicenseBadge spdx={null} redistribution={row.posture} />
-                    <span className="text-muted-foreground tabular-nums">
-                      {row.count.toLocaleString()}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <Distribution
+                rows={stats.licenceMix.map((row) => ({
+                  key: row.posture,
+                  label: <LicenseBadge spdx={null} redistribution={row.posture} />,
+                  count: row.count,
+                }))}
+              />
             </CardContent>
           </Card>
         </div>
@@ -228,26 +234,49 @@ function Stat({
   );
 }
 
-function Distribution({ rows }: { rows: Array<{ label: string; count: number }> }) {
+/**
+ * One distribution, used by both cards so their rows land on the same lines.
+ *
+ * `min-h-6` on the label line is what makes that hold across different label content: a
+ * `LicenseBadge` is taller than a bare word, so without a floor the licence rows would each
+ * be a pixel or two off and the drift would accumulate down the list. Six is the badge's own
+ * height, so nothing is padded — the text row is simply told to match it.
+ *
+ * `items-center` rather than `items-baseline` for the same reason. A badge has no useful
+ * baseline to share with the number beside it; centring is what makes a chip and a figure
+ * look level.
+ */
+function Distribution({
+  rows,
+}: {
+  rows: Array<{ key: string; label: React.ReactNode; count: number }>;
+}) {
   const total = rows.reduce((sum, row) => sum + row.count, 0);
   if (total === 0) {
     return <p className="text-muted-foreground text-sm">Nothing scored yet.</p>;
   }
 
   return (
-    <ul className="grid gap-2">
+    <ul className="grid gap-3">
       {rows.map((row) => {
         const share = Math.round((row.count / total) * 100);
+        // A row with skills in it must not read as 0%, and must not draw an empty track:
+        // "43 · 0%" beside a blank bar looks like a bug rather than like a small number.
+        const rounded = share === 0 && row.count > 0 ? "<1%" : `${share}%`;
+
         return (
-          <li key={row.label} className="grid gap-1">
-            <div className="flex items-baseline justify-between gap-2 text-sm">
-              <span>{row.label}</span>
-              <span className="text-muted-foreground tabular-nums text-xs">
-                {row.count.toLocaleString()} · {share}%
+          <li key={row.key} className="grid gap-1.5">
+            <div className="flex min-h-6 items-center justify-between gap-2 text-sm">
+              <span className="min-w-0 truncate">{row.label}</span>
+              <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+                {row.count.toLocaleString()} · {rounded}
               </span>
             </div>
             <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
-              <div className="bg-primary h-full rounded-full" style={{ width: `${share}%` }} />
+              <div
+                className="bg-primary h-full rounded-full"
+                style={{ width: `${row.count > 0 ? Math.max(share, 1) : 0}%` }}
+              />
             </div>
           </li>
         );

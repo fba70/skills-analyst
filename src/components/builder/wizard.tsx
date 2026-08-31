@@ -398,7 +398,7 @@ const STEP_LABELS = ["Category", "Purpose", "Your context", "Sections"];
 
 function Steps({ current }: { current: number }) {
   return (
-    <ol className="flex flex-wrap items-center gap-2 text-xs">
+    <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm sm:gap-x-3 sm:text-base">
       {STEP_LABELS.map((label, index) => (
         <li key={label} className="flex items-center gap-2">
           <span

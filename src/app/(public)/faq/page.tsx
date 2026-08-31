@@ -47,12 +47,20 @@ export const metadata: Metadata = {
  */
 export default function FaqPage() {
   return (
-    <div className="grid min-w-0 max-w-4xl gap-8">
+    <div className="grid min-w-0 gap-8">
       <header className="grid gap-2">
         <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
           What everything here means
         </h1>
-        <p className="text-muted-foreground">
+        {/*
+          The measure is set on the intro paragraph, not on the page.
+
+          A `max-w-*` on the root made this the one route in the app that did not fill its
+          shell, so it sat in a column against the left edge while every sibling — registry,
+          archetypes, dashboard — used the full width. The page frame is the layout's job;
+          keeping a heading readable is this paragraph's, exactly as on `/archetypes`.
+        */}
+        <p className="text-muted-foreground max-w-3xl">
           Every badge, score and category on this platform is a judgement with a rule behind
           it. This page is those rules. The numbers below are read from the running system,
           so they cannot drift from what the registry actually does.
