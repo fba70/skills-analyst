@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { CapabilitySurface } from "@/components/registry/capability-surface";
+import { Explain, ExplainLink } from "@/components/registry/explain";
 import { ConsistencyCard } from "@/components/registry/consistency-card";
 import { DownloadCard } from "@/components/registry/download-card";
 import { ProvenanceCard } from "@/components/registry/provenance-card";
@@ -75,8 +76,18 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
         <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">{skill.name}</h1>
         {skill.summary ? <p className="text-muted-foreground">{skill.summary}</p> : null}
         <div className="flex flex-wrap items-center gap-2">
-          <OverallVerdict verdicts={skill.verdicts} status={skill.status} />
-          <Badge variant="outline">Quality {skill.qualityScore ?? "—"}/100</Badge>
+          <Explain anchor="validation">
+            <OverallVerdict verdicts={skill.verdicts} status={skill.status} />
+          </Explain>
+          {/*
+            Wrapped, not trailed by a "?" — the badge is already what a reader points at
+            when they want to know what it means, so making it the target costs no visual
+            weight. Safe here because nothing on this page wraps these in a link; the
+            registry list does, which is why it gets a plain link near its filters instead.
+          */}
+          <Explain anchor="quality">
+            <Badge variant="outline">Quality {skill.qualityScore ?? "—"}/100</Badge>
+          </Explain>
           <Badge variant="outline">{skill.dialect.replace(/_/g, " ")}</Badge>
           {skill.fileCount ? (
             <Badge variant="outline">
@@ -102,6 +113,12 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
                 </Badge>
               </Link>
             ))}
+            {/*
+              The badges keep their existing link into the registry — browsing the rest of a
+              category is more useful than a definition, and taking that away to explain the
+              word would be a bad trade. The definition gets its own quiet link.
+            */}
+            <ExplainLink anchor="categories">What are categories?</ExplainLink>
           </div>
         ) : null}
 
@@ -152,7 +169,10 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Validation</CardTitle>
+          <CardTitle className="flex flex-wrap items-baseline gap-3">
+            Validation
+            <ExplainLink anchor="validation">How validation works</ExplainLink>
+          </CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4">
           <ul className="grid gap-2">
@@ -214,7 +234,10 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Capability surface</CardTitle>
+          <CardTitle className="flex flex-wrap items-baseline gap-3">
+            Capability surface
+            <ExplainLink anchor="capabilities">What are capabilities?</ExplainLink>
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <CapabilitySurface surface={skill.surface} undocumented={skill.undocumented} />

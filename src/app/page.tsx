@@ -80,7 +80,7 @@ export default async function HomePage() {
           <div className="flex items-center gap-3 sm:gap-4">
             <Logo className="text-foreground size-11 shrink-0 sm:size-14" />
             <span className="text-lg font-semibold tracking-[0.18em] uppercase sm:text-2xl sm:tracking-[0.22em]">
-              Skill Foundry
+              Skills Foundry
             </span>
           </div>
           <h1 className="max-w-2xl text-3xl font-semibold tracking-tight text-balance sm:text-4xl lg:text-5xl">
@@ -88,7 +88,7 @@ export default async function HomePage() {
           </h1>
           <p className="text-muted-foreground max-w-2xl text-base sm:text-lg">
             Registries collect skills. Wizards generate them. Nothing carries what the
-            corpus proves works back into creation. Skill Foundry closes that loop.
+            corpus proves works back into creation. Skills Foundry closes that loop.
           </p>
           <div className="flex flex-col gap-3 sm:flex-row">
             {/*
@@ -139,7 +139,7 @@ export default async function HomePage() {
       </main>
 
       <footer className="text-muted-foreground px-4 py-6 text-sm sm:px-6">
-        Skill Foundry — built by Boris Fedotov — https://fba70.vercel.app/
+        Skills Foundry — built by Boris Fedotov — https://fba70.vercel.app/
       </footer>
     </div>
   );

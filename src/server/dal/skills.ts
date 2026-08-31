@@ -12,7 +12,7 @@ import {
   verdicts,
 } from "@/server/db/schema";
 import { capabilityLabel } from "@/lib/capabilities";
-import { withOrgScope } from "@/server/dal/scope";
+import { withOrgScope, withPublicScope } from "@/server/dal/scope";
 import { labelFor, REVIEW_FLOOR, type CategoryAxis } from "@/server/taxonomy/vocabulary";
 
 /**
@@ -323,45 +323,89 @@ export async function listSkills(filters: SkillFilters = {}): Promise<SkillListP
  * recomputing every facet against every other facet's selection is a lot of query for
  * very little at this corpus size.
  */
+/**
+ * Facet counts for the registry sidebar.
+ *
+ * ## Counted in Postgres, because it used to be counted in JavaScript
+ *
+ * The first version selected **every indexed skill** — one row per skill, no limit — pulled
+ * all ~6,100 into node, and tallied them with `Map`s. It then took the version ids from
+ * those same rows and asked for capability surfaces with a 6,100-element `IN (...)`.
+ *
+ * That is what made `/skills` take **2.3 seconds** while `/archetypes` took 0.2, and the
+ * cost grew with the corpus rather than with the page: paging the list to ten results was
+ * pointless when rendering the filters beside it read the whole table. At 500K skills
+ * (R7.4's target) it would not have loaded at all.
+ *
+ * Every count below is now a `GROUP BY` or a `count(*) filter`, which is what the category
+ * facet already did — it was the one part of this function that was right, and it is the
+ * model the rest now follows. The rows never leave the database; only the tallies do.
+ */
 export async function getFilterOptions(): Promise<FilterOptions> {
   return withOrgScope(async (tx) => {
-    const base = tx
+    // The population every facet is counted over: canonical, indexed, servable.
+    const servable = and(eq(skills.status, "indexed"), isNull(skills.canonicalSkillId));
+
+    const [totals] = await tx
       .select({
-        sourceId: skillVersions.sourceId,
-        sourceName: sources.name,
-        dialect: skills.dialect,
-        posture: skillVersions.redistribution,
-        contentStored: skillVersions.contentStored,
-        versionId: skillVersions.id,
+        total: sql<number>`count(*)::int`,
+        mirrored: sql<number>`count(*) filter (where ${skillVersions.contentStored})::int`,
+      })
+      .from(skills)
+      .innerJoin(skillVersions, eq(skillVersions.id, skills.currentVersionId))
+      .where(servable);
+
+    const sourceRows = await tx
+      .select({
+        value: skillVersions.sourceId,
+        label: sources.name,
+        count: sql<number>`count(*)::int`,
       })
       .from(skills)
       .innerJoin(skillVersions, eq(skillVersions.id, skills.currentVersionId))
       .leftJoin(sources, eq(sources.id, skillVersions.sourceId))
-      .where(and(eq(skills.status, "indexed"), isNull(skills.canonicalSkillId)));
+      .where(servable)
+      .groupBy(skillVersions.sourceId, sources.name)
+      .orderBy(desc(sql`count(*)`));
 
-    const rows = await base;
+    const dialectRows = await tx
+      .select({ value: skills.dialect, count: sql<number>`count(*)::int` })
+      .from(skills)
+      .innerJoin(skillVersions, eq(skillVersions.id, skills.currentVersionId))
+      .where(servable)
+      .groupBy(skills.dialect)
+      .orderBy(desc(sql`count(*)`));
 
-    const tally = <T extends string>(values: T[]) => {
-      const counts = new Map<T, number>();
-      for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
-      return counts;
-    };
+    const postureRows = await tx
+      .select({ value: skillVersions.redistribution, count: sql<number>`count(*)::int` })
+      .from(skills)
+      .innerJoin(skillVersions, eq(skillVersions.id, skills.currentVersionId))
+      .where(servable)
+      .groupBy(skillVersions.redistribution)
+      .orderBy(desc(sql`count(*)`));
 
-    const sourceCounts = tally(rows.map((row) => `${row.sourceId} ${row.sourceName ?? ""}`));
-    const dialectCounts = tally(rows.map((row) => row.dialect));
-    const postureCounts = tally(rows.map((row) => row.posture));
-
-    const capabilityRows = await tx
+    /**
+     * One row of five counts, rather than every surface fetched and unpacked in node.
+     *
+     * The surface is jsonb keyed by capability, so each is a `filter` on a key lookup —
+     * the same expression `whereFor` uses to actually apply the filter, which is what keeps
+     * the sidebar's number and the filtered result in agreement.
+     */
+    const [capabilityTotals] = await tx
       .select({
-        surface: capabilitySurfaces.surface,
+        network: sql<number>`count(*) filter (where cs.surface -> 'network' ->> 'present' = 'true')::int`,
+        fs_read: sql<number>`count(*) filter (where cs.surface -> 'fs_read' ->> 'present' = 'true')::int`,
+        fs_write: sql<number>`count(*) filter (where cs.surface -> 'fs_write' ->> 'present' = 'true')::int`,
+        shell: sql<number>`count(*) filter (where cs.surface -> 'shell' ->> 'present' = 'true')::int`,
+        credentials: sql<number>`count(*) filter (where cs.surface -> 'credentials' ->> 'present' = 'true')::int`,
       })
-      .from(capabilitySurfaces)
-      .where(
-        inArray(
-          capabilitySurfaces.skillVersionId,
-          rows.map((row) => row.versionId),
-        ),
-      );
+      .from(skills)
+      .innerJoin(skillVersions, eq(skillVersions.id, skills.currentVersionId))
+      .innerJoin(
+        sql`${capabilitySurfaces} cs`,
+        sql`cs.skill_version_id = ${skillVersions.id}`,
+      )
+      .where(servable);
 
     /**
      * Category facets, per axis (R3.1).
@@ -379,8 +423,7 @@ export async function getFilterOptions(): Promise<FilterOptions> {
       .innerJoin(skills, eq(skills.id, skillCategories.skillId))
       .where(
         and(
-          eq(skills.status, "indexed"),
-          isNull(skills.canonicalSkillId),
+          servable,
           sql`(${skillCategories.confidence} >= ${REVIEW_FLOOR} or ${skillCategories.reviewedAt} is not null)`,
         ),
       )
@@ -396,38 +439,32 @@ export async function getFilterOptions(): Promise<FilterOptions> {
           count: row.count,
         }));
 
-    const capabilityCounts = new Map<string, number>();
-    for (const row of capabilityRows) {
-      const surface = (row.surface ?? {}) as Record<string, { present?: boolean }>;
-      for (const [key, value] of Object.entries(surface)) {
-        if (value?.present) capabilityCounts.set(key, (capabilityCounts.get(key) ?? 0) + 1);
-      }
-    }
-
     const label = (value: string) => value.replace(/_/g, " ");
 
     return {
-      sources: [...sourceCounts.entries()]
-        .map(([composite, count]) => {
-          const [value, name] = composite.split(" ");
-          return { value, label: name || value, count };
-        })
-        .sort((a, b) => b.count - a.count),
-      dialects: [...dialectCounts.entries()]
-        .map(([value, count]) => ({ value, label: label(value), count }))
-        .sort((a, b) => b.count - a.count),
-      postures: [...postureCounts.entries()]
-        .map(([value, count]) => ({ value, label: label(value), count }))
-        .sort((a, b) => b.count - a.count),
-      capabilities: [...capabilityCounts.entries()]
+      sources: sourceRows
+        .filter((row) => row.value !== null)
+        .map((row) => ({ value: row.value, label: row.label || row.value, count: row.count })),
+      dialects: dialectRows.map((row) => ({
+        value: row.value,
+        label: label(row.value),
+        count: row.count,
+      })),
+      postures: postureRows.map((row) => ({
+        value: row.value,
+        label: label(row.value),
+        count: row.count,
+      })),
+      capabilities: Object.entries(capabilityTotals ?? {})
+        .filter(([, count]) => count > 0)
         // Shared with the detail page's capability card, so the registry filter and the
         // skill page cannot disagree about what `fs_read` is called.
         .map(([value, count]) => ({ value, label: capabilityLabel(value), count }))
         .sort((a, b) => b.count - a.count),
       functions: facet("function"),
       domains: facet("domain"),
-      total: rows.length,
-      mirrored: rows.filter((row) => row.contentStored).length,
+      total: totals?.total ?? 0,
+      mirrored: totals?.mirrored ?? 0,
     };
   });
 }
@@ -672,10 +709,25 @@ export type SkillRef = {
  * `indexed` is therefore a filter, not a nicety, and a short list coming back is a correct
  * answer rather than an error.
  */
-export async function getSkillsByIds(ids: string[]): Promise<SkillRef[]> {
+export async function getSkillsByIds(
+  ids: string[],
+  options: { publicOnly?: boolean } = {},
+): Promise<SkillRef[]> {
   if (ids.length === 0) return [];
 
-  return withOrgScope(async (tx) => {
+  /**
+   * `publicOnly` for callers that are public by contract.
+   *
+   * Archetype exemplars are the case this exists for: `archetype-read` pins
+   * `org_id is null` on the archetype itself and then resolved its exemplars through
+   * `withOrgScope`, which is inconsistent twice over. It would let a signed-in viewer's own
+   * org rows into a list the page calls public, and — because `withOrgScope` resolves a
+   * session — it made a public read impossible outside a request, which is how the builder
+   * discovered it: `buildScaffold` threw on `next/navigation` in a plain node process.
+   */
+  const scope = options.publicOnly ? withPublicScope : withOrgScope;
+
+  return scope(async (tx) => {
     const rows = await tx
       .select({
         id: skills.id,

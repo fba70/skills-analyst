@@ -13,4 +13,5 @@ export * from "./structure";
 export * from "./taxonomy";
 export * from "./archetypes";
 export * from "./compliance";
+export * from "./drafts";
 export * from "./events";

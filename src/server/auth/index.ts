@@ -35,7 +35,7 @@ function nameFromEmail(email: string): string {
 const OTP_EXPIRY_SECONDS = 60 * 10;
 
 export const auth = betterAuth({
-  appName: "Skill Foundry",
+  appName: "Skills Foundry",
   // Derived, not pinned: every Vercel preview deployment has its own hostname, and a
   // baseURL fixed to production makes Better Auth reject preview requests.
   baseURL: getServerAppUrl(),

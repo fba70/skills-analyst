@@ -180,7 +180,10 @@ export async function archetypeDetail(category: string): Promise<ArchetypeDetail
   if (!current) return null;
 
   const exemplarIds = current.exemplarSkillIds ?? [];
-  const exemplars = await getSkillsByIds(exemplarIds);
+  // Public scope, matching this module's contract. An exemplar comes from the public
+  // corpus by construction, and resolving it in org scope would both widen the list for a
+  // signed-in viewer and require a session where none should be needed.
+  const exemplars = await getSkillsByIds(exemplarIds, { publicOnly: true });
 
   const stats = (current.stats ?? {}) as { contributors?: Contributor[] };
 

@@ -1,4 +1,4 @@
-# Skill Foundry
+# Skills Foundry
 
 Ingest agent skills from many sources, validate them, mine what good ones have in
 common, and feed that back into building new ones. **The loop is the product.**
@@ -31,7 +31,7 @@ in development — the code is printed to the terminal running `pnpm dev`:
 
 ```
 ┌──────────────────────────────────────────────┐
-│ Skill Foundry — Sign in                      │
+│ Skills Foundry — Sign in                      │
 │ to:   you@example.com                        │
 │ code: 422486                                 │
 └──────────────────────────────────────────────┘

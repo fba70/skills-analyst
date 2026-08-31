@@ -3,6 +3,7 @@ import { Download, ExternalLink, FileLock2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ExplainLink } from "@/components/registry/explain";
 
 /**
  * The download control, and — more often — the explanation of why there isn't one
@@ -90,7 +91,14 @@ export function DownloadCard({
           <FileLock2 className="text-muted-foreground size-4" />
           Not available for download
         </CardTitle>
-        <CardDescription>{reason}</CardDescription>
+        <CardDescription>
+          {reason}{" "}
+          {/*
+            The most-asked question on the whole registry lands here: a licence refusal
+            reads as a broken feature unless the rule is one click away.
+          */}
+          <ExplainLink anchor="licences">Why?</ExplainLink>
+        </CardDescription>
       </CardHeader>
       {originUrl ? (
         <CardContent>

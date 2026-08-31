@@ -1,5 +1,7 @@
 import "server-only";
 
+import { SEVERITY_WEIGHTS, substanceFactor } from "@/lib/quality";
+
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 
 import { db } from "@/server/db";
@@ -18,7 +20,13 @@ import { injectionScan } from "./analyzers/injection-scan";
 import { secretScan } from "./analyzers/secret-scan";
 import { structuralLint } from "./analyzers/structural-lint";
 import { loadBundle, type VersionProvenance } from "./bundle-loader";
-import { blocks, worstSeverity, type Analyzer, type AnalyzerOutput } from "./types";
+import {
+  blocks,
+  worstSeverity,
+  type Analyzer,
+  type AnalyzerInput,
+  type AnalyzerOutput,
+} from "./types";
 
 /**
  * The validation pass — the trust boundary (Doc 2 §7.2).
@@ -400,16 +408,13 @@ async function validateOne(
  * number is used for ranking rather than gating.
  */
 function scoreOf(results: Array<{ analyzer: Analyzer; output: AnalyzerOutput }>): number {
-  const weights: Record<string, number> = {
-    info: 1,
-    low: 3,
-    medium: 8,
-    high: 20,
-    critical: 40,
-  };
   const penalty = results
     .flatMap(({ output }) => output.findings)
-    .reduce((total, finding) => total + (weights[finding.severity] ?? 0), 0);
+    .reduce(
+      (total, finding) =>
+        total + (SEVERITY_WEIGHTS[finding.severity as keyof typeof SEVERITY_WEIGHTS] ?? 0),
+      0,
+    );
   const defectScore = Math.max(0, Math.min(100, 100 - penalty));
 
   /**
@@ -425,11 +430,9 @@ function scoreOf(results: Array<{ analyzer: Analyzer; output: AnalyzerOutput }>)
 
   if (bodyBytes === null) return defectScore;
 
-  const SUBSTANTIAL_BYTES = 2_000;
-  const FLOOR = 0.45;
-  const substance = FLOOR + (1 - FLOOR) * Math.min(1, bodyBytes / SUBSTANTIAL_BYTES);
-
-  return Math.max(0, Math.min(100, Math.round(defectScore * substance)));
+  // The constants live in `lib/quality.ts` so the public reference page explains exactly
+  // the arithmetic that runs here, rather than a copy of it that can drift.
+  return Math.max(0, Math.min(100, Math.round(defectScore * substanceFactor(bodyBytes))));
 }
 
 /** Re-scan selector: every version last judged by an older version of an analyzer. */
@@ -440,4 +443,55 @@ export async function versionsNeedingRescan(analyzer: string, version: string) {
     .innerJoin(verdicts, eq(verdicts.skillVersionId, skillVersions.id))
     .where(and(eq(verdicts.analyzer, analyzer), sql`${verdicts.analyzerVersion} <> ${version}`))
     .groupBy(skillVersions.id);
+}
+
+
+/**
+ * Runs the free analyzers over a bundle that exists only in memory.
+ *
+ * The seam the builder validates a draft through (R4.5). Everything above this point reads
+ * a stored version by id and writes verdicts; a draft has neither an id in `skill_versions`
+ * nor bytes in R2, and inventing both to reuse `validateOne` would mean persisting an
+ * unvalidated skill in order to validate it.
+ *
+ * The analyzers themselves are untouched — `AnalyzerInput` already takes files rather than
+ * a storage key, which is what makes this possible at all. Same set, same order, same
+ * crash-is-not-a-pass handling, so a builder draft is held to exactly the standard the
+ * registry applies. The costly R2.3 pass is excluded: it compares documentation against
+ * bundled code, and a text-only first draft has none.
+ */
+export async function runAnalyzersOnBundle(
+  input: AnalyzerInput,
+): Promise<Array<{ analyzer: string; reason: string; severity: string; message: string }>> {
+  const collected: Array<{
+    analyzer: string;
+    reason: string;
+    severity: string;
+    message: string;
+  }> = [];
+
+  for (const analyzer of ANALYZERS) {
+    try {
+      const output = await analyzer.run(input);
+      for (const finding of output.findings) {
+        collected.push({
+          analyzer: analyzer.name,
+          reason: finding.reason,
+          severity: finding.severity,
+          message: finding.message,
+        });
+      }
+    } catch (error) {
+      // A crashed analyzer has not cleared the draft, exactly as it has not cleared a
+      // synced skill.
+      collected.push({
+        analyzer: analyzer.name,
+        reason: "analyzer-error",
+        severity: "high",
+        message: `${analyzer.name} threw: ${(error as Error).message}`,
+      });
+    }
+  }
+
+  return collected;
 }

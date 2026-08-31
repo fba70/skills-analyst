@@ -1,5 +1,5 @@
 {
-  "name": "skill-foundry",
+  "name": "skills-foundry",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -24,6 +24,7 @@
     "verify:export": "tsx --conditions=react-server scripts/verify-export.mts",
     "mail:check": "tsx --conditions=react-server scripts/mail-check.mts",
     "verify:otp": "tsx --conditions=react-server scripts/verify-otp-delivery.mts",
+    "verify:builder": "tsx --conditions=react-server scripts/verify-builder.mts",
     "crawl": "tsx --conditions=react-server scripts/crawl.mts",
     "promote": "tsx --conditions=react-server scripts/promote.mts",
     "admin:grant": "tsx --conditions=react-server scripts/grant-admin.mts",

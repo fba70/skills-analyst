@@ -2,7 +2,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Library, Settings2, Shapes, type LucideIcon } from "lucide-react";
+import {
+  BookOpen,
+  LayoutDashboard,
+  Library,
+  Settings2,
+  Shapes,
+  Sparkles,
+  type LucideIcon,
+} from "lucide-react";
 
 import {
   SidebarGroup,
@@ -25,6 +33,12 @@ const items: NavItem[] = [
   // Public like the registry, and sits beside it on purpose: the registry is what the
   // corpus *contains*, archetypes are what it has been shown to *mean*.
   { title: "Archetypes", href: "/archetypes", icon: Shapes },
+  // Directly after the archetypes it builds from — the two are one idea, and the ordering
+  // is the argument: read what works, then make one.
+  { title: "Build a skill", href: "/build", icon: Sparkles },
+  // Last in the group: a reference is what you reach for from one of the pages above, not
+  // a destination anyone opens first.
+  { title: "FAQ", href: "/faq", icon: BookOpen },
 ];
 
 /** System-admin only. Rendered from a server-resolved flag, never a client role check. */
