@@ -11,6 +11,12 @@ import {
   skillVersions,
 } from "@/server/db/schema";
 import { EXTRACTOR_VERSION } from "@/server/analytics/structure";
+import {
+  isClassifiable,
+  isNotClassifiable,
+  NOT_CLASSIFIABLE_REASON,
+} from "./classifiable";
+import { pageWindow, type Paged, type PageQuery } from "@/server/dal/paging";
 
 import {
   classifyBatch,
@@ -19,7 +25,12 @@ import {
   needsReview,
   type BatchItem,
 } from "./classify";
-import { isValidCategory, REVIEW_FLOOR, TAXONOMY_VERSION } from "./vocabulary";
+import {
+  isValidCategory,
+  REVIEW_FLOOR,
+  TAXONOMY_VERSION,
+  type CategoryAxis,
+} from "./vocabulary";
 
 /**
  * Running the classifier over a slice of the corpus and storing what it decided.
@@ -94,6 +105,9 @@ async function selectSkills(options: ClassifyRunOptions) {
     // A variant is labelled through its canonical entry; labelling both pays twice for
     // one answer and lets the two disagree.
     isNull(skills.canonicalSkillId),
+    // Nothing to read, nothing to classify. Skipped before the model is called, so this
+    // saves the call as well as the low-confidence row it would have produced.
+    isClassifiable(),
     options.force ? undefined : unlabelled,
   );
 
@@ -317,6 +331,25 @@ async function syncCategoriesArray(tx: Tx, skillId: string): Promise<void> {
   `);
 }
 
+/**
+ * Skills still to classify — excluding the ones that never can be.
+ *
+ * Without the rule this number could not reach zero: a skill with no description is
+ * unlabelled for ever, so "remaining" would settle at a floor and the taxonomy would look
+ * permanently unfinished. Those are counted separately by `notClassifiableCount`, which is
+ * the honest split — one number is work, the other is a corpus-quality fact.
+ */
+/** Indexed, canonical, and with nothing a classifier could read. Never queued, never paid for. */
+export async function notClassifiableCount(): Promise<number> {
+  const [{ count }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(skills)
+    .where(
+      and(eq(skills.status, "indexed"), isNull(skills.canonicalSkillId), isNotClassifiable()),
+    );
+  return count;
+}
+
 async function remainingCount(): Promise<number> {
   const [{ count }] = await db
     .select({ count: sql<number>`count(*)::int` })
@@ -325,6 +358,7 @@ async function remainingCount(): Promise<number> {
       and(
         eq(skills.status, "indexed"),
         isNull(skills.canonicalSkillId),
+        isClassifiable(),
         notExists(
           db
             .select({ one: sql`1` })
@@ -378,12 +412,63 @@ export async function taxonomySummary() {
     (c) => c.axis === "function" && c.confident >= ARCHETYPE_THRESHOLD,
   ).length;
 
-  return { counts, totals, readyForArchetype, remaining: await remainingCount() };
+  return {
+    counts,
+    totals,
+    readyForArchetype,
+    remaining: await remainingCount(),
+    notClassifiable: await notClassifiableCount(),
+  };
 }
 
-/** The low-confidence queue (R3.1): worst first, so a curator's time goes where it pays. */
-export async function reviewQueue(limit = 25) {
-  return db
+export type QueueItem = {
+  id: string;
+  skillId: string;
+  slug: string;
+  name: string;
+  summary: string | null;
+  // The enum type, not `string`: the panel maps this to a label per axis, and widening it
+  // here would make that lookup silently accept anything.
+  axis: CategoryAxis;
+  value: string;
+  confidence: number;
+  rationale: string | null;
+};
+
+/**
+ * The low-confidence queue (R3.1): worst first, so a curator's time goes where it pays.
+ *
+ * **Paged, and the count is the point.** This used to take a bare `limit` and return the
+ * worst 25 with no total beside them, which made the panel actively misleading: deciding a
+ * row deleted or pinned it, the page revalidated, and the next-worst row slid into the
+ * empty slot. The list came back exactly as long as before. With 1,130 assignments held,
+ * every correct decision looked like it had been undone.
+ *
+ * Returning `total` is what makes the work legible — "20 of 1,130" says both that the
+ * decision landed and that the queue is far deeper than one screen. It also says something
+ * the UI could not previously admit: at this depth the queue is not clearable by hand, and
+ * that is a fact about `REVIEW_FLOOR`, not about the curator.
+ */
+export async function reviewQueue(query: PageQuery = {}): Promise<Paged<QueueItem>> {
+  const where = and(
+    eq(skillCategories.classifierVersion, TAXONOMY_VERSION),
+    isNull(skillCategories.reviewedAt),
+    sql`${skillCategories.confidence} < ${REVIEW_FLOOR}`,
+    // A row a curator cannot decide is not a queue item. These are cleared by
+    // `sweepNotClassifiable`; excluding them here means the queue never shows one even
+    // between a sync and the next sweep.
+    isClassifiable(),
+  );
+
+  const [{ total }] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(skillCategories)
+    .innerJoin(skills, eq(skills.id, skillCategories.skillId))
+    .where(where);
+
+  const window = pageWindow(total, query.page, query.pageSize);
+
+  const items = await db
     .select({
       id: skillCategories.id,
       skillId: skillCategories.skillId,
@@ -397,15 +482,21 @@ export async function reviewQueue(limit = 25) {
     })
     .from(skillCategories)
     .innerJoin(skills, eq(skills.id, skillCategories.skillId))
-    .where(
-      and(
-        eq(skillCategories.classifierVersion, TAXONOMY_VERSION),
-        isNull(skillCategories.reviewedAt),
-        sql`${skillCategories.confidence} < ${REVIEW_FLOOR}`,
-      ),
-    )
-    .orderBy(asc(skillCategories.confidence))
-    .limit(limit);
+    .where(where)
+    /**
+     * `id` breaks the tie, and it is not decoration.
+     *
+     * Confidence alone is not a total order — hundreds of rows share a score — so two
+     * queries could return the same page in a different order, and a row could appear on
+     * page 1 and page 2 or on neither. Deciding rows *removes* them from this set while a
+     * curator is paging through it, which is exactly the workload that exposes an unstable
+     * sort.
+     */
+    .orderBy(asc(skillCategories.confidence), asc(skillCategories.id))
+    .limit(window.pageSize)
+    .offset(window.offset);
+
+  return { items, total, page: window.page, pageSize: window.pageSize, pageCount: window.pageCount };
 }
 
 /**
@@ -491,4 +582,91 @@ export async function resyncCategoryArrays(): Promise<number> {
       and s.categories is distinct from coalesce(servable.values, '{}'::text[])
   `);
   return result.rowCount ?? 0;
+}
+
+
+export type SweepResult = {
+  /** Assignments the rule matched. Equal to `deleted` unless this was a dry run. */
+  matched: number;
+  /** Assignments actually deleted — zero on a dry run. */
+  deleted: number;
+  /** Distinct skills those assignments belonged to. */
+  skills: number;
+  /** Held assignments left, which no rule can decide. */
+  remainingHeld: number;
+};
+
+/**
+ * Clears held assignments the classifier should never have been asked to make.
+ *
+ * Free, offline, re-runnable, and a sibling to `reapplyMarkerThreshold` — a rule added
+ * after the fact is not finished until the rows decided before it are re-judged. The
+ * selector now skips these skills, so nothing new accumulates; this is the backlog.
+ *
+ * **Deleted, not marked reviewed.** `reviewed_at` means a human decided, and the upsert's
+ * `setWhere: reviewedAt is null` treats it as a pin — so marking these would freeze a guess
+ * in place and stop a later, better-described version of the skill ever being classified.
+ * Deleting matches what `reviewCategory("reject")` already does and for the same reason: a
+ * category the skill does not have is not a category we are unsure about.
+ *
+ * Only *held* rows are touched. A confident assignment on a thin description is left alone
+ * — two exist, and removing a label a curator can still see and reject is a bigger
+ * intervention than this rule has earned.
+ */
+export async function sweepNotClassifiable(
+  options: { dryRun?: boolean } = {},
+): Promise<SweepResult> {
+  const doomed = await db
+    .select({ id: skillCategories.id, skillId: skillCategories.skillId })
+    .from(skillCategories)
+    .innerJoin(skills, eq(skills.id, skillCategories.skillId))
+    .where(
+      and(
+        eq(skillCategories.classifierVersion, TAXONOMY_VERSION),
+        isNull(skillCategories.reviewedAt),
+        sql`${skillCategories.confidence} < ${REVIEW_FLOOR}`,
+        isNotClassifiable(),
+      ),
+    );
+
+  const skillIds = [...new Set(doomed.map((row) => row.skillId))];
+
+  if (!options.dryRun && doomed.length > 0) {
+    await db.transaction(async (tx) => {
+      await tx.delete(skillCategories).where(
+        inArray(
+          skillCategories.id,
+          doomed.map((row) => row.id),
+        ),
+      );
+
+      await tx.insert(events).values({
+        actorType: "system",
+        actorId: "taxonomy.sweep",
+        kind: "taxonomy.not_classifiable_cleared",
+        subjectType: "skill_categories",
+        reason: NOT_CLASSIFIABLE_REASON,
+        payload: { assignments: doomed.length, skills: skillIds.length },
+      });
+    });
+  }
+
+  const [{ remainingHeld }] = await db
+    .select({ remainingHeld: sql<number>`count(*)::int` })
+    .from(skillCategories)
+    .innerJoin(skills, eq(skills.id, skillCategories.skillId))
+    .where(
+      and(
+        eq(skillCategories.classifierVersion, TAXONOMY_VERSION),
+        isNull(skillCategories.reviewedAt),
+        sql`${skillCategories.confidence} < ${REVIEW_FLOOR}`,
+      ),
+    );
+
+  return {
+    matched: doomed.length,
+    deleted: options.dryRun ? 0 : doomed.length,
+    skills: skillIds.length,
+    remainingHeld,
+  };
 }

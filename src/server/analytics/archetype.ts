@@ -5,6 +5,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/server/db";
 import { EXTRACTOR_VERSION, type SectionRole } from "@/server/analytics/structure";
 import { SEED_REPOS } from "@/server/crawl/seeds";
+import { REVIEW_FLOOR } from "@/server/taxonomy/vocabulary";
 
 /**
  * Archetype mining (Doc 2 R3.2) — the core novel piece.
@@ -137,6 +138,22 @@ type Representative = {
 /**
  * One representative per distinct structure, best-quality first.
  *
+ * ## Only servable assignments count (R3.1)
+ *
+ * The confidence floor is enforced in the registry and in the denormalised
+ * `skills.categories`, and was missing here — so archetypes were mined partly from labels
+ * the classifier itself flagged as unreliable: **384 of 4,095** function assignments, and
+ * 127 of 601 in `explain`. An archetype is a claim about what good skills in a category
+ * look like, and a fifth of a category's evidence being guesswork does not blur that claim,
+ * it makes it a claim about a different category.
+ *
+ * A curator-reviewed row counts whatever its score, because a human already decided. That
+ * is the same rule `listSkills` applies, which is the point — the miner and the registry
+ * must agree on what a category *contains*.
+ *
+ * (SQL comments below stay short: a backtick inside a `sql` template literal terminates it,
+ * which is a genuinely confusing way to break a query.)
+ *
  * `distinct on (signature)` with a quality-descending order is the whole de-duplication:
  * Postgres keeps the first row per signature, and ordering by score makes that the best
  * example of each shape rather than an arbitrary one.
@@ -175,6 +192,8 @@ async function representatives(category: string): Promise<Representative[]> {
         and st.extractor_version = ${EXTRACTOR_VERSION}
       where c.axis = 'function'
         and c.value = ${category}
+        -- Servable assignments only (R3.1). See the note above the function.
+        and (c.confidence >= ${REVIEW_FLOOR} or c.reviewed_at is not null)
         and sk.status = 'indexed'
         and sk.canonical_skill_id is null
         and sk.quality_score is not null
@@ -357,6 +376,9 @@ async function skillTotal(category: string): Promise<number> {
     join skill_structures st on st.skill_version_id = sv.id
       and st.extractor_version = ${EXTRACTOR_VERSION}
     where c.axis = 'function' and c.value = ${category}
+      -- Same floor as the representatives query, or the collapse ratio compares two
+      -- different populations and reports a de-duplication that never happened.
+      and (c.confidence >= ${REVIEW_FLOOR} or c.reviewed_at is not null)
       and sk.status = 'indexed' and sk.canonical_skill_id is null
       and sk.quality_score is not null
   `);

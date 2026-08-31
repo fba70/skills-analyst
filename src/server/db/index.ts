@@ -4,6 +4,7 @@ import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 
 import * as schema from "./schema";
+import { guardClient } from "./client-guard";
 import { withRetry } from "./retry";
 
 /**
@@ -25,6 +26,19 @@ function createPool() {
       max: 10,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
+      /**
+       * TCP keepalive, because `pg` defaults it off and our workload is the worst case.
+       *
+       * The pipeline spends minutes inside a single GitHub fetch with no database traffic
+       * at all. A NAT or firewall on the path sees a silent socket and drops it, and the
+       * next read fails with `ETIMEDOUT` — which is precisely the crash this is a response
+       * to. Keepalive probes keep the connection observably alive through those gaps.
+       *
+       * The delay is short relative to the idle timeout above: a connection should either
+       * be proven alive or be returned to the pool and closed, never sit unproven.
+       */
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10_000,
     }),
   );
 }
@@ -47,6 +61,18 @@ function withNeonRetry(pool: Pool): Pool {
   const connect = pool.connect.bind(pool);
   const query = pool.query.bind(pool);
 
+  /**
+   * Idle-client errors, which `pg-pool` re-emits on the pool.
+   *
+   * Required, not optional: `EventEmitter.emit("error")` throws when nothing is listening,
+   * so a pool with no handler turns any network blip on an idle connection into a process
+   * exit. `pg-pool` has already removed the client by the time this runs — there is
+   * nothing to repair, only something to record.
+   */
+  pool.on("error", (error) => {
+    console.warn(`[db] idle client dropped — ${error.message.slice(0, 160)}`);
+  });
+
   const log = (phase: string) => (attempt: number, delayMs: number, error: unknown) => {
     // Worth a line: a cold start is normal, a repeated one is a signal, and silence here
     // turns "the database is slow sometimes" into an unfalsifiable claim.
@@ -62,7 +88,25 @@ function withNeonRetry(pool: Pool): Pool {
     if (typeof args[0] === "function") {
       return (connect as (...a: unknown[]) => unknown)(...args);
     }
-    return withRetry(() => connect(), { phase: "connect", onRetry: log("connect") });
+    /**
+     * Guarded, because this is the path `pg` leaves uncovered.
+     *
+     * `pool.query` attaches its own `error` listener around the query; `pool.connect()`
+     * attaches nothing, and Drizzle uses it for every `db.transaction()`. See
+     * `client-guard.ts` — an unhandled `error` event here is a process exit, and it took
+     * out a 60-pass ingestion run at pass 26.
+     */
+    return withRetry(() => connect(), {
+      phase: "connect",
+      onRetry: log("connect"),
+    }).then((client) =>
+      guardClient(client, {
+        onError: (error) =>
+          console.warn(
+            `[db] connection lost while checked out — ${error.message.slice(0, 160)}`,
+          ),
+      }),
+    );
   } as typeof pool.connect;
 
   pool.query = function patchedQuery(this: Pool, ...args: unknown[]) {

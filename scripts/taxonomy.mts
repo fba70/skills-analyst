@@ -6,6 +6,7 @@ import {
   classifySample,
   resyncCategoryArrays,
   reviewQueue,
+  sweepNotClassifiable,
   taxonomySummary,
 } from "../src/server/taxonomy/run";
 import { REVIEW_FLOOR, labelFor } from "../src/server/taxonomy/vocabulary";
@@ -16,7 +17,9 @@ import { REVIEW_FLOOR, labelFor } from "../src/server/taxonomy/vocabulary";
  *   pnpm taxonomy --status
  *   pnpm taxonomy --sample 20                  # classify 20 skills, spread across the corpus
  *   pnpm taxonomy --sample 20 --strategy top-quality
- *   pnpm taxonomy --review                     # the low-confidence queue
+ *   pnpm taxonomy --sweep [--dry]              # clear rows nothing can decide (free)
+ *   pnpm taxonomy --review                     # the low-confidence queue, page 1
+ *   pnpm taxonomy --review 4                   # page 4 of it (20 per page)
  *   pnpm taxonomy --resync                     # recompute skills.categories (free)
  *
  * **This is the one command in the repo that spends money.** It is a sample tool on
@@ -75,10 +78,45 @@ if (args.includes("--resync")) {
   process.exit(0);
 }
 
+if (args.includes("--sweep")) {
+  /**
+   * Applies the classifiability rule to assignments made before it existed.
+   *
+   * A rule added after the fact is not finished until the rows decided before it are
+   * re-judged — the same argument as `reapplyMarkerThreshold`. Free, offline and
+   * re-runnable, so `--dry` first is cheap and tells you exactly what would go.
+   */
+  const dryRun = args.includes("--dry");
+  const result = await sweepNotClassifiable({ dryRun });
+  console.info(
+    `\n${dryRun ? "would clear" : "cleared"} ${result.matched} assignment(s) ` +
+      `across ${result.skills} skill(s) with no usable description`,
+  );
+  console.info(
+    `${result.remainingHeld} held assignment(s) remain — ordinary descriptions the ` +
+      `classifier was unsure about, which no rule can decide.\n`,
+  );
+  process.exit(0);
+}
+
 if (args.includes("--review")) {
-  const queue = await reviewQueue(number("review") ?? 25);
-  console.info(`\nLow-confidence queue (${queue.length}), worst first`);
-  for (const row of queue) {
+  /**
+   * `--review N` is a **page**, not a row count.
+   *
+   * It used to mean "print N rows", which stopped being expressible once the queue became
+   * paged: `pageWindow` clamps to the shared admin page sizes, so `--review 3` silently
+   * printed 10. A flag that quietly ignores its argument is worse than one that changes
+   * meaning, so it changed meaning — and the header now states the page, the slice and the
+   * depth, none of which a row count could convey about a 1,130-deep queue.
+   */
+  // The largest shared page size: a terminal has room, and paging a 1,130-deep queue ten
+  // rows at a time is not a serious way to read it.
+  const queue = await reviewQueue({ page: number("review") ?? 1, pageSize: 20 });
+  console.info(
+    `\nLow-confidence queue — page ${queue.page} of ${queue.pageCount}, ` +
+      `showing ${queue.items.length} of ${queue.total}, worst first`,
+  );
+  for (const row of queue.items) {
     console.info(
       `\n  [${String(row.confidence).padStart(3)}] ${row.axis}: ${row.value}  —  ${row.slug}`,
     );

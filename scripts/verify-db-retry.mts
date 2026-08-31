@@ -161,5 +161,74 @@ const err = (code: string) => Object.assign(new Error(`fixture ${code}`), { code
   );
 }
 
+// --- The client guard: an error event must not kill the process ---------------
+{
+  const { guardClient } = await import("../src/server/db/client-guard");
+
+  /**
+   * A stand-in for a `pg` client, emitting exactly what the real one does.
+   *
+   * `Client._handleErrorEvent` ends with an unconditional `this.emit("error", err)` — it
+   * fires even after the in-flight query has been rejected — and an EventEmitter with no
+   * `error` listener throws from `emit`. That is the whole crash, reproduced here in three
+   * lines rather than by waiting for a socket to die mid-transaction.
+   */
+  const { EventEmitter } = await import("node:events");
+
+  {
+    const bare = new EventEmitter();
+    let crashed = false;
+    try {
+      bare.emit("error", new Error("read ETIMEDOUT"));
+    } catch {
+      crashed = true;
+    }
+    check(
+      "an unguarded client throws on an error event (the bug)",
+      crashed,
+      "the fixture does not reproduce the failure, so the next check proves nothing",
+    );
+  }
+
+  {
+    const client = new EventEmitter() as InstanceType<typeof EventEmitter> & {
+      release?: (err?: unknown) => string;
+    };
+    let released = 0;
+    client.release = () => {
+      released += 1;
+      return "released";
+    };
+
+    const seen: string[] = [];
+    guardClient(client, { onError: (error) => seen.push(error.message) });
+
+    let crashed = false;
+    try {
+      client.emit("error", new Error("read ETIMEDOUT"));
+    } catch {
+      crashed = true;
+    }
+    check(
+      "a guarded client absorbs the error event instead of crashing",
+      !crashed && seen.length === 1,
+      `crashed=${crashed}, absorbed=${seen.length}`,
+    );
+
+    const result = client.release?.();
+    check(
+      "release still returns the original result",
+      result === "released" && released === 1,
+      `result=${result}, releaseCalls=${released}`,
+    );
+
+    check(
+      "the guard is removed on release, so nothing accumulates per checkout",
+      client.listenerCount("error") === 0,
+      `${client.listenerCount("error")} listener(s) left after release`,
+    );
+  }
+}
+
 console.info(failures === 0 ? "\nRetry rules verified.\n" : `\n${failures} failure(s)\n`);
 process.exit(failures > 0 ? 1 : 0);
