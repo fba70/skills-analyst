@@ -137,7 +137,7 @@ Better Auth's table shapes are not guesswork: re-derive them with `getAuthTables
 `better-auth/db` whenever a plugin is added or the version moves, then generate a
 migration. Do not hand-tune those columns.
 
-## Where things stand — audited 2026-08-31 (numbers refreshed 18:00 UTC)
+## Where things stand — audited 2026-09-01
 
 Snapshot for picking this up cold. Numbers move; the shape does not. Full requirement-level
 audit is **`specs/core/02-requirements-spec.md` §10b** — that table is the source of truth,
@@ -145,31 +145,63 @@ this is the summary.
 
 | | |
 |---|---|
-| Corpus | 11,639 indexed · 144 quarantined · 4 tombstoned · 10,585 canonical / 1,202 near-duplicate variants |
-| Sources | 259 synced of 611 enabled, 352 never synced — **ingestion is ~42% done** |
-| Taxonomy | 4,101 skills labelled, 11,241 assignments · 1,105 held below the floor |
-| Structures | 11,827 fingerprints — keeping pace with the corpus |
+| Corpus | 16,273 indexed · 15,061 canonical / 1,212 near-duplicate variants · 225 quarantined |
+| Sources | 431 synced of 903 enabled, 472 never synced — **ingestion is ~48% done by source** |
+| Discovery | 2,023 candidates awaiting a decision, mostly from the skills.sh reconciliation |
+| Taxonomy | 4,101 labelled · 1,105 held below the floor · **11,298 canonical skills unlabelled** |
+| Derived | 16,542 fingerprints · 16,247 signatures · 1,268 variant links — all keeping pace |
 | Archetypes | 12 of 13 function categories at v5 · miner 2.1.0 · public at `/archetypes` |
-| Builder | live at `/build` · 1 skill published through the whole loop, 5 telemetry signals |
-| Spend, cumulative | ~$12 (taxonomy 4,124 calls, R2.3 six calls, builder). The `llm_usage` ledger only starts at RC.2, so it shows $0.05 — the rest predates metering. |
+| Builder | live at `/build` · 3 drafts, 1 published through the whole loop, 5 telemetry signals |
+| MCP | live at `/api/mcp` · six tools, token-gated, admin-tunable rate limits |
+| Spend, cumulative | ~$12. The `llm_usage` ledger starts at RC.2 and shows $0.05; the rest predates metering. |
 
-**Ingestion runs from a local terminal** (`pnpm pipeline --loop 60`), not from the schedule.
-A 2,000-skill repository needs longer than any function ceiling, and locally there is none.
-The cron is sized for *freshness* (twice daily, six sources, `MAX_SKILLS_PER_SOURCE` 120) and
-will pick up the stale-source queue once catch-up is done. Last three passes all completed;
-the most recent created 421 versions from five sources.
+**Ingestion runs from a local terminal** (`pnpm pipeline --loop 300`), not from the schedule —
+a 6,000-skill repository needs longer than any function ceiling, and locally there is none.
+Start it in **your own shell**: a loop started from inside an agent session gets killed with
+the session, which cost two runs before anyone noticed.
 
-**The taxonomy is the thing lagging, and the gap is widening.** Fingerprints track the corpus;
-labels do not — **6,364 indexed canonical skills carry no category**, up from ~5,400 at the
-last audit, because sync keeps adding skills and classification costs money and is
-deliberately manual. That directly starves archetype mining, which reads only labelled,
-above-floor assignments: archetypes currently rest on roughly a third of the indexed corpus.
-~$0.29 per 100, so roughly **$18 to catch up** — and that number grows with every sync pass.
+**The taxonomy is now the dominant gap and it is widening fast.** Fingerprints and signatures
+track the corpus; labels do not — **11,298 canonical skills carry no servable category**, up
+from 6,364 at the last audit, because sync keeps adding skills while classification costs
+money and is deliberately manual. Archetypes read only labelled, above-floor assignments, so
+they currently rest on **about a quarter** of the corpus. At ~$0.29 per 100 that is roughly
+**$33 to catch up**, and the number grows with every pass.
 
-> **The user has deliberately deferred this spend until sync finishes.** Do not run
+> **This spend is deliberately deferred until sync finishes.** Do not run
 > `pnpm taxonomy --sample` without being asked. Labelling a moving corpus means paying twice.
 
+### What changed on 2026-09-01
+
+A day of ingestion-reliability and agent-surface work. In rough order of consequence:
+
+- **Two silent hangs, both R2.** A run would sit alive for hours holding one ESTABLISHED
+  socket to `141.101.90.x` — the R2 endpoint — with no CPU and no GitHub quota consumed, and
+  because the pass never ended it never wrote a completion event either, so it read as "stuck
+  on pass two" rather than as a hang. **No outbound call had a deadline.** Every one now does,
+  through `src/server/http/deadline.ts` and `r2Fetch`. See the section below: the first fix
+  was aimed at the wrong subsystem because the grep that found the others could not see
+  `aws4fetch`'s method-shaped `fetch`.
+- **The derived stages were 42 of every 50-minute pass.** Validation, fingerprinting and
+  signature building each read every bundle back from R2 **one at a time**. Now bounded-
+  concurrent at 6: measured **801 ms → 182 ms per bundle**, a real pass from ~50 minutes to
+  ~10.
+- **Search stopped being `ilike '%q%'`** — `tsvector` + GIN, `pg_trgm` for typos, and R2.9's
+  ranking as a *function*. `code review` used to return `AGENTS.md — Cross-Tool Agent
+  Registry` first; `kubernets` returned nothing at all.
+- **MCP shipped** (`/api/mcp`) — six tools, a free account and revocable token for quota
+  identity, admin-tunable per-scope rate limits, and an untrusted-content fence on everything
+  the corpus wrote.
+- **Registry reconciliation** for skills.sh via its advertised sitemap: 2,422 repositories,
+  **2,323 new to us**, filed as ordinary candidates and never auto-promoted.
+- **Licence matcher learned Creative Commons and LGPL**, and a re-sync now refreshes a licence
+  instead of discarding it — **187 skills became downloadable**, 33 correctly became
+  metadata-only.
+- **Three "recorded then ignored" bugs**, all the same shape: a curator approval that the
+  re-apply sweep skipped, a re-submission that only re-enabled when it had config to merge,
+  and a pause reason that named the wrong threshold.
+
 ### What is actually built
+
 
 Ingest → validate → analyze → build works end to end. Every P0 in §7.1, §7.2, §7.3 and §7.7
 is delivered or delivered-with-a-named-gap, plus all five cross-cutting P0s (auditability,
@@ -187,35 +219,14 @@ alongside corpus prevalence. What is still missing is the **outcome** half:
 
 Everything else on the list is smaller than this.
 
-### What to build next, in order
+### What to build next
 
-**Nothing here is the real critical path.** Ingestion is 42% done and the taxonomy is 6,364
-skills behind it, and both of those gate the quality of every archetype the product sells.
-The build list below is what to do *while that runs* — not instead of it.
+**The ordered plan lives in `specs/core/02-requirements-spec.md` §10**, next to the §10b
+status table it is derived from. It is not duplicated here: a roadmap in two places is a
+roadmap that disagrees with itself, and the spec is the one people review.
 
-**1. ~~Publish-back (R6.1) + export (R4.4)~~ — done. Section below.**
-
-**2. ~~Creation telemetry (R6.2) + R6.5 bounds~~ — done. Section below.**
-
-**3. ~~Spend caps (RC.2)~~ — done. Section below.**
-
-**4. ~~Schedule as data + loop observability (R6.4)~~ — done. Sections below. Archetype
-refresh ships OFF and stays off until someone has watched a mine run at this corpus size.**
-
-**5. Search (R7.4).** Still `ilike '%q%'` — no index, no relevance ranking. A leading `%`
-means no btree can serve it and there is no textual index on `skills` anyway, so every
-search is a sequential scan; results then fall through to the quality sort, so a skill
-*named* the query ranks below an unrelated higher-scoring one that merely mentions it. Also
-the reason R2.9's ranking function has no relevance term.
-
-Fixing it means a `tsvector` column with a GIN index (probably plus `pg_trgm` for partial and
-misspelt terms) and a ranking *function* rather than a sort — R2.9 constrains it to
-`f(quality, security tier, relevance)`, so `ts_rank` is an input and never the whole answer.
-`CREATE INDEX CONCURRENTLY` needs `DATABASE_URL_UNPOOLED`. Still better done once the corpus
-stops moving: weights tuned against a 42%-ingested corpus are tuned against the wrong one.
-
-**6. Per-version permalinks (R8.4).** A verdict cannot be cited today, and archetype
-exemplar lists are public and expected to keep resolving.
+The one-line version, unchanged since the last audit: **ingestion and the taxonomy are the
+critical path**, and everything else is what to do while they run.
 
 ### Smaller named gaps, from the §10b audit
 
@@ -236,8 +247,9 @@ exemplar lists are public and expected to keep resolving.
 - **R2.10 sandbox / R2.11 eval harness** — Phase 4, and both need infrastructure this
   project does not have yet.
 - **Finishing the code-search crawl** — 38 shards saturated and unsplittable on the size
-  axis; a second axis is needed. 382k markers is mostly noise and the curated channels
-  produce a better corpus, so this stays parked.
+  axis. **The second axis turned out to be registry reconciliation, not a shard key:** four
+  sitemap fetches against skills.sh produced 2,323 new repositories, quality-biased, from a
+  channel that finishes. The crawl stays parked and is now unlikely to be worth resuming.
 
 ### Re-run these as the corpus grows — all free, all incremental
 
@@ -501,6 +513,296 @@ colon in it for exactly this reason.
 > `EXPORT_DIALECTS` lives in `src/lib/dialects.ts`, not beside the renderer. The checkbox
 > list is a client component and the renderer is `server-only`; the build refused the import,
 > correctly. Same split as `capabilities.ts`, `quality.ts` and `section-roles.ts`.
+
+### The heartbeat, and the class of bug behind three lost runs
+
+`src/server/pipeline/heartbeat.ts` · migration 0020 · `pnpm pipeline --status` · Settings → Ingestion
+
+Three separate stalls were diagnosed by hand with `ps` and `lsof`, and each time the hardest
+part was not the fix — it was establishing **whether anything was wrong at all**. A pass
+writes its `events` row when it *finishes*, so a pass that hangs writes nothing, and
+"ingesting a 6,000-skill repository" and "stalled on a dead socket" produce identical
+evidence from outside: no new events, a live process, no new rows for a while.
+
+A completion record cannot answer "is it stuck" by construction. Only a progress record can.
+So one row is updated **during** a stage — stage, a human sentence, done/total, pid — and the
+number that matters is how old it is. `--status` prints it; the Ingestion tab shows a pulsing
+dot, or a red one past two minutes.
+
+Throttled to one write every 15 seconds, so calling it per skill costs nothing at 2.6 skills
+a second, and it **never throws**: bookkeeping that could kill a six-hour run to report on it
+would be worse than no bookkeeping.
+
+> **The deeper lesson is about the fixes, not the bugs.** Every stall was one of two things —
+> an unbounded wait, or an unhandled error inside a bulk loop — and each first fix was
+> *verified weakly*:
+>
+> - "no bare `fetch(` remains in `src/server`" was proven with a grep that structurally
+>   **could not see** `aws4fetch`'s method-shaped `r2Client().fetch(...)`. It returned clean
+>   and meant nothing; the four R2 calls stayed unguarded and hung the next run.
+> - the unique-violation guard read `error.code` on Drizzle's wrapper, where the driver code
+>   lives on `.cause`. It matched **nothing**, and shipped without once being run against a
+>   real `23505`.
+>
+> Both would have failed in ten seconds against the actual error. **A check that cannot
+> observe the failure it is about is not evidence.** `verify:http-deadline` and
+> `verify:db-retry` are written the other way round on purpose: reproduce the failure first,
+> then assert the fix, so the fixture is proven to still reproduce the bug.
+
+**Isolation is now a property of the primitive, not a thing a call site remembers.**
+`mapSettled` records per-item failures and never rejects. That is the durable half of the
+lesson: `syncSource` wrapped its fetch but not its write, so one refused insert cost an entire
+6,864-skill repository, and `validatePending` wrapped nothing, so one unreadable bundle would
+have discarded 500 computed verdicts. Both were latent while the loops were sequential and
+fired the moment they were not.
+
+### MCP (RM.1, RM.2) — the agent surface
+
+`src/app/api/mcp/route.ts` · `src/server/mcp/` · `pnpm verify:rate-limit`
+
+Six tools — `search_skills`, `get_skill`, `download_skill`, `list_archetypes`,
+`get_archetype`, `corpus_stats` — each a **thin wrapper over the same `src/server/**`
+function the web pages call**. That is the requirement, not laziness: RM.2 says an answer must
+not differ between web and MCP, and the only honest way to guarantee it is to call the same
+code. Reimplementing a lighter read would mean two definitions of "servable", and the second
+would drift on licence gating and takedowns, where drift is a legal problem rather than a bug.
+
+`download_skill` is the clearest case: it calls `exportSkill` and discards the bytes, so it
+inherits all three refusals — withdrawn, unlicensed, metadata-only — for free.
+
+**A route handler is the documented exception**, same as the download route: MCP is a wire
+protocol, and a server component renders HTML while an action returns a value to our own
+client bundle. The file touches no `@/server/db`, `drizzle-orm` or `pg`.
+
+**Structured input, because the caller is a machine.** The registry's UI has one search box
+because screen space is finite and people self-correct; an agent fills a schema perfectly and
+then acts on the top hit. So the search tool exposes both category axes, capability, licence
+posture and a quality floor, and every enum is the real vocabulary — an agent guessing
+`"reviewing"` gets a schema error naming the 13 valid options, not zero results it would read
+as "the corpus has none".
+
+#### The untrusted-content fence is the part with no equivalent elsewhere
+
+`src/server/mcp/untrusted.ts`. Every analyzer here treats corpus text as untrusted input,
+because a skill is a document written by a stranger to steer an agent. MCP hands that same
+text to **somebody else's** agent, over a channel whose entire content is instructions the
+caller is inclined to act on. A tool returning a skill body as bare prose turns this registry
+into an injection vector pointed at its own users.
+
+So corpus text leaves inside `<untrusted-corpus-content>` carrying slug, source, status and
+quality — **and a random 96-bit nonce on the close tag**, because the marker is public and a
+skill that simply writes our closing tag into its own description would otherwise break out of
+the fence it was put in. This does not make the text safe; nothing can. It makes it labelled,
+which is the most an interface can honestly offer.
+
+#### A free account, and why that is not a paywall
+
+The web pages, downloads and every trust surface stay anonymous — R8.1 is untouched, and
+everything these tools return is readable in a browser. What the endpoint requires is a
+**token**, because the limiter needs an identity and an anonymous protocol offers only an IP:
+shared behind a NAT, rotated at will, a bound on accidents rather than abuse.
+
+`mcp_tokens` is ours rather than Better Auth's, because **better-auth 1.7.2 ships no api-key
+plugin** and that pin is load-bearing. It is also the better answer: an MCP token must not be
+a session. A leaked session is an account; a leaked token here reads the public corpus through
+a rate-limited endpoint and is revoked without signing anyone out. Only `sha256(token)` and an
+8-character prefix are stored, so the value is shown exactly once.
+
+> **§7.7 RM.1 says "better-auth api-key plugin". That sentence is wrong, not the code.**
+
+`mcp_tokens` carries the schema's **second split RLS policy**: SELECT is open because
+authenticating a request means looking a token up *before* any organisation is known — that
+lookup is how the org is discovered — while INSERT and UPDATE are org-scoped. It is safe
+because of the column list: hashes and prefixes, never a usable credential. Add a column
+carrying a secret and the policy becomes wrong.
+
+#### Rate limits are settings, not constants
+
+`src/server/settings/rate-limits.ts`, Settings → **Rate limits**. Two windows because they
+stop different things: per-minute catches a tight loop, per-hour catches a patient one pacing
+itself just under the minute limit. Counters live in Postgres — one row per identity per
+bucket carrying its own `windowStart`, so the table does not grow a row per minute. That makes
+it a **fixed window**, which permits up to 2× across a boundary; the right trade for stopping
+a runaway agent, and stated rather than discovered from a graph.
+
+**It fails open**, deliberately inverting this codebase's usual posture. A spend cap that
+fails open costs money, so it refuses; a rate limit that fails closed takes the public
+registry dark because a counter table blinked. The data behind it is public and read-only.
+
+A refusal names its window, its limit and when it lifts, as HTTP 429 **and** a JSON-RPC error
+— the status is what a transport retry policy reads, the message is what the model reads. An
+agent that cannot tell a throttle from a permission failure retries a hard failure for ever or
+abandons a soft one, and both look like our bug from outside.
+
+### Every outbound call has a deadline, and finding that out cost two runs
+
+`src/server/http/deadline.ts` · `r2Fetch` in `storage/client.ts` · `pnpm verify:http-deadline`
+
+Two ingestion runs hung. Each time the process stayed alive for hours holding **one
+ESTABLISHED HTTPS socket**, burning no CPU and consuming no GitHub quota — and because the
+pass never finished it never wrote a `pipeline.completed` event either, so from the outside
+it looked like a run stuck on pass two rather than a hang. **A run that dies is visible; a run
+that waits is not.**
+
+Node's undici defaults do not cover this. `headersTimeout` and `bodyTimeout` fire when
+*nothing* arrives; a half-open connection — the peer's return path dropped by a NAT, or a CDN
+edge that went away mid-exchange — leaves the socket ESTABLISHED locally and the read pending
+for ever. `AbortSignal.timeout` covers the whole exchange, which is the property that matters:
+the stall can happen at connect, at headers, or partway through a body.
+
+> **The first fix was aimed at the wrong subsystem, and the verification is what failed.**
+> The stalled peer was `141.101.90.96`, which was assumed to be GitHub. It is **R2** — that
+> bucket's endpoint resolves to exactly `141.101.90.96–99`. Worse, the check used to confirm
+> the fix was `grep "await fetch("`, which returned clean and proved nothing: `aws4fetch`
+> exposes fetch as a **method**, `r2Client().fetch(url, init)`, so the four R2 calls were
+> invisible to the search that found the other ten. A grep that cannot see a call site is not
+> evidence that the call site is guarded.
+
+Two deadlines, and the second is not padding. `REQUEST_TIMEOUT_MS` is 30s; recursive
+git-trees get `LARGE_RESPONSE_TIMEOUT_MS` at 120s, because a whole-repository tree approaches
+the API's ~100k-entry ceiling and GitHub builds it on demand — and **a false timeout on an
+enumeration is not a retry, it is a tombstone**, since R1.5 reads an incomplete enumeration as
+deletion.
+
+`verify:http-deadline` reproduces the bug before asserting the fix, like `verify:db-retry`: a
+local server that accepts the connection and never answers. It also pins a *dependency's*
+behaviour — that an `AbortSignal` survives `AwsClient.sign()` building a fresh `Request` — so
+an upgrade that breaks the propagation turns a check red instead of turning the pipeline back
+into a process that waits for ever.
+
+### The derived stages read every bundle one at a time
+
+`src/server/lib/concurrency.ts` · `ingestPolicy.bundleConcurrency`
+
+A 50-minute pipeline pass spent **~8 minutes syncing and ~42 in the derived stages**.
+Validation, structure extraction and signature building each pulled every bundle back from
+object storage sequentially — and each pulled the *same* bundles independently, so one pass
+made roughly 1,500 sequential round trips to an EU bucket before doing any work.
+
+The connector had solved this years earlier for the write side, with the comment still
+attached: sequential fetching "made a 12-file skill take a dozen round-trips end to end, and a
+large one minutes." The lesson had simply never been applied to the read side.
+`mapWithConcurrency` now lives in a leaf module and serves all four call sites.
+
+Measured against the real bucket, same 40 bundles: **801 ms → 182 ms per bundle**, and a real
+pass from ~50 minutes to ~10.
+
+**Six, because the database pool is capped at ten** and each lane holds a connection while it
+writes its result. Four in reserve keeps the queries that decide what to do next from queueing
+behind the batch. It uses a shared cursor rather than pre-sliced chunks — with bundles of
+wildly different sizes, chunking leaves most lanes idle waiting on the slowest item in their
+own chunk.
+
+Safety was checked per stage rather than assumed. Fingerprints and signatures write one row
+each, keyed per version, with nothing shared. Validation's only shared write is
+`skills.currentVersionId`, which two *pending versions of the same skill* could contend for —
+measured at **zero**, and structurally impossible, since a second version is only created once
+the first has been judged. Counters mutated from several lanes are safe on a single-threaded
+event loop: every increment happens between awaits, never across one. Each stage catches
+**inside** the worker, so one unreadable bundle still cannot cost the batch.
+
+### Search: a tsvector, a trigram index, and a ranking function
+
+Migration `0017`. Search was `ilike '%q%'` over name, summary and slug — a leading `%` means
+no btree can serve it, there was no textual index on `skills` at all, and a LIKE match carries
+no notion of *where* it matched, so results fell through to the quality sort.
+
+The failure was not subtle. `code review` returned **`AGENTS.md — Cross-Tool Agent Registry`**
+first; `terraform` returned `cloud-architect` and `cloudflare`; `kubernets` returned **nothing
+at all**.
+
+- **Relevance** — a generated `search_vector`, weighted `A` name, `B` summary, `C` slug, with
+  a GIN index. Generated and stored, so it cannot drift: no trigger to forget, no backfill
+  after an edit. `'english'::regconfig` is passed explicitly and must stay — the one-argument
+  `to_tsvector` reads a GUC and is only STABLE, and a generated column requires IMMUTABLE.
+- **Typos and partial words** — `pg_trgm` on the name. The two indexes fail in opposite
+  directions, so the query ORs them and Postgres BitmapOrs both.
+- **Ranking as a function** (R2.9), not a tiebreaker list: `ts_rank_cd` normalised with flag
+  32 into 0–1, `greatest`-ed with trigram similarity so a skill *named* the query wins
+  outright, plus quality at a quarter weight. Popularity has no vote at all, which is the
+  simplest way to guarantee R2.9's rule that it must never outrank quality.
+
+The **security-tier term is the filter**, and that is the honest reading: only `indexed`
+skills are ranked at all, and weighting a column that holds one value for every row would be
+decoration until R2.14's verified tier exists.
+
+Categories were never the problem — `skills.categories` already had a GIN index. What was
+missing for a machine caller is *structured input*, so `listSkills` now takes `categories[]`
+(both axes ANDed) and `minQuality`.
+
+### Registry reconciliation: a sitemap, not an API
+
+`src/server/crawl/registries.ts` · `pnpm registry --status | --import`
+
+Doc 4 §4 channel 4 (R1.1(d)), never built. skills.sh's `robots.txt` **disallows `/api/` and
+`/search`** and advertises `/sitemap.xml` — so the sitemap is the interface its operators
+intend automated readers to use, and it is the only one this touches.
+
+It also turned out to be the cheapest: the URL shape is `/{owner}/{repo}/{skill}`, so **the
+repository is in the path**. Four XML fetches answered what 20,000 page fetches would have.
+Result: 2,422 repositories, **2,323 new to us**, ~16,800 skills behind them — including
+nvidia, google, github, adobe, grafana, openai and forcedotcom, none of which the size-sharded
+crawl could ever have prioritised.
+
+> A first pass misread the shape as `/{owner}/skills/{skill}` and reported "317 owners". The
+> tell was arithmetic that could not be true: 317 owners covering 17% of 20,000 URLs when
+> sorted *descending*. A ranking where the top-N covers less than the tail is not a finding,
+> it is a parse error.
+
+Three rules it holds to: the pointer only, never content; `hitCount` stays 0 because "a list
+named this" is different evidence from "the crawl saw N markers"; and nothing is
+auto-promoted — the upsert refreshes `lastSeenAt` and touches neither status nor skipReason,
+so a repository a curator already rejected is not resurrected because a registry still lists
+it. Verified: of the 99 already known, 97 stayed `promoted` and 2 stayed `skipped`.
+
+### Three bugs with one shape: a decision recorded, then ignored
+
+All three surfaced in an afternoon, all three let an operator make a choice the system then
+failed to apply.
+
+- **`reapplyMarkerThreshold` skipped approved sources.** The guard meant "do not overrule a
+  curator" — right about re-pausing, exactly backwards here, because the curator's decision
+  *was* "sync this". Two sources sat disabled-and-approved with nothing able to release them.
+- **`submit` only re-enabled when it had config to merge.** Gated on
+  `includePaths?.length || reviewedLargeRepo`, so re-submitting a paused source that needed
+  neither did nothing — while the block's own comment promised "must come back enabled, or the
+  admin's decision is recorded and then ignored."
+- **The pause reason named the wrong threshold.** Two different gates called one
+  `holdForReview`, which stamped the marker threshold into the sentence whichever had fired —
+  filing a 384-skill repository stopped by a 120-skill *pass ceiling* as "over the 500
+  threshold". `healthDetail` now carries a typed `heldBy`, and the sweep releases a
+  `pass-ceiling` hold unconditionally because nobody decided anything about the repository.
+
+Widening that sweep's query nearly caused a fourth: dropping the `health = 'paused'` filter
+pulled in each organisation's `builder` source, which is `enabled = false` **by design** and
+has no upstream to fetch. `org_id is null` now scopes it to public discovery sources.
+
+### A re-sync used to discard a licence it had just resolved
+
+`writeSkillVersion`'s content-hash dedup returned `"unchanged"` before any licence write, so
+identical bytes threw away a freshly resolved licence. It only mattered once the chain got
+better — adding Creative Commons and LGPL body patterns re-classified a 166-skill repository
+from `unresolved` to `attribution_required`, `storeBundle` dutifully uploaded the bytes, and
+the row kept saying unresolved. **A resolver improvement that cannot reach already-synced rows
+is a resolver improvement nobody sees.**
+
+Fixed in `syncSource` rather than as a separate sweep, so every future re-sync is
+self-healing. Three guards, each stopping a real failure: same `(source, path)` only, because
+the dedup lookup matches on hash across *all* sources and the row found may belong to a
+different repository shipping identical bytes; `indexed`/`quarantined` only, because restoring
+a licence on withdrawn content would undo a takedown on a schedule; and only when something
+actually moved, so it is not a write per skill per sync.
+
+Result: **187 skills unresolved → downloadable**, 33 → `metadata_only` (Elastic 2.0 — an
+explainable refusal rather than "we could not read your file"). `relicensed` is its own count
+in the CLI and pipeline summary: the corpus did not grow, but unservable skills became
+downloadable, and that reads differently to an operator.
+
+> **Measured before building.** The plan had been to implement R1.6 steps 4–5 (ClearlyDefined,
+> ScanCode) to recover "up to ~1,000" skills. All 1,968 unresolved skills come from 92
+> repositories; checked against GitHub, **85 of them holding 1,713 skills have no licence at
+> all**. An unlicensed repository is all rights reserved and no scanner can invent a grant.
+> The estimate was wrong by 5×, and the fix was in step 2 all along.
 
 ### The registry read the whole table to draw its sidebar
 
@@ -1784,6 +2086,9 @@ process going away underneath them.
 
 ## Commands
 
+Day-to-day pipeline operation, health checks and "is it stuck" live in
+**`specs/pipeline-commands.md`** — the operator reference. This is the short list.
+
 ```
 pnpm dev            # http://localhost:3000
 pnpm build
@@ -1793,12 +2098,14 @@ pnpm db:generate | db:migrate | db:studio
 pnpm db:verify-rls  # after ANY schema change that adds an org-scoped table
 
 # Pipeline, each bounded and resumable
+pnpm pipeline --status               # is it stuck? one line, no ps/lsof needed
 pnpm pipeline                        # sync → validate → fingerprint → signatures → cluster
                                      # (also runs on a 10-minute cron in production)
 pnpm pipeline --loop 40 --skip-sync  # catch the derived stages up
 pnpm rescan --status | --run 300     # R2.12 campaigns; free, rules only
 pnpm crawl | promote | sync | validate | duplicates   # the individual stages
 pnpm seed --status | --repos | --lists    # curated discovery (Doc 4 §4 steps 1-2)
+pnpm promote --reapply --enrich 300 --decide  # judge discovery candidates; --reapply is NOT default
 pnpm submit <repo-url|owner/name> [--include workspaces/,packages/]
 pnpm validate --consistency --limit 10   # R2.3 audit — COSTS MONEY, capped at 100/run
 pnpm structures --extract 500        # structural fingerprints — free, no model
@@ -1807,6 +2114,8 @@ pnpm taxonomy --status | --review | --resync
 pnpm verify:lists | verify:revocation | verify:export | verify:takedown | verify:publish
 pnpm verify:telemetry
 pnpm verify:otp | verify:db-retry        # both free, no network, no database
+pnpm verify:http-deadline | verify:rate-limit   # free; both reproduce the bug first
+pnpm registry --status | --import        # skills.sh reconciliation via its sitemap; free
 pnpm verify:builder                      # COSTS MONEY — two model calls
 pnpm validate:verify | db:verify-rls
 ```

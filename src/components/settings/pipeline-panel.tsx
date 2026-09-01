@@ -52,16 +52,26 @@ export type BacklogRow = {
   awaitingSignature: number;
 };
 
+export type LivePipeline = {
+  stage: string | null;
+  detail: string | null;
+  secondsSinceBeat: number;
+  stale: boolean;
+} | null;
+
 export function PipelinePanel({
   freshness,
   backlog,
   runs,
   cronEnabled,
+  heartbeat,
 }: {
   freshness: FreshnessRow[];
   backlog: BacklogRow;
   runs: RunRow[];
   cronEnabled: boolean;
+  /** Live position, or null when nothing is running. */
+  heartbeat: LivePipeline;
 }) {
   const stale = freshness.reduce((sum, row) => sum + row.total, 0);
 
@@ -69,7 +79,7 @@ export function PipelinePanel({
   // and half a row is not enough for them at any sidebar state.
   return (
     <div className="grid gap-4">
-      <PipelineCard backlog={backlog} runs={runs} cronEnabled={cronEnabled} />
+      <PipelineCard backlog={backlog} runs={runs} cronEnabled={cronEnabled} heartbeat={heartbeat} />
 
       <Card>
         <CardHeader>
@@ -185,10 +195,12 @@ function PipelineCard({
   backlog,
   runs,
   cronEnabled,
+  heartbeat,
 }: {
   backlog: BacklogRow;
   runs: RunRow[];
   cronEnabled: boolean;
+  heartbeat: LivePipeline;
 }) {
   const [amount, setAmount] = useState(5);
   const [result, setResult] = useState<ActionResult | null>(null);
@@ -321,6 +333,47 @@ function PipelineCard({
           been failing since Tuesday" look identical from outside. Each pass writes an
           `events` row, and this is that row rendered.
         */}
+        {/*
+          Live position — the thing whose absence cost hours, three times.
+
+          A completed pass writes an `events` row; a pass that hangs writes nothing, so
+          "working on a huge repository" and "stalled on a dead socket" used to look
+          identical from here. This is written *during* a stage, so the only question that
+          matters — how long since it last moved — always has an answer.
+        */}
+        {heartbeat ? (
+          <div className="border-t pt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={`size-2 shrink-0 rounded-full ${
+                  heartbeat.stale ? "bg-destructive" : "bg-primary animate-pulse"
+                }`}
+                aria-hidden
+              />
+              <span className="text-sm font-medium">
+                {heartbeat.stale ? "No progress" : "Running"}
+              </span>
+              <span className="text-muted-foreground min-w-0 truncate text-sm">
+                {heartbeat.stage}
+                {heartbeat.detail ? ` — ${heartbeat.detail}` : null}
+              </span>
+              <span
+                className={`ml-auto shrink-0 text-xs tabular-nums ${
+                  heartbeat.stale ? "text-destructive" : "text-muted-foreground"
+                }`}
+              >
+                {heartbeat.secondsSinceBeat}s ago
+              </span>
+            </div>
+            {heartbeat.stale ? (
+              <p className="text-destructive mt-1 text-xs">
+                Nothing has moved for over two minutes. Check the process before assuming it
+                is merely slow.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="border-t pt-3">
           <div className="flex flex-wrap items-center gap-2">
             <Clock className="text-muted-foreground size-4" />

@@ -2,7 +2,7 @@
 
 **Status:** Draft v1.0 · **Date:** 2026-08-27 · **Owner:** TBD
 **Companion documents:** `01-business-concept.md` (vision, incentives, monetization, licensing) · `03-implementation-spec.md` (architecture, platform & interface selection) · `04-source-ingestion-analysis.md` (source taxonomy, registry assessments, license chain, Phase-0 waves)
-**Changelog:** v1.1 — R1.1/R1.4/R1.6 sharpened from the source analysis (Doc 4) · v1.2 — §7.7 MCP access surface added (search shipped; create-skill as paid tool)
+**Changelog:** v1.4 — the ordered plan moved into §10 from CLAUDE.md, so status and plan sit together · v1.3 — §10b implementation status restored and re-audited against the running system on 2026-09-01 · v1.1 — R1.1/R1.4/R1.6 sharpened from the source analysis (Doc 4) · v1.2 — §7.7 MCP access surface added (search shipped; create-skill as paid tool)
 
 > Scope of this document: functional and non-functional requirements for the platform. The *why and the money* live in Doc 1; the *how on our stack* lives in Doc 3. Where a requirement here depends on a commercial decision (tiers, gating) it references Doc 1 rather than restating it.
 
@@ -241,7 +241,7 @@ The platform is itself consumed by agents. An MCP server exposes platform functi
 
 **Measurement:** all metrics from event log (R7.1); evaluated at 2 weeks, 1 month, 1 quarter post-launch per phase.
 
-## 10. Phasing
+## 10. Phasing and the ordered plan
 
 *(Architecture homes for each phase are assigned in Doc 3 §Proposed design and §Rollout.)*
 
@@ -252,6 +252,86 @@ The platform is itself consumed by agents. An MCP server exposes platform functi
 
 Dependency note: R3.2 needs ≥50 validated skills/category → Phase 1 corpus volume gates Phase 2 quality. R6.x needs builder telemetry → Phase 3 by definition.
 
+### The ordered plan — 2026-09-01
+
+Derived from the §10b audit below, which is the status of record. Phases say what depends on
+what; this says what to do next and why in this order.
+
+**Ingestion is still the critical path and nothing below changes that.** 472 of 903 sources
+have never synced, 2,023 discovery candidates are undecided, and the taxonomy is 11,298
+skills behind the corpus. Those three gate the quality of every archetype the product sells.
+The list below is what to do *while that runs*.
+
+Ordering rule used throughout: **a thing that unblocks several others outranks a thing that
+is merely valuable.** Two items qualify.
+
+---
+
+**1. Finish ingestion.** Not a build task — a wait. `pnpm pipeline --loop 300` in your own
+shell until `never_synced` reaches zero, then `pnpm promote --enrich 300 --decide` repeatedly
+to work through the 2,023 candidates. Watch that the queue is *shrinking*, because a run that
+adds sources faster than it drains them never converges.
+
+**2. Taxonomy catch-up (R3.1) — ~$33, and it unblocks the whole analytics half.**
+`pnpm taxonomy --sample 100` until `remaining` is zero. Archetypes read only labelled,
+above-floor assignments, so today they rest on about a quarter of the corpus. R3.5, R3.6,
+R5.3 and every archetype quality claim sit behind this. **Do it after sync converges, not
+during** — labelling a moving corpus means paying twice.
+
+**3. Archetypes v6 (`pnpm archetypes --mine-all`) — free, and the first real read on the
+loop.** Only after 1 and 2. Comparing v5 against v6 finally answers how much the sampled weak
+band was distorting v5, and whether the 1,235-skill "no sections" cluster is skewing the weak
+band. Append-only, lands with a changelog.
+
+**4. Entitlements (RC.1) — the other unblocker.** Absent, and it is the single gate on every
+paid surface: RM.3 (MCP create-skill), the paid MCP scope, RC.4 billing, and the Team-tier
+private corpus. Nothing is gated today, so the free-tier guarantee holds by construction and
+none of the mechanism exists. Until this lands, "paid" is not a feature that can be built —
+only described.
+
+**5. Outcome telemetry (R6.3) — the largest single gap in the product.** R6.1, R6.2, R6.4 and
+R6.5 are done: a skill authored here is published through the same pipeline, what happened
+while authoring it is recorded, and mining consumes it. What is missing is the *outcome* half
+— no post-publication signal is attributed to an archetype version. Until it exists, "what
+good looks like" is a claim about the corpus, never about results, and G3/G4 measure the loop
+running rather than the loop working.
+
+**6. Re-home the lost distribution requirements.** §7.7 was replaced wholesale in the v1.2
+rewrite and **R8.1–R8.7 vanished with it** — the public registry, skill export and the corpus
+statistics surface are all running with no requirement behind them, and R8.4 (per-version
+permalinks, so a verdict can be cited) lost its only written home. Code with no requirement is
+as much a gap as a requirement with no code. Cheapest item on this list and the one most
+likely to be forgotten.
+
+**7. Author-facing analytics (R3.6 → R5.3).** The dedup data already exists; nothing surfaces
+"12 similar skills exist, here is how yours differs" to an author. R3.6 is the small half and
+unlocks R5.3's gap detection. Both are gated on taxonomy (2).
+
+**8. Assistant depth (R5.1 conversational, R5.4 per-suggestion feedback).** Today the builder
+is a four-step form and R5.4 does not exist — which matters beyond UX: without accept/reject
+events there is no structured feedback stream, so R6.2 learns only from what *survived to
+publish*, never from what an author rejected outright.
+
+**9. R4.2 live editor and R4.3 deviation marking.** The validation seam
+(`runAnalyzersOnBundle`) already takes files rather than a storage key, so as-you-type linting
+needs no new analyzer work — this is a UI build on an existing capability.
+
+---
+
+**Deliberately still parked, with the reason:**
+
+- **Embeddings / pgvector** — needed for R3.5 clustering and R5.2 retrieval at scale. Wait
+  until the corpus stops moving; vectors built over a half-ingested corpus get rebuilt.
+- **R2.10 sandbox, R2.11 eval harness** — Phase 4, and both need infrastructure this project
+  does not have. R4.8 and R5.7 depend on R2.11 and inherit the wait.
+- **R2.14 verified tier** — blocks R2.9's security-tier ranking term. That term is honestly
+  documented as "the filter" until a tier exists to weigh.
+- **R1.6 steps 4–5 (ClearlyDefined, ScanCode)** — measured and **not worth building**: 85 of
+  the 92 repositories with unresolved licences have no licence at all, which no scanner can
+  resolve. Fix the text matcher instead when a licence family is missed.
+- **Finishing the code-search crawl** — 38 shards saturated on the size axis. The skills.sh
+  reconciliation turned out to be the better second axis: 2,323 new repositories from four
+  sitemap fetches, against a crawl that cannot finish.
 ## 10a. Commercial & Entitlement Requirements (bridge to Doc 1)
 
 The tier structure, pricing, and licensing rationale are defined in Doc 1 §4–5. The platform requirements they impose:
@@ -261,6 +341,139 @@ The tier structure, pricing, and licensing rationale are defined in Doc 1 §4–
 - **RC.3 (P1):** Usage metering (assistant tokens, validation runs, Verdict-API lookups) flows through the audit event log (R7.1) so billing is reconstructible and auditable.
 - **RC.4 (P1):** Billing-provider webhooks drive entitlement sync; entitlement writes are idempotent and tolerate late/duplicated webhook delivery.
 - **RC.5 (P0):** Org-scoped private corpora (Team tier) never feed public archetypes — not even in aggregate — unless Doc 1 open question OQ-C2 is explicitly resolved otherwise.
+
+## 10b. Implementation status — audited 2026-09-01
+
+Read against the running system, not against intent. This table is the source of truth for
+"what is built"; the prose above is the source of truth for "what is wanted".
+
+Corpus at audit: **16,273 indexed** (15,061 canonical · 1,212 near-duplicate variants) ·
+225 quarantined · 431 of 903 enabled sources synced · 16,542 fingerprints · 16,247 dedup
+signatures · 12 archetype categories at v5 · 4,101 skills labelled.
+
+Legend: **done** · **partial** (works, with a named gap) · **absent**.
+
+> **This section was lost in the v1.2 rewrite and is restored here.** Alongside it, §7.7 was
+> replaced wholesale — the previous **R8.1–R8.7 Distribution & Access** block is gone, and
+> with it the only written requirements for the public registry, skill export and the corpus
+> statistics surface. **All three are built and running.** They are recorded at the bottom of
+> this table as `R8.x (unspecified)` so shipped behaviour is not invisible, but they need
+> re-homing in §7 by whoever owns the spec: code with no requirement is as much a gap as a
+> requirement with no code.
+
+### 7.1 Ingestion & provenance
+
+| | | |
+|---|---|---|
+| R1.1 Source connectors | P0 | **partial** — (a) repos, (b) awesome-lists, (c) sharded code search all done. **(d) ClawHub absent.** Index-registry reconciliation now exists for **skills.sh** via its advertised sitemap (`pnpm registry`), which found 2,422 repositories, 2,323 of them new. |
+| R1.2 Normalization | P0 | **done** — five dialects into one schema; parse errors are triaged, never dropped. |
+| R1.3 Provenance | P0 | **done** — NOT NULL by schema. |
+| R1.4 Deduplication | P0 | **done** — exact-hash plus MinHash/LSH; 1,268 variant links. |
+| R1.5 Revocation & drift | P0 | **done** — `pnpm verify:revocation`. |
+| R1.6 Licence gating | P0 | **partial** — four of the six chain steps run. **ClearlyDefined and ScanCode have never produced a row**, and measurement says they never would: of 1,968 unresolved skills, 85 repositories holding 1,713 of them have **no licence at all**, which no scanner can resolve. The real gap was step 2 — the text matcher knew no Creative Commons or LGPL bodies, which stranded 187 skills that are now downloadable. |
+| R1.7 Sync scheduling | P1 | **done** — schedule is data (`platform_settings`), `pnpm verify:schedule`. |
+| R1.8 Community submission | P1 | **partial** — admin submission and Settings → Add source work. **No public endpoint.** |
+| R1.9 Private/tenant sources | P2 | **absent** — the `org_id` column exists throughout, so the model is ready. |
+
+### 7.2 Validation
+
+| | | |
+|---|---|---|
+| R2.1–R2.2, R2.4, R2.6–R2.8 | P0 | **done** — four free analyzers, fail-closed, content-addressed integrity. |
+| R2.3 Description consistency | P0 | **done, opt-in** — costs money, so never in a default pass. |
+| R2.5 Community flagging | P0 | **absent** — no route from a reader to the quarantine queue. |
+| R2.9 Quality score & ranking | P0 | **done** — the ranking function is now `f(quality, relevance)` with a real relevance term (see R7.4). The **security-tier term is the filter**, not a coefficient: only `indexed` skills are ranked at all, and a weighted tier needs a verified tier (R2.14). |
+| R2.10 Sandbox smoke-test | P1 | **absent** — Phase 4; needs infrastructure this project does not have. |
+| R2.11 Eval harness | P1 | **absent** — Phase 4. |
+| R2.12 Re-scan campaigns | P1 | **done** — `pnpm rescan`; the freshness count now matches the runner's own selector. |
+| R2.13 Composition analysis | P2 | **absent** |
+| R2.14 Signed publication / verified tier | P2 | **absent** — blocks R2.9's tier term. |
+
+### 7.3 Corpus analytics
+
+| | | |
+|---|---|---|
+| R3.1 Two-axis taxonomy | P0 | **partial** — vocabulary, classifier and review queue all work. **11,298 canonical skills carry no servable label** (4,101 labelled), because classification costs money and is deliberately manual. This is the single largest quality gate in the product. |
+| R3.2 Archetype extraction | P0 | **done** — miner 2.1.0, 12 of 13 categories at v5, banded on source trust. |
+| R3.3 Exemplars | P0 | **done** — resolved live, withdrawn ones drop out. |
+| R3.4 Attribution | P0 | **done** — credited in distinct structures. |
+| R3.5 Emerging-category detection | P1 | **absent** — needs embeddings, deliberately deferred. |
+| R3.6 Similarity insight for authors | P1 | **absent** — the dedup data exists; nothing surfaces it to an author. |
+| R3.7 Research API / dataset export | P2 | **absent** |
+
+### 7.4 Skill builder
+
+| | | |
+|---|---|---|
+| R4.1 Archetype-driven scaffolding | P0 | **done** — `/build`, four steps, one model call. |
+| R4.2 Editor with live validation | P0 | **absent** — no editor; validation runs once, on generate. |
+| R4.3 Custom input merge | P0 | **partial** — author context is merged; **deviations are not visibly marked.** |
+| R4.4 Multi-dialect export | P0 | **done** — a directory per dialect, byte-identical repeats. |
+| R4.5 Pre-publish gate | P0 | **done** — the same analyzers, via `runAnalyzersOnBundle`. |
+| R4.6 Template wizard | P1 | **partial** — the builder *is* form-driven; there is no separate simplified path. |
+| R4.7 Version history & fork-with-attribution | P1 | **absent** |
+| R4.8 Eval authoring support | P1 | **absent** — depends on R2.11. |
+
+### 7.5 Creation assistant
+
+| | | |
+|---|---|---|
+| R5.1 Interview-driven drafting | P0 | **partial** — a four-step form, not a conversation. |
+| R5.2 Corpus-grounded suggestions | P0 | **done** — prevalence and lift reach both the UI and the prompt. |
+| R5.3 Gap detection | P0 | **absent** — depends on R3.5/R3.6. |
+| R5.4 Feedback incorporation | P0 | **absent** — no per-suggestion accept/reject, so no structured feedback events. |
+| R5.5 Safety refusals | P0 | **done** — a field in the structured output, verified against a real malicious brief. |
+| R5.6 Improve-my-skill | P1 | **absent** |
+| R5.7 Assistant-driven eval loop | P1 | **absent** — depends on R2.11. |
+
+### 7.6 Closing the loop
+
+| | | |
+|---|---|---|
+| R6.1 Publish-back | P0 | **done** — calls the same `validatePending` external skills use. |
+| R6.2 Creation telemetry | P0 | **done** — structure-only signals; mining consumes lift + delta. |
+| R6.3 Outcome telemetry | P0 | **absent** — **the largest single gap in the product.** No post-publication signal is attributed to an archetype version, so "what good looks like" remains a claim about the corpus rather than about results. |
+| R6.4 Loop observability | P0 | **done** — Settings → Loop, with a stall alert. |
+| R6.5 Poisoning resistance | P0 | **done** — four defences, not a flag. |
+| R6.6 A/B archetypes | P1 | **absent** — Phase 4. |
+
+### 7.7 MCP access surface
+
+| | | |
+|---|---|---|
+| RM.1 MCP search & lookup | P0 | **done** — six tools over `mcp-handler`, each a thin wrapper on the same DAL the web uses; free scope, account-gated by a revocable token; per-key rate limits are admin-tunable settings (`pnpm verify:rate-limit`). **Deviates from the spec on one point:** it says *better-auth api-key plugin*, which **does not exist in better-auth 1.7.2**, and that pin is load-bearing. A scoped `mcp_tokens` table is used instead — which is also the better answer, since an MCP token must not be a session. **The spec sentence is the thing that is wrong here, not the code.** |
+| RM.2 No bypass | P0 | **done** — structurally: the tools own no queries, so licence posture, takedowns and quarantine apply unchanged. Corpus text also leaves inside a nonce-closed untrusted fence, which R7.3 implies for outbound flow and no requirement states. |
+| RM.3 MCP create-skill (paid) | P1 | **absent** — blocked on RC.1; there is no entitlement to check. |
+| RM.4 Boundary vs Verdict API | P1 | **done for the free half** — per-key limits exist and are the boundary. The commercial bulk API does not exist. |
+
+### 8. Cross-cutting
+
+| | | |
+|---|---|---|
+| R7.1 Auditability | P0 | **done** |
+| R7.2 Reproducibility | P0 | **done** — analyzer, extractor, miner and taxonomy versions pinned on every derived row. |
+| R7.3 Least-privilege analysis | P0 | **done** — and extended outbound: corpus text reaching a caller's agent is fenced and labelled. |
+| R7.4 Performance | P1 | **partial** — 24h drift met. Search now has a **`tsvector` + GIN index, `pg_trgm` fuzzy matching and a composite ranking function**, replacing a sequential-scan `ilike`; measured 0.8 ms on a 16K corpus. **The p95-at-500K target remains unproven** — it has never been tested at that scale. |
+| R7.5 Compliance | P0 | **done** — takedowns, `pnpm verify:takedown`. |
+
+### 10a. Commercial
+
+| | | |
+|---|---|---|
+| RC.1 Entitlements in the DAL | P0 | **absent** — no plans exist. Trust surfaces are un-paywalled by construction, so the free-tier guarantee holds; none of the mechanism does. **This is the gate on every paid feature.** |
+| RC.2 Per-org spend caps | P0 | **done** — `pnpm verify:spend`. |
+| RC.3 Usage metering | P1 | **partial** — every model call is metered; MCP calls are not yet in the ledger. |
+| RC.4 Billing webhooks | P1 | **absent** |
+| RC.5 Private corpora never feed public archetypes | P0 | **done** — explicit `org_id IS NULL` filters, not RLS alone. |
+
+### Built, but no longer specified
+
+| | |
+|---|---|
+| R8.1 Public read-only registry | **done** — `(public)` route group; anonymous readers get verdicts, provenance and licence. |
+| R8.2 Skill export / download | **done** — byte-identical repeats, receipt with content and report hashes, licence gate before any object is read. `pnpm verify:export`. |
+| R8.5 Corpus statistics surface | **done** — `/` and `/dashboard` share one query. |
+| R8.4 Per-version permalink | **absent** — a verdict still cannot be cited. |
 
 ## 11. Open Questions
 

@@ -47,3 +47,45 @@ export async function mapWithConcurrency<T, R>(
 
   return results;
 }
+
+/**
+ * Like `mapWithConcurrency`, but **one item can never cost the batch**.
+ *
+ * Every bulk loop in this pipeline wants the same three things: bounded parallelism, results
+ * in input order, and a failure that is *recorded and skipped* rather than fatal. The first
+ * two were a shared helper; the third was left to each call site to remember — and it was
+ * forgotten, repeatedly, in exactly the places where it mattered most:
+ *
+ *   - `syncSource` wrapped the fetch but not the write, so one refused insert cost an entire
+ *     6,864-skill repository;
+ *   - `validatePending` wrapped nothing, so one unreadable bundle would discard a batch of
+ *     500 verdicts.
+ *
+ * Both were latent while the loops were sequential and fired the moment they were not. The
+ * lesson is not "add another try/catch" — it is that isolation should be a property of the
+ * primitive, so that forgetting it is not something a call site is able to do.
+ *
+ * Returns the successes in order plus the failures with their inputs, and never rejects.
+ * A caller that genuinely wants fail-fast should use `mapWithConcurrency` and mean it.
+ */
+export type SettledFailure<T> = { item: T; index: number; error: unknown };
+
+export async function mapSettled<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<{ results: R[]; failures: SettledFailure<T>[] }> {
+  const failures: SettledFailure<T>[] = [];
+  const outcomes = await mapWithConcurrency(items, limit, async (item, index) => {
+    try {
+      return { ok: true as const, value: await worker(item, index) };
+    } catch (error) {
+      failures.push({ item, index, error });
+      return { ok: false as const };
+    }
+  });
+
+  const results: R[] = [];
+  for (const outcome of outcomes) if (outcome.ok) results.push(outcome.value);
+  return { results, failures };
+}

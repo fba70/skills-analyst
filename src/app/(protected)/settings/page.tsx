@@ -29,6 +29,7 @@ import { getSchedule, stageDue } from "@/server/settings/schedule";
 import { budgetState, spendBreakdown } from "@/server/billing/spend";
 import { listTakedowns, takedownCounts } from "@/server/compliance/takedown";
 import { pipelineBacklog, recentRuns, type PipelineBacklog } from "@/server/pipeline/run";
+import { readHeartbeat } from "@/server/pipeline/heartbeat";
 import { staleSlices } from "@/server/validation/rescan";
 import { isAdmin, listPlatformUsers, platformCounts } from "@/server/dal/admin";
 import {
@@ -118,7 +119,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, archetypeList, takedownList, platformBudget, breakdown, metrics, activity, loopLog, schedule, rateLimits] =
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, platformBudget, breakdown, metrics, activity, loopLog, schedule, rateLimits] =
     await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
@@ -130,6 +131,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "ingestion" ? staleSlices() : null,
     tab === "ingestion" ? pipelineBacklog() : null,
     tab === "ingestion" ? recentRuns(8) : null,
+    tab === "ingestion" ? readHeartbeat() : null,
     tab === "archetypes" ? archetypeSummary() : null,
     tab === "takedowns" ? listTakedowns(query) : null,
     tab === "spend" ? budgetState("corpus_taxonomy", null) : null,
@@ -215,6 +217,16 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
             <PipelinePanel
               freshness={freshness ?? []}
               backlog={backlog ?? NO_BACKLOG}
+              heartbeat={
+                heartbeat
+                  ? {
+                      stage: heartbeat.stage,
+                      detail: heartbeat.detail,
+                      secondsSinceBeat: heartbeat.secondsSinceBeat,
+                      stale: heartbeat.stale,
+                    }
+                  : null
+              }
               runs={(runs ?? []).map((run) => ({
                 at: run.at.toISOString(),
                 ok: run.ok,
