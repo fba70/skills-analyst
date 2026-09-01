@@ -28,7 +28,7 @@ import { getRateLimits } from "@/server/settings/rate-limits";
 import { getSchedule, stageDue } from "@/server/settings/schedule";
 import { budgetState, spendBreakdown } from "@/server/billing/spend";
 import { listTakedowns, takedownCounts } from "@/server/compliance/takedown";
-import { pipelineBacklog, recentRuns } from "@/server/pipeline/run";
+import { pipelineBacklog, recentRuns, type PipelineBacklog } from "@/server/pipeline/run";
 import { staleSlices } from "@/server/validation/rescan";
 import { isAdmin, listPlatformUsers, platformCounts } from "@/server/dal/admin";
 import {
@@ -43,6 +43,24 @@ import { MAX_BATCH } from "@/server/taxonomy/classify";
 import { ARCHETYPE_THRESHOLD, reviewQueue, taxonomySummary } from "@/server/taxonomy/run";
 
 export const metadata: Metadata = { title: "Settings" };
+
+/**
+ * What "nothing is queued" looks like, defined once.
+ *
+ * Both the pipeline card and the individual stages need a fallback for the tab where the
+ * backlog was not fetched. Two literals would be two things to update the next time a stage
+ * is added, and the one that got missed would quietly show a zero denominator rather than a
+ * real one.
+ */
+const NO_BACKLOG: PipelineBacklog = {
+  sourcesAwaitingSync: 0,
+  awaitingValidation: 0,
+  awaitingFingerprint: 0,
+  awaitingSignature: 0,
+  shardsPending: 0,
+  reposAwaitingDecision: 0,
+  skillsAwaitingAudit: 0,
+};
 
 const TABS = [
   "ingestion",
@@ -196,14 +214,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
           <div className="grid gap-6">
             <PipelinePanel
               freshness={freshness ?? []}
-              backlog={
-                backlog ?? {
-                  sourcesAwaitingSync: 0,
-                  awaitingValidation: 0,
-                  awaitingFingerprint: 0,
-                  awaitingSignature: 0,
-                }
-              }
+              backlog={backlog ?? NO_BACKLOG}
               runs={(runs ?? []).map((run) => ({
                 at: run.at.toISOString(),
                 ok: run.ok,
@@ -217,7 +228,11 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
             />
             <div className="grid gap-2">
               <h2 className="text-sm font-medium">Individual stages</h2>
-              <IngestionPanel />
+              {/* The same backlog the pipeline card reads, so a stage's denominator and the
+                  pass summary above it cannot disagree about what is queued. */}
+              <IngestionPanel
+                backlog={backlog ?? NO_BACKLOG}
+              />
             </div>
           </div>
         ) : null}

@@ -2,7 +2,7 @@
 
 **Author:** TBD · **Date:** 2026-08-27 · **Status:** Draft
 **Reviewers:** TBD · **Product spec:** `02-requirements-spec.md` · **Business concept:** `01-business-concept.md` · **Sources:** `04-source-ingestion-analysis.md`
-**Changelog:** v1.1 — stack preferences locked (Tailwind + shadcn/ui, Vercel Workflows, AI SDK + AI Gateway); RLS promoted from deferred to in-scope v1 backstop; ingestion aligned with Doc 4
+**Changelog:** v1.1 — stack preferences locked (Tailwind + shadcn/ui, Vercel Workflows, AI SDK + AI Gateway); RLS promoted from deferred to in-scope v1 backstop; ingestion aligned with Doc 4 · v1.2 — MCP server added to public interfaces (Doc 2 §7.7)
 
 ## Summary
 
@@ -97,6 +97,7 @@ No skill content transits a Vercel function body (4.5 MB cap; asset-bearing bund
 **Public interfaces (v1):**
 - **Web app** (registry, builder, assistant) — session-authed.
 - **Verdict API** (`GET /api/v1/verdicts/{content_hash}`, `GET /api/v1/skills/{id}`) — API-key authed, metered, versioned from day one because third parties will build on it; responses carry `analyzer_version` so consumers can pin.
+- **MCP server** (Doc 2 §7.7) — streamable-HTTP MCP endpoint in a Next.js route handler, authed via the better-auth **api-key plugin** (same keys as the Verdict API, different rate-limit class). Tools, all thin wrappers over the existing DAL so RLS and entitlements apply unchanged: `search_skills`, `get_skill` (details + verdicts + capability surface + provenance), and — Pro-gated, quota-checked against RC.2 before the model call — `create_skill_draft`, which drives the same scaffold/generate/validate path as the web builder. No separate MCP data path exists: the server owns zero queries of its own, which is what keeps RM.2's no-bypass claim structural rather than reviewed-for. Per-key rate limits sized for interactive agent sessions (RM.4) are the technical boundary against bulk extraction; bulk is the Verdict API's job.
 - **Submission endpoint** (`POST /api/v1/sources`) — authed, feeds the same intake pipeline.
 - **Connector SDK** (Apache-licensed package): a connector implements `enumerate(source, cursor) → changed[]` and `fetch(ref) → bundle`; the pipeline owns normalization, hashing, and writes, so a community connector never touches storage or the DB directly — which is both the security boundary and what makes connectors easy to review.
 

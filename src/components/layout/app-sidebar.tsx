@@ -4,6 +4,7 @@ import { Logo } from "@/components/brand";
 import { NavAdmin, NavMain } from "@/components/layout/nav-main";
 import { NavUser, type NavUserProps } from "@/components/layout/nav-user";
 import { ThemeToggleMenuItem } from "@/components/theme-toggle";
+import { SidebarToggleItem } from "@/components/layout/sidebar-toggle-item";
 import {
   Sidebar,
   SidebarContent,
@@ -33,9 +34,18 @@ export function AppSidebar({ user, isAdmin = false }: AppSidebarProps) {
         {/* Deliberately not a SidebarMenuButton: that component forces every nested
             svg to 16px, which is too small for a brand lockup. A plain link keeps the
             mark at full size and still collapses to a centred icon. */}
+        {/*
+          Home, not the dashboard.
+
+          It pointed at `/dashboard` — which the nav below already offers, so the logo was
+          the one link in the chrome that went somewhere you could already reach, while the
+          landing page had no route back from anywhere inside the app. A brand mark going
+          home is also what people try first, and the anonymous header does exactly that,
+          so the two chromes now agree.
+        */}
         <Link
-          href="/dashboard"
-          aria-label="Skills Foundry"
+          href="/"
+          aria-label="Skills Foundry — home"
           className="hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-sidebar-ring flex items-center gap-3 overflow-hidden rounded-md px-1.5 py-1.5 transition-colors outline-hidden focus-visible:ring-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0"
         >
           <Logo className="size-11 shrink-0 group-data-[collapsible=icon]:size-8" />
@@ -54,6 +64,9 @@ export function AppSidebar({ user, isAdmin = false }: AppSidebarProps) {
         <SidebarMenu>
           <SidebarMenuItem>
             <ThemeToggleMenuItem />
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarToggleItem />
           </SidebarMenuItem>
         </SidebarMenu>
         <SidebarSeparator />

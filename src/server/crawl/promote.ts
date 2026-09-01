@@ -1,4 +1,5 @@
 import "server-only";
+import { fetchWithDeadline } from "@/server/http/deadline";
 
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
@@ -62,7 +63,7 @@ export async function enrichCandidates(limit = 50): Promise<EnrichReport> {
 
   for (const candidate of candidates) {
     try {
-      const response = await fetch(`${API}/repos/${candidate.owner}/${candidate.repo}`, {
+      const response = await fetchWithDeadline(`${API}/repos/${candidate.owner}/${candidate.repo}`, {
         headers: headers(),
       });
 
@@ -254,6 +255,20 @@ export async function reapplyMarkerThreshold(): Promise<{
   reEnabled: number;
   stillHeld: number;
 }> {
+  /**
+   * Every disabled **public discovery** source, not only the ones marked `paused`.
+   *
+   * Two conditions, and both were learned the hard way:
+   *
+   * `health = 'paused'` was dropped because a curator-approved source sits at
+   * `health: 'unknown'` after approval — which is exactly the row this sweep exists to
+   * unstick, and exactly the row that filter excluded.
+   *
+   * `org_id is null` was added the moment the first filter came off. Every organisation
+   * has a `builder` source that is `enabled = false` **by design**, so the scheduler never
+   * offers it — it is where publish-back files authored skills, not a repository anyone can
+   * fetch. A sweep that re-enabled it would queue a source with no upstream to sync.
+   */
   const paused = await db
     .select({
       id: sources.id,
@@ -262,16 +277,44 @@ export async function reapplyMarkerThreshold(): Promise<{
       detail: sources.healthDetail,
     })
     .from(sources)
-    .where(and(eq(sources.enabled, false), eq(sources.health, "paused")));
+    .where(and(eq(sources.enabled, false), isNull(sources.orgId)));
 
   let reEnabled = 0;
   let stillHeld = 0;
 
   for (const row of paused) {
     const config = (row.config ?? {}) as Record<string, unknown>;
-    if (config.allowLargeRepo === true) continue;
-
     const detail = (row.detail ?? {}) as Record<string, unknown>;
+
+    /**
+     * An approval means "sync this", so a disabled approved source is re-enabled here.
+     *
+     * This guard used to `continue`, on the reasoning that a curator had already decided and
+     * the sweep should not overrule them. That is right about *re-pausing* and exactly wrong
+     * here: the decision was to admit the repository, and skipping it left the approval
+     * inert. Two sources sat disabled-and-approved indefinitely — the sweep would not touch
+     * them because they looked decided, and nothing else re-enables a source. Honouring the
+     * decision is the opposite of overruling it.
+     */
+    if (config.allowLargeRepo === true) {
+      await releaseSource(row.id, row.url, `curator-approved (allowLargeRepo)`);
+      reEnabled += 1;
+      continue;
+    }
+
+    /**
+     * A pass-ceiling hold is not a judgement about the repository.
+     *
+     * It records that one caller could not finish inside its own budget. A local run has no
+     * ceiling, so the source should go back in the queue rather than wait for a review
+     * nobody needs to perform.
+     */
+    if (detail.heldBy === "pass-ceiling") {
+      await releaseSource(row.id, row.url, "held by a pass ceiling, not by review policy");
+      reEnabled += 1;
+      continue;
+    }
+
     let markerCount = typeof detail.markerCount === "number" ? detail.markerCount : null;
 
     if (markerCount === null && typeof detail.reason === "string") {
@@ -302,32 +345,11 @@ export async function reapplyMarkerThreshold(): Promise<{
       continue;
     }
 
-    await db.transaction(async (tx) => {
-      await tx
-        .update(sources)
-        .set({
-          enabled: true,
-          health: "unknown",
-          healthDetail: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(sources.id, row.id));
-
-      await tx
-        .update(discoveredRepos)
-        .set({ status: "promoted", skipReason: null })
-        .where(eq(discoveredRepos.url, row.url));
-
-      await tx.insert(events).values({
-        actorType: "system",
-        actorId: "crawl.policy",
-        kind: "source.threshold_reapplied",
-        subjectType: "sources",
-        subjectId: row.id,
-        reason: `${markerCount} markers now under the ${discoveryPolicy.markerCountReviewThreshold} threshold`,
-        payload: { url: row.url, markerCount },
-      });
-    });
+    await releaseSource(
+      row.id,
+      row.url,
+      `${markerCount} markers now under the ${discoveryPolicy.markerCountReviewThreshold} threshold`,
+    );
     reEnabled += 1;
   }
 
@@ -357,4 +379,36 @@ export async function promotionSummary() {
     .limit(10);
 
   return { rows, review };
+}
+
+/**
+ * Puts a disabled source back in the queue, with a record of why.
+ *
+ * One implementation for all three release paths — an approval being honoured, a transient
+ * pass-ceiling hold expiring, and a threshold that moved. They differ only in the sentence,
+ * and three copies of this transaction would be three places for the `discovered_repos`
+ * update to be forgotten.
+ */
+async function releaseSource(id: string, url: string, reason: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx
+      .update(sources)
+      .set({ enabled: true, health: "unknown", healthDetail: null, updatedAt: new Date() })
+      .where(eq(sources.id, id));
+
+    await tx
+      .update(discoveredRepos)
+      .set({ status: "promoted", skipReason: null })
+      .where(eq(discoveredRepos.url, url));
+
+    await tx.insert(events).values({
+      actorType: "system",
+      actorId: "crawl.policy",
+      kind: "source.threshold_reapplied",
+      subjectType: "sources",
+      subjectId: id,
+      reason,
+      payload: { url, reason },
+    });
+  });
 }

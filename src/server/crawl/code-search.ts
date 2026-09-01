@@ -1,4 +1,5 @@
 import "server-only";
+import { fetchWithDeadline } from "@/server/http/deadline";
 
 import { MAX_PAGES, PAGE_SIZE } from "./shards";
 
@@ -90,7 +91,7 @@ export async function searchCode(
   const url =
     `${API}/search/code?q=${encodeURIComponent(query)}` +
     `&per_page=${PAGE_SIZE}&page=${page}`;
-  const response = await fetch(url, { headers: headers() });
+  const response = await fetchWithDeadline(url, { headers: headers() });
 
   if (response.status === 403 || response.status === 429) {
     // Secondary rate limits answer with Retry-After; primary ones with a reset epoch.

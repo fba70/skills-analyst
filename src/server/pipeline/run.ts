@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, inArray, isNull, ne, notExists, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, ne, notExists, sql } from "drizzle-orm";
 
 import {
   buildSignatures,
@@ -8,10 +8,18 @@ import {
   pendingSignatureCount,
 } from "@/server/analytics/dedupe";
 import { db } from "@/server/db";
-import { events, skillStructures, skillVersions, sources } from "@/server/db/schema";
+import {
+  crawlShards,
+  discoveredRepos,
+  events,
+  skillStructures,
+  skillVersions,
+  sources,
+  verdicts,
+} from "@/server/db/schema";
 import { EXTRACTOR_VERSION } from "@/server/analytics/structure";
 import { extractStructures } from "@/server/analytics/structure-run";
-import { pendingSources, syncSource } from "@/server/ingest/sync";
+import { pendingSources, SourceHeldForReviewError, syncSource } from "@/server/ingest/sync";
 import { validatePending } from "@/server/validation/run";
 
 /**
@@ -140,9 +148,31 @@ export async function runPipeline(options: PipelineOptions = {}): Promise<Pipeli
       const deadline = Date.now() + budgetMs;
 
       let created = 0;
+      let relicensed = 0;
       let tombstoned = 0;
       let blocked = 0;
-      let failed = 0;
+      /**
+       * Which source failed and why — not a count.
+       *
+       * This used to be `failed += 1` with an empty catch, and the consequence showed up in
+       * the live log: every pass for days reported "1 failed" and nothing anywhere said
+       * which repository or what went wrong. A recurring failure that cannot be identified
+       * is a cost you pay on every run and can never act on, and it is indistinguishable
+       * from a different source failing each time.
+       *
+       * `syncSource` already learned this one level down — `failedSkills` carries a path and
+       * a reason rather than a tally. The same rule belongs here.
+       */
+      const failedSources: Array<{ url: string; reason: string }> = [];
+      /**
+       * Withheld on purpose, and therefore not a failure.
+       *
+       * The marker gate disabling an 819-skill repository is the policy doing its job. Filed
+       * under "failed" it inflates a number an operator is meant to react to, and the first
+       * consequence of a failure count that is usually noise is that a real failure stops
+       * being noticed.
+       */
+      const heldSources: Array<{ url: string; markerCount: number }> = [];
       let skippedSkills = 0;
       let deferredSources = 0;
       let attempted = 0;
@@ -170,19 +200,48 @@ export async function runPipeline(options: PipelineOptions = {}): Promise<Pipeli
           });
           if (result.deferred) deferredSources += 1;
           created += result.created;
+          relicensed += result.relicensed;
           tombstoned += result.tombstoned;
           blocked += result.blocked;
           skippedSkills += result.failedSkills.length;
-        } catch {
+        } catch (error) {
           // Per-source, so one unreachable repository does not end the slice.
-          failed += 1;
+          if (error instanceof SourceHeldForReviewError) {
+            heldSources.push({ url: error.url, markerCount: error.markerCount });
+            log(`held for review: ${error.url} — ${error.markerCount} skills, over the ${error.threshold} threshold`);
+            continue;
+          }
+          const reason = error instanceof Error ? error.message : String(error);
+          failedSources.push({ url: target.url, reason });
+          // Logged as it happens as well as summarised, because a pass that dies later
+          // still leaves this in the output.
+          log(`sync failed: ${target.url} — ${reason}`);
         }
       }
 
       return (
-        `${attempted} source(s): ${created} version(s) created, ${tombstoned} tombstoned, ${failed} failed` +
+        `${attempted} source(s): ${created} version(s) created, ${tombstoned} tombstoned, ${failedSources.length} failed` +
+        // Named, not counted, and bounded so one broken connector cannot flood the summary.
+        // Two is enough to tell "the same source every time" from "a different one each
+        // pass", which is the only question this line has to answer.
+        (failedSources.length > 0
+          ? ` (${failedSources
+              .slice(0, 2)
+              .map((f) => `${f.url}: ${f.reason.slice(0, 80)}`)
+              .join("; ")}${failedSources.length > 2 ? `; +${failedSources.length - 2} more` : ""})`
+          : "") +
         // Reported rather than silent: a skill not fetched because of a takedown looks
         // exactly like a skill that was never there, and those need different responses.
+        // Same bytes, better licence answer. Worth its own word: the corpus did not grow,
+        // but skills that were unservable may have become downloadable.
+        (relicensed > 0 ? `, ${relicensed} relicensed` : "") +
+        // Named separately from failures: this one needs a curator, not a bug report.
+        (heldSources.length > 0
+          ? `, ${heldSources.length} held for review (${heldSources
+              .slice(0, 2)
+              .map((h) => `${h.url}: ${h.markerCount} skills`)
+              .join("; ")})`
+          : "") +
         (blocked > 0 ? `, ${blocked} withdrawn on request` : "") +
         // Distinct from a failed *source*: the repository synced, some skills in it did not.
         (skippedSkills > 0 ? `, ${skippedSkills} skill(s) skipped` : "") +
@@ -288,6 +347,18 @@ export type PipelineBacklog = {
   awaitingFingerprint: number;
   /** Indexed versions with no dedup signature. */
   awaitingSignature: number;
+  /** Code-search shards not yet read. Saturated ones are excluded — they cannot advance. */
+  shardsPending: number;
+  /** Discovered repositories nobody has decided about. */
+  reposAwaitingDecision: number;
+  /**
+   * Skills whose bundle contains code and carries no description-consistency verdict.
+   *
+   * The only queue here that **costs money** to work through, which is why it is counted
+   * separately rather than folded into the validation figure — an operator sizing a free
+   * pass and one sizing a billable one need different numbers in front of them.
+   */
+  skillsAwaitingAudit: number;
 };
 
 /**
@@ -340,10 +411,54 @@ export async function pipelineBacklog(): Promise<PipelineBacklog> {
       ),
     );
 
+  const [shardRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(crawlShards)
+    // `saturated` is deliberately excluded: those are over the search cap and cannot be
+    // advanced by reading them again, so counting them as work would misstate the queue as
+    // permanently unfinishable.
+    .where(inArray(crawlShards.status, ["pending", "running"]));
+
+  const [repoRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(discoveredRepos)
+    .where(eq(discoveredRepos.status, "new"));
+
+  /**
+   * Bundles with code and no current R2.3 verdict.
+   *
+   * Mirrors `versionsWithCode`'s selector rather than re-deriving it: the number an
+   * operator reads beside the input has to be the number the run will actually draw from,
+   * or the denominator is fiction.
+   */
+  const [auditRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(skillVersions)
+    .where(
+      and(
+        eq(skillVersions.status, "indexed"),
+        gt(skillVersions.fileCount, 1),
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(verdicts)
+            .where(
+              and(
+                eq(verdicts.skillVersionId, skillVersions.id),
+                eq(verdicts.analyzer, "description-consistency"),
+              ),
+            ),
+        ),
+      ),
+    );
+
   return {
     sourcesAwaitingSync: sourceRow?.count ?? 0,
     awaitingValidation: validationRow?.count ?? 0,
     awaitingFingerprint: fingerprintRow?.count ?? 0,
     awaitingSignature: await pendingSignatureCount(),
+    shardsPending: shardRow?.count ?? 0,
+    reposAwaitingDecision: repoRow?.count ?? 0,
+    skillsAwaitingAudit: auditRow?.count ?? 0,
   };
 }

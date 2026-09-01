@@ -61,6 +61,11 @@ export type StaleSlice = {
  * Read-only and cheap — the number to put in front of a curator so a stale corpus is a
  * visible fact rather than something discovered later. The 7-day SLA in R2.12 only means
  * anything if somebody can see the clock.
+ *
+ * **Counted over exactly what `runRescan` will select.** The two queries share the status
+ * predicate on purpose: a count that includes rows the runner skips is a backlog nobody can
+ * clear, and the first thing an operator does with a number that never moves is stop
+ * believing it.
  */
 export async function staleSlices(): Promise<StaleSlice[]> {
   const rows = await db.execute(sql`
@@ -70,9 +75,19 @@ export async function staleSlices(): Promise<StaleSlice[]> {
       from verdicts
       order by skill_version_id, analyzer, created_at desc
     )
-    select analyzer, analyzer_version, count(*)::int as count
-    from newest
-    group by analyzer, analyzer_version
+    select n.analyzer, n.analyzer_version, count(*)::int as count
+    from newest n
+    join skill_versions sv on sv.id = n.skill_version_id
+    -- The same predicate runRescan selects on, and it has to be the same one.
+    --
+    -- Without it this counted every verdict ever written, including those on versions the
+    -- campaign is designed never to touch. A tombstoned or withdrawn version has no stored
+    -- content to re-judge, so it can never leave the backlog: the number reported four
+    -- permanently stale verdicts — four symlink remnants retired months ago — and would
+    -- have gone on reporting them for ever. A freshness figure that cannot reach zero stops
+    -- being read, which costs more than the four rows it was counting.
+    where sv.status in ('indexed', 'quarantined')
+    group by n.analyzer, n.analyzer_version
   `);
 
   const byAnalyzer = new Map<string, Array<{ version: string; count: number }>>();

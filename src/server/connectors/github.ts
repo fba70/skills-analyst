@@ -1,5 +1,6 @@
 import "server-only";
 
+import { fetchWithDeadline, LARGE_RESPONSE_TIMEOUT_MS } from "@/server/http/deadline";
 import { ingestPolicy } from "@/server/crawl/policy";
 import { detectSkills } from "@/server/skills/detect";
 
@@ -90,8 +91,8 @@ function apiHeaders(): HeadersInit {
   };
 }
 
-async function api<T>(path: string): Promise<T> {
-  const response = await fetch(`${API}${path}`, { headers: apiHeaders() });
+async function api<T>(path: string, timeoutMs?: number): Promise<T> {
+  const response = await fetchWithDeadline(`${API}${path}`, { headers: apiHeaders() }, timeoutMs);
   if (!response.ok) {
     const remaining = response.headers.get("x-ratelimit-remaining");
     throw new Error(
@@ -120,7 +121,25 @@ async function rawFile(
   const url = `${RAW}/${owner}/${repo}/${commitSha}/${encoded}`;
 
   for (let attempt = 0; attempt <= ingestPolicy.rawMaxRetries; attempt += 1) {
-    const response = await fetch(url);
+    let response: Response;
+    try {
+      response = await fetchWithDeadline(url);
+    } catch (error) {
+      /**
+       * A blown deadline is retryable, and belongs in this loop rather than above it.
+       *
+       * The retry that already exists here was written for 429s and 5xxs — a host saying
+       * "not now". A host saying nothing at all is the same situation from our side, and it
+       * is the more common one: an edge that stops answering usually answers again a second
+       * later from a different address. Throwing on the first timeout would abandon a file
+       * the next attempt would have fetched.
+       */
+      if (attempt === ingestPolicy.rawMaxRetries) throw error;
+      await new Promise((resolve) =>
+        setTimeout(resolve, ingestPolicy.rawBackoffBaseMs * 2 ** attempt + Math.random() * 500),
+      );
+      continue;
+    }
 
     if (response.status === 404) return null;
     if (response.ok) return Buffer.from(await response.arrayBuffer());
@@ -170,6 +189,9 @@ async function listBlobPaths(
   if (prefixes.length === 0) {
     const tree = await api<{ tree: TreeEntry[]; truncated: boolean }>(
       `/repos/${owner}/${repo}/git/trees/${commitSha}?recursive=1`,
+      // A whole-repository tree is the one call here that is legitimately slow. See
+      // LARGE_RESPONSE_TIMEOUT_MS: a false timeout on an enumeration would read as deletion.
+      LARGE_RESPONSE_TIMEOUT_MS,
     );
     if (tree.truncated) {
       throw new Error(
@@ -188,6 +210,7 @@ async function listBlobPaths(
     try {
       subtree = await api<{ tree: TreeEntry[]; truncated: boolean }>(
         `/repos/${owner}/${repo}/git/trees/${commitSha}:${encodeURIComponent(prefix)}?recursive=1`,
+        LARGE_RESPONSE_TIMEOUT_MS,
       );
     } catch (error) {
       // A prefix that does not exist is a curator typo, and naming it is more useful

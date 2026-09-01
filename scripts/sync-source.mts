@@ -114,7 +114,11 @@ const mirrored = report.skills.filter((s) => s.contentStored).length;
 console.info("");
 console.info(
   `${report.skills.length} skill(s): ${mirrored} mirrored, ${report.skills.length - mirrored} metadata-only` +
-    (dryRun ? "" : ` · ${report.created} created, ${report.unchanged} unchanged`) +
+    (dryRun
+      ? ""
+      : ` · ${report.created} created, ${report.unchanged} unchanged` +
+        // Only when it happened: a licence correction is news, a zero is noise.
+        (report.relicensed > 0 ? `, ${report.relicensed} relicensed` : "")) +
     (report.tombstoned > 0 ? ` · ${report.tombstoned} tombstoned` : "") +
     (report.blocked > 0 ? ` · ${report.blocked} withdrawn on request` : ""),
 );

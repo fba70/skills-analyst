@@ -2,7 +2,7 @@
 
 **Status:** Draft v1.0 · **Date:** 2026-08-27 · **Owner:** TBD
 **Companion documents:** `02-requirements-spec.md` (what we build) · `03-implementation-spec.md` (how we build it) · `04-source-ingestion-analysis.md` (where the corpus comes from)
-**Changelog:** v1.2 — MCP interface added to §5 monetization, with the free/paid scope line (Doc 2 R8.8) · v1.1 — market evidence and partner posture updated from the source analysis (Doc 4)
+**Changelog:** v1.1 — market evidence and partner posture updated from the source analysis (Doc 4) · v1.2 — MCP access added to tiers
 
 ---
 
@@ -76,15 +76,13 @@ Ingested third-party skill content is governed by *its own* upstream licenses (g
 
 ## 5. Monetization (hosted)
 
-**Free — the flywheel tier.** Public browsing/search, per-skill verdicts, public authoring via builder + assistant (fair-use LLM quota), community submission. Purpose: corpus volume, telemetry volume, distribution. This tier's trust surfaces are never degraded — see RC.1 in Doc 2.
+**Free — the flywheel tier.** Public browsing/search, per-skill verdicts, public authoring via builder + assistant (fair-use LLM quota), community submission, and **MCP search & lookup** (account + API key required — free, but keyed). The key requirement is deliberate: every agent-side user becomes an identified, meterable account, which is the identity hook the flywheel and RC.2/RC.3 metering need, without touching the anonymous web registry. Purpose: corpus volume, telemetry volume, distribution. This tier's trust surfaces are never degraded — see RC.1 in Doc 2.
 
-**Pro (per-seat, ~$15–25/seat/mo).** Private skills and drafts, team workspaces, higher assistant/validation quotas, eval-harness runs, version history, priority validation queue.
+**Pro (per-seat, ~$15–25/seat/mo).** Private skills and drafts, team workspaces, higher assistant/validation quotas, eval-harness runs, version history, priority validation queue, and **MCP create-skill** — scaffolding and drafting from inside an agent session, with the same validation gate as the web builder. This is the direct counter to the "just ask the agent" competitive risk: rather than competing with in-agent creation, the platform *becomes* the in-agent creation path, and the trust badge is what free-form agent output can't self-issue.
 
 **Team / Enterprise (per-org, ~$500–2,000+/mo).** **Private tenant corpus** — internal sources (private GitHub/GitLab) run through the same pipeline; org-scoped archetypes blending public + private evidence; org-wide install-policy gates ("nothing below verified tier"); SSO/SCIM; compliance/audit exports; support SLA. Self-host support contracts land here.
 
 **Verdict & Archetype API (B2B, usage-priced) — the sleeper product.** Other registries, IDE vendors, and agent platforms embed live verdicts, capability-surface metadata, and risk scores by content hash. This monetizes the flywheel *without* competing on distribution — potential rivals become customers. Target: 2 design partners within two quarters of API GA.
-
-**MCP interface (Doc 2 R8.8) — the same product, pointed at agents instead of vendors.** An agent that can query the corpus directly is the distribution channel this registry is actually for, and the free/paid line is the verdict line from §4.2 restated for a protocol: **per-skill lookup is free and un-gateable — search, provenance, licence posture, the verdict itself, the archetype snapshot, and download where the licence permits — while bulk, by-content-hash, live-feed, org-scoped and model-calling tools are paid.** The free scope requires a **free account** — a revocable token, so the rate limit has a name to count against rather than an IP address. That is a quota identity and not a paywall: nothing behind it is hidden from the web. It is also the only signup in the product that a machine triggers, which makes it the cheapest customer-acquisition path we have — every free lookup is a caller who now has a reason to want the bulk feed, and an address to tell. Degrading the free verdict to sell the paid one would break the commitment in §4.2 and the point of the platform with it.
 
 **Metered add-ons.** Sandbox behavioral testing beyond quota; bulk re-validation of private corpora; assistant tokens beyond plan.
 

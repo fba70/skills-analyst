@@ -78,6 +78,49 @@ const BODY_SIGNATURES: Array<{
     posture: "mirror_allowed",
     pattern: /This is free and unencumbered software released into the public domain/i,
   },
+  /**
+   * Creative Commons, by body text.
+   *
+   * The SPDX *id* map below has known `CC-BY-4.0` and `CC-BY-SA-4.0` since the beginning —
+   * what was missing is the ability to recognise one of these licences from the file itself,
+   * so a repository whose LICENSE is a plain-prose CC grant fell through to `unresolved`.
+   * GitHub reports NOASSERTION for exactly these files (their text does not match the
+   * canonical CC wording byte for byte), which is why step 3 could not rescue them either.
+   *
+   * Measured before adding: of 1,968 unresolved skills, 85 repositories holding 1,713 of
+   * them have **no licence at all** — correctly unresolved, and nothing can change that.
+   * The remainder are these: one 710-star repository alone carries 166 skills under a
+   * CC BY-SA 4.0 file nothing in the chain could read.
+   *
+   * Safe to treat as permissive because the restrictive variants are caught **first**:
+   * `PROPRIETARY_SIGNATURES` tests NonCommercial and NoDerivatives above, so a CC BY-NC-SA
+   * file never reaches these patterns.
+   */
+  {
+    spdx: "CC-BY-SA-4.0",
+    posture: "attribution_required",
+    pattern: /Creative Commons Attribution[-\s]?ShareAlike 4\.0/i,
+  },
+  {
+    spdx: "CC-BY-4.0",
+    posture: "attribution_required",
+    pattern: /Creative Commons Attribution 4\.0/i,
+  },
+  /**
+   * LGPL, which the chain could name by id and not by text — the same gap as CC, and it is
+   * `attribution_required` for our purposes: mirroring is permitted, attribution is not
+   * optional. The copyleft obligations bind a *derivative*, which we do not create.
+   */
+  {
+    spdx: "LGPL-2.1",
+    posture: "attribution_required",
+    pattern: /GNU LESSER GENERAL PUBLIC LICENSE\s+Version 2\.1|lgpl-2\.1/i,
+  },
+  {
+    spdx: "LGPL-3.0",
+    posture: "attribution_required",
+    pattern: /GNU LESSER GENERAL PUBLIC LICENSE\s+Version 3/i,
+  },
   {
     spdx: "CC0-1.0",
     posture: "mirror_allowed",
@@ -96,6 +139,16 @@ const PROPRIETARY_SIGNATURES: Array<{ label: string; pattern: RegExp }> = [
   { label: "no-redistribution", pattern: /may not be (copied|redistributed|reproduced)/i },
   { label: "noncommercial", pattern: /NonCommercial|CC BY-NC|\bNC\b-/i },
   { label: "noderivatives", pattern: /NoDerivatives|CC BY-ND/i },
+  /**
+   * Source-available licences that read as open and are not.
+   *
+   * Elastic 2.0 permits use and modification but forbids offering the software as a hosted
+   * service, which is a redistribution restriction we cannot honour by mirroring. It reached
+   * `unresolved` before, which is the same posture by accident; naming it makes the refusal
+   * explainable to the author instead of looking like we failed to read their file.
+   */
+  { label: "elastic-2.0", pattern: /Elastic License 2\.0/i },
+  { label: "busl", pattern: /Business Source License/i },
 ];
 
 /** Reads a licence file's body. */
