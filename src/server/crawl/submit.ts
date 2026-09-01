@@ -1,4 +1,5 @@
 import "server-only";
+import { fetchWithDeadline } from "@/server/http/deadline";
 
 import { and, eq, isNull, sql } from "drizzle-orm";
 
@@ -159,7 +160,7 @@ export async function submitRepository(
   // ---- Preflight: does it exist, and does it hold skills? ------------------
   let meta: RepoMeta;
   try {
-    const response = await fetch(`${API}/repos/${owner}/${repo}`, { headers: headers() });
+    const response = await fetchWithDeadline(`${API}/repos/${owner}/${repo}`, { headers: headers() });
     if (response.status === 404) {
       return { ok: false, reason: `${owner}/${repo} does not exist or is private.` };
     }
@@ -228,19 +229,31 @@ export async function submitRepository(
     options.autoPromote && usable.length > discoveryPolicy.markerCountReviewThreshold;
 
   await db.transaction(async (tx) => {
-    if (sourceId && (options.includePaths?.length || reviewedLargeRepo)) {
-      // The repository was already a source — from the crawl, or an earlier submission —
-      // so no row is inserted below and the new include paths would be dropped on the
-      // floor. That failure is silent and expensive: the source keeps the whole-repo
-      // config, the tree call keeps truncating, and the sync keeps failing for a reason
-      // the curator already fixed. Merge them onto the existing config instead.
+    /**
+     * Re-enable on **any** re-submission, not only one that carries config.
+     *
+     * This used to be gated on `includePaths?.length || reviewedLargeRepo` — i.e. it ran
+     * only when there was something to merge — so re-submitting a paused source that needed
+     * neither did nothing at all. The block's own comment promised the opposite: "a source
+     * that a previous run paused must come back enabled, or the admin's decision is recorded
+     * and then ignored." It was ignored, silently, for exactly the sources whose hold was
+     * transient enough not to need an approval flag.
+     *
+     * The two concerns are now separate: **re-enabling** is what a submission always means,
+     * and **merging config** is conditional. An empty merge is `config || '{}'::jsonb`,
+     * which is a no-op, so one statement serves both.
+     *
+     * `health` and `healthDetail` are cleared with it. Leaving a row `enabled` while it
+     * still says `paused` with a hold reason attached is a state nothing reads consistently
+     * — the scheduler would sync it while every operator surface called it paused.
+     */
+    if (sourceId && options.autoPromote) {
       await tx
         .update(sources)
         .set({
-          // Re-submitting is an explicit "sync this". A source that a previous run paused
-          // — for holding more markers than the threshold, say — must come back enabled,
-          // or the admin's decision is recorded and then ignored.
           enabled: true,
+          health: "unknown",
+          healthDetail: null,
           config: sql`${sources.config} || ${JSON.stringify({
             ...(options.includePaths?.length
               ? { includePaths: options.includePaths, narrowedBy: options.submittedBy }

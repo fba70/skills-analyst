@@ -66,32 +66,10 @@ export function CorpusStats({ stats }: { stats: PlatformStats }) {
           label="Downloadable"
           detail="licence permits redistribution"
         />
-        <Figure
-          value={
-            stats.hoursSinceSync === null
-              ? "—"
-              : stats.hoursSinceSync < 1
-                ? "just now"
-                : `${stats.hoursSinceSync}h`
-          }
-          label="Since last sync"
-          /*
-           * The target is printed beside the measurement, not implied by it. "6h ago" is
-           * only reassuring to someone who already knows what good looks like, and the
-           * whole point of this panel is the reader who does not.
-           */
-          detail={
-            stats.hoursSinceSync === null
-              ? "no sync yet"
-              : withinTarget
-                ? "inside the 24h target"
-                : "past the 24h target"
-          }
-        />
         {/*
           The one figure that is not a fact about the corpus.
 
-          The four above count what came in; this counts what has been learned from it,
+          The three above count what came in; this counts what has been learned from it,
           which is the claim the third pillar makes and the only one the page could not
           previously back with a number. It is measured in **distinct structures** rather
           than skills because that is the unit the mine uses — quoting a skill count would
@@ -101,6 +79,34 @@ export function CorpusStats({ stats }: { stats: PlatformStats }) {
           value={`${stats.archetypeCategories} of ${stats.functionCategories}`}
           label="Archetypes mined"
           detail={`from ${stats.archetypeStructures.toLocaleString()} distinct structures`}
+        />
+
+        {/*
+          Freshness last, because it is the only figure that is about *now* rather than
+          about size.
+
+          The four before it answer "how much is here and what has been learned from it";
+          this one answers "is any of it stale", which is the question you ask after the
+          others, not between them. The target is printed beside the measurement rather than
+          implied by it — "6h" only reassures a reader who already knows what good looks
+          like, and this panel exists for the one who does not.
+        */}
+        <Figure
+          value={
+            stats.hoursSinceSync === null
+              ? "—"
+              : stats.hoursSinceSync < 1
+                ? "just now"
+                : `${stats.hoursSinceSync}h`
+          }
+          label="Since last sync"
+          detail={
+            stats.hoursSinceSync === null
+              ? "no sync yet"
+              : withinTarget
+                ? "inside the 24h target"
+                : "past the 24h target"
+          }
         />
       </dl>
 

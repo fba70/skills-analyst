@@ -225,7 +225,19 @@ function PipelineCard({
       </CardHeader>
 
       <CardContent className="grid gap-4">
-        <ol className="grid gap-1.5 text-sm">
+        {/*
+          `grid-cols-[minmax(0,1fr)]`, and it is not decoration.
+
+          A bare `grid` creates one *implicit* column sized to max-content, so the track
+          grows to whatever the longest row needs and no `min-w-0` on a child can pull it
+          back — the child is already allowed to shrink; the column is not. Tailwind's
+          `grid-cols-*` utilities already emit `minmax(0, 1fr)`, which is why this only
+          bites containers written as a plain `grid`.
+
+          Measured at a 1000px viewport: the card was 681px wide with a 1168px scroll width;
+          clamping the two lists brought it to exactly 681.
+        */}
+        <ol className="grid grid-cols-[minmax(0,1fr)] gap-1.5 text-sm">
           <Stage
             n={1}
             name="Sync"
@@ -315,8 +327,11 @@ function PipelineCard({
             <span className="text-sm font-medium">Schedule</span>
           </div>
 
+          {/* Same clamp. These rows carry a run summary that now names a failing source by
+              URL, and a URL has no break opportunity — one sets the column's max-content
+              width single-handedly. */}
           {runs.length > 0 ? (
-            <ul className="mt-2 grid gap-1">
+            <ul className="mt-2 grid grid-cols-[minmax(0,1fr)] gap-1">
               {runs.slice(0, 5).map((run) => (
                 <li
                   key={run.at}

@@ -133,6 +133,7 @@ export const ingestPolicy = {
   /** Retries for a throttled or failed raw fetch, before the skill is treated as failed. */
   rawMaxRetries: 4,
   rawBackoffBaseMs: 1_000,
+
 } as const;
 
 export type PromotionDecision =

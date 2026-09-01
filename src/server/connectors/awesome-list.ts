@@ -1,4 +1,5 @@
 import "server-only";
+import { fetchWithDeadline } from "@/server/http/deadline";
 
 /**
  * Awesome-list expansion (Doc 2 R1.1b, Doc 4 §4 step 2).
@@ -220,13 +221,13 @@ export async function fetchList(input: {
 }): Promise<ParsedList> {
   const { owner, repo } = input;
 
-  const meta = await fetch(`${API}/repos/${owner}/${repo}`, { headers: headers() });
+  const meta = await fetchWithDeadline(`${API}/repos/${owner}/${repo}`, { headers: headers() });
   if (!meta.ok) {
     throw new Error(`Could not read ${owner}/${repo}: GitHub returned ${meta.status}`);
   }
   const { default_branch: branch } = (await meta.json()) as { default_branch: string };
 
-  const head = await fetch(`${API}/repos/${owner}/${repo}/commits/${branch}`, {
+  const head = await fetchWithDeadline(`${API}/repos/${owner}/${repo}/commits/${branch}`, {
     headers: headers(),
   });
   if (!head.ok) throw new Error(`Could not resolve ${owner}/${repo}@${branch}`);
@@ -236,7 +237,7 @@ export async function fetchList(input: {
   if (input.files?.length) {
     targets = [...input.files];
   } else {
-    const tree = await fetch(
+    const tree = await fetchWithDeadline(
       `${API}/repos/${owner}/${repo}/git/trees/${commitSha}`,
       { headers: headers() },
     );
@@ -258,7 +259,7 @@ export async function fetchList(input: {
 
   for (const path of targets) {
     // Pinned to the commit, like every other fetch, so a list read is reproducible.
-    const response = await fetch(`${RAW}/${owner}/${repo}/${commitSha}/${path}`);
+    const response = await fetchWithDeadline(`${RAW}/${owner}/${repo}/${commitSha}/${path}`);
     if (!response.ok) continue;
     const markdown = await response.text();
 

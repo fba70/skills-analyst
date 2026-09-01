@@ -1,4 +1,5 @@
 import "server-only";
+import { fetchWithDeadline } from "@/server/http/deadline";
 
 import { otpHtml, otpSubject } from "./templates";
 import type { MailTransport, OtpEmail } from "./types";
@@ -105,7 +106,7 @@ export function createNylasTransport(config: NylasConfig): MailTransport {
        * retry. Trading a real silent-non-delivery path for a speculative duplicate is the
        * wrong way round, and a duplicate code is a far better failure than no code.
        */
-      const response = await fetch(endpoint, {
+      const response = await fetchWithDeadline(endpoint, {
         method: "POST",
         headers: {
           authorization: `Bearer ${config.apiKey}`,

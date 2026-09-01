@@ -31,8 +31,18 @@ export default async function ProtectedLayout({ children }: LayoutProps<"/">) {
         isAdmin={admin}
       />
       <SidebarInset className="min-w-0">
-        {/* Breadcrumbs land here once there is more than one page to point at. */}
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-3 sm:px-4">
+        {/*
+          Mobile only, and that is the whole reason it still exists.
+ 
+          The stripe used to run on every page to hold one button, which now lives in the
+          sidebar footer beside the theme switch. On desktop the sidebar collapses to an
+          icon rail, so the control inside it stays reachable and the band is pure cost.
+ 
+          On mobile the sidebar is a Sheet: closed, it is gone, and a trigger inside it
+          could never be pressed. So the header survives below `md` — sticky, because a
+          navigation control you have to scroll back up to find is one people stop using.
+        */}
+        <header className="bg-background sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b px-3 md:hidden">
           <SidebarTrigger className="-ml-1" />
         </header>
         <div className="flex min-w-0 flex-1 flex-col gap-4 p-4 sm:p-6">{children}</div>

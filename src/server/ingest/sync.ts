@@ -94,9 +94,43 @@ export type SyncedSkill = {
   contentStored: boolean;
   fileCount: number;
   byteSize: number;
-  outcome: "created" | "unchanged" | "dry-run";
+  outcome: "created" | "unchanged" | "relicensed" | "dry-run";
   parseError: string | null;
 };
+
+/**
+ * A source deliberately withheld, not a source that broke.
+ *
+ * Thrown so a direct `pnpm sync <url>` still fails loudly — an operator who asked for one
+ * repository must not be told "done" when nothing was fetched. But the *pipeline* has to
+ * tell this apart from a real fault: the marker gate firing is policy working, and counting
+ * it as a failure trains everyone to ignore the failure count, which is where a genuine
+ * error then hides.
+ *
+ * A typed error rather than a parsed message, for the reason `holdForReview` already writes
+ * structured `healthDetail`: reading a decision back out of prose is how a caller quietly
+ * starts skipping the cases it cannot parse.
+ */
+export class SourceHeldForReviewError extends Error {
+  readonly url: string;
+  readonly markerCount: number;
+  readonly threshold: number;
+
+  constructor(url: string, markerCount: number, threshold: number) {
+    super(
+      `${url} holds ${markerCount} skills, over the ${threshold} threshold — held for ` +
+        // The remedy has to be something the reader can actually type. `allowLargeRepo` is
+        // a config key, not a flag: it is set by an admin submission or by approving the
+        // source in Settings → Review, and naming the key sent operators looking for a
+        // command line that does not exist.
+        `review, source disabled. Sync it anyway with: pnpm submit ${url}`,
+    );
+    this.name = "SourceHeldForReviewError";
+    this.url = url;
+    this.markerCount = markerCount;
+    this.threshold = threshold;
+  }
+}
 
 export type SyncReport = {
   sourceUrl: string;
@@ -105,6 +139,13 @@ export type SyncReport = {
   signals: Record<string, number>;
   created: number;
   unchanged: number;
+  /**
+   * Same bytes, new licence answer — a correction rather than a new version.
+   *
+   * Counted separately because it means something different to an operator: the corpus did
+   * not grow, but skills that were indexed-and-unservable may now be downloadable.
+   */
+  relicensed: number;
   /** Skills withdrawn because they are gone upstream (R1.5). */
   tombstoned: number;
   /** Skills not fetched because an upheld takedown blocks them (R7.5). */
@@ -233,6 +274,7 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
       signals: {},
       created: 0,
       unchanged: 0,
+      relicensed: 0,
       tombstoned: 0,
       blocked: 0,
       failedSkills: [],
@@ -264,11 +306,17 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
     !options.dryRun &&
     enumerated.refs.length > discoveryPolicy.markerCountReviewThreshold
   ) {
-    await holdForReview(options.sourceUrl, enumerated.refs.length, orgId);
-    throw new Error(
-      `${options.sourceUrl} holds ${enumerated.refs.length} skills, over the ` +
-        `${discoveryPolicy.markerCountReviewThreshold} threshold — held for review, ` +
-        `source disabled. Re-run with allowLargeRepo to sync it anyway.`,
+    await holdForReview(
+      options.sourceUrl,
+      enumerated.refs.length,
+      orgId,
+      "marker-threshold",
+      discoveryPolicy.markerCountReviewThreshold,
+    );
+    throw new SourceHeldForReviewError(
+      options.sourceUrl,
+      enumerated.refs.length,
+      discoveryPolicy.markerCountReviewThreshold,
     );
   }
 
@@ -285,7 +333,13 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
    * and can be synced deliberately with `pnpm sync <url>`, which has no ceiling.
    */
   if (options.maxSkills && enumerated.refs.length > options.maxSkills) {
-    await holdForReview(options.sourceUrl, enumerated.refs.length, orgId);
+    await holdForReview(
+      options.sourceUrl,
+      enumerated.refs.length,
+      orgId,
+      "pass-ceiling",
+      options.maxSkills,
+    );
     return {
       sourceUrl: options.sourceUrl,
       commitSha: enumerated.refs[0]?.commitSha ?? null,
@@ -295,6 +349,7 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
       ) as Record<string, number>,
       created: 0,
       unchanged: 0,
+      relicensed: 0,
       tombstoned: 0,
       blocked: 0,
       failedSkills: [],
@@ -323,6 +378,7 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
     ) as Record<string, number>,
     created: 0,
     unchanged: 0,
+    relicensed: 0,
     tombstoned: 0,
     blocked: 0,
     failedSkills: [],
@@ -442,6 +498,7 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
       });
       entry.outcome = outcome;
       if (outcome === "created") report.created += 1;
+      else if (outcome === "relicensed") report.relicensed += 1;
       else report.unchanged += 1;
     }
 
@@ -497,27 +554,48 @@ async function uniqueSlug(
 }
 
 /** Disables a source and returns its candidate row to the review queue, with the reason. */
+/**
+ * Which gate stopped this source. They are different decisions and must not share a record.
+ *
+ *   - `marker-threshold` — the repository is large enough that a curator should look before
+ *     we ingest it. A judgement about the *repository*, and it stands until someone decides.
+ *   - `pass-ceiling` — this caller could not finish it inside its own budget. A statement
+ *     about the *caller*, not the repo: a local `pnpm sync <url>` has no ceiling and will
+ *     complete the same source without complaint.
+ *
+ * Recorded because the reason used to be a lie. Both gates called `holdForReview`, which
+ * stamped the marker threshold into the sentence whatever had actually fired — so a
+ * 384-skill repository stopped by a 120-skill pass ceiling was filed as
+ * "384 skills in one repository — over the 500 threshold", which is arithmetically false and
+ * sends whoever reads it looking for the wrong knob.
+ */
+export type HoldKind = "marker-threshold" | "pass-ceiling";
+
 async function holdForReview(
   url: string,
   markerCount: number,
   orgId: string | null,
+  kind: HoldKind,
+  threshold: number,
 ): Promise<void> {
-  const reason = `${markerCount} skills in one repository — over the ${discoveryPolicy.markerCountReviewThreshold} threshold`;
+  const reason =
+    kind === "marker-threshold"
+      ? `${markerCount} skills in one repository — over the ${threshold} review threshold`
+      : `${markerCount} skills — more than the ${threshold} this pass may fetch; ` +
+        `sync it directly with pnpm sync ${url}, which has no ceiling`;
 
   await db.transaction(async (tx) => {
     await tx
       .update(sources)
       // Structured, not just a sentence: `reapplyMarkerThreshold` has to re-judge this
       // decision after the threshold moves, and parsing a number back out of prose is how
-      // a re-evaluation quietly starts skipping rows it cannot read.
+      // a re-evaluation quietly starts skipping rows it cannot read. `heldBy` is part of
+      // that contract now — the sweep releases a pass-ceiling hold unconditionally, because
+      // nobody decided anything about the repository.
       .set({
         enabled: false,
         health: "paused",
-        healthDetail: {
-          reason,
-          markerCount,
-          threshold: discoveryPolicy.markerCountReviewThreshold,
-        },
+        healthDetail: { reason, markerCount, threshold, heldBy: kind },
         updatedAt: new Date(),
       })
       .where(eq(sources.url, url));
@@ -535,7 +613,7 @@ async function holdForReview(
       subjectType: "sources",
       subjectId: null,
       reason,
-      payload: { url, markerCount, threshold: discoveryPolicy.markerCountReviewThreshold },
+      payload: { url, markerCount, threshold, heldBy: kind },
     });
   });
 }
@@ -677,7 +755,9 @@ type WriteInput = {
   signals: Record<string, number | undefined>;
 };
 
-async function writeSkillVersion(input: WriteInput): Promise<"created" | "unchanged"> {
+async function writeSkillVersion(
+  input: WriteInput,
+): Promise<"created" | "unchanged" | "relicensed"> {
   const { orgId, sourceId, ref, normalized, license, stored } = input;
 
   return db.transaction(async (tx) => {
@@ -687,7 +767,16 @@ async function writeSkillVersion(input: WriteInput): Promise<"created" | "unchan
 
     // Dedup (R1.4): identical bytes from any source collapse to the existing version.
     const [duplicate] = await tx
-      .select({ id: skillVersions.id, skillId: skillVersions.skillId })
+      .select({
+        id: skillVersions.id,
+        skillId: skillVersions.skillId,
+        sourceId: skillVersions.sourceId,
+        path: sql<string | null>`${skillVersions.provenance}->>'path'`,
+        redistribution: skillVersions.redistribution,
+        licenseSource: skillVersions.licenseSource,
+        contentStored: skillVersions.contentStored,
+        status: skillVersions.status,
+      })
       .from(skillVersions)
       .where(eq(skillVersions.contentHash, stored.contentHash))
       .limit(1);
@@ -697,6 +786,68 @@ async function writeSkillVersion(input: WriteInput): Promise<"created" | "unchan
         .update(skills)
         .set({ lastSeenAt: new Date() })
         .where(eq(skills.id, duplicate.skillId));
+
+      /**
+       * Unchanged bytes did not mean unchanged licence, and that used to be silently lost.
+       *
+       * This branch returned early, so a re-sync discarded the licence the chain had just
+       * resolved. It only mattered once the chain got better: adding Creative Commons body
+       * patterns re-classified a 166-skill repository from `unresolved` to
+       * `attribution_required`, `storeBundle` above dutifully uploaded the bytes — and the
+       * row kept saying unresolved, so nothing became downloadable. A resolver improvement
+       * that cannot reach already-synced rows is a resolver improvement nobody sees.
+       *
+       * **Only for the same (source, path).** The dedup lookup matches on content hash
+       * across every source, so the row found here may belong to a *different* repository
+       * that happens to ship identical bytes. That repository's copy is governed by its own
+       * licence chain, and overwriting its posture from ours would be exactly the
+       * cross-source contamination R1.6 exists to prevent.
+       *
+       * Withdrawn and tombstoned rows are left alone: restoring a licence on content a
+       * takedown removed would undo the takedown on a schedule, which is the failure R7.5
+       * is built around.
+       */
+      const sameSkill = duplicate.sourceId === sourceId && duplicate.path === ref.path;
+      const servable = duplicate.status === "indexed" || duplicate.status === "quarantined";
+      const licenceMoved =
+        duplicate.redistribution !== license.posture ||
+        duplicate.licenseSource !== license.source ||
+        duplicate.contentStored !== stored.contentStored;
+
+      if (sameSkill && servable && licenceMoved) {
+        await tx
+          .update(skillVersions)
+          .set({
+            licenseSpdx: license.spdx,
+            redistribution: license.posture,
+            licenseSource: license.source,
+            licenseEvidence: license.evidence,
+            contentStored: stored.contentStored,
+            storageKey: stored.storageKey,
+          })
+          .where(eq(skillVersions.id, duplicate.id));
+
+        // A posture change decides whether content is served, so it is a state transition
+        // R7.1 wants recorded — not a quiet correction.
+        await tx.insert(events).values({
+          orgId,
+          actorType: "system",
+          kind: "licence.reresolved",
+          subjectType: "skill_version",
+          subjectId: duplicate.id,
+          reason: `${duplicate.redistribution} → ${license.posture} (${license.source})`,
+          payload: {
+            path: ref.path,
+            spdx: license.spdx,
+            from: duplicate.redistribution,
+            to: license.posture,
+            contentStored: stored.contentStored,
+          },
+        });
+
+        return "relicensed" as const;
+      }
+
       return "unchanged" as const;
     }
 
