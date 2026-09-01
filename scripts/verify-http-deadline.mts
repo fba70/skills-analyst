@@ -64,6 +64,39 @@ const ok = await fetchWithDeadline("https://api.github.com/rate_limit", {
 });
 check("a responsive host is unaffected", ok.status === 200 || ok.status === 401, `status ${ok.status}`);
 
+/**
+ * The aws4fetch path, which is the one that actually hung.
+ *
+ * `AwsClient.fetch` signs into a fresh `Request` before calling global `fetch`, so the
+ * signal has to survive that. Asserted rather than assumed: this is a dependency's
+ * behaviour, and if an upgrade drops it the symptom is a pipeline that waits for ever
+ * rather than an error anyone would notice.
+ */
+{
+  const { AwsClient } = await import("aws4fetch");
+  const client = new AwsClient({
+    accessKeyId: "test",
+    secretAccessKey: "test",
+    region: "auto",
+    service: "s3",
+  });
+  const began = Date.now();
+  try {
+    await client.fetch(`http://127.0.0.1:${port}/r2-hangs`, {
+      signal: AbortSignal.timeout(1_000),
+    });
+    check("an abort signal survives aws4fetch signing", false, "returned instead of aborting");
+  } catch (error) {
+    const elapsed = Date.now() - began;
+    const name = error instanceof Error ? error.name : String(error);
+    check(
+      "an abort signal survives aws4fetch signing",
+      elapsed < 3_000 && (name === "TimeoutError" || name === "AbortError"),
+      `${name} after ${elapsed}ms`,
+    );
+  }
+}
+
 black.close();
 console.info(failures === 0 ? "\nDeadline verified.\n" : `\n${failures} failed\n`);
 process.exit(failures === 0 ? 0 : 1);

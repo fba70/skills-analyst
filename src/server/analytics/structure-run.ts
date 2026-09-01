@@ -1,4 +1,6 @@
 import "server-only";
+import { ingestPolicy } from "@/server/crawl/policy";
+import { mapWithConcurrency } from "@/server/lib/concurrency";
 
 import { and, eq, inArray, notExists, sql } from "drizzle-orm";
 
@@ -93,7 +95,15 @@ export async function extractStructures(
   };
   const unresolved = new Set<string>();
 
-  for (const row of rows) {
+  /**
+   * Concurrent, because the cost here is the bundle read, not the parsing.
+   *
+   * Each row writes only its own `skill_structures` row, keyed by
+   * `(skill_version_id, extractor_version)`, so nothing is shared between lanes. `report`
+   * and `unresolved` are mutated from several lanes, which is safe on a single-threaded
+   * event loop: every increment happens between awaits, never across one.
+   */
+  await mapWithConcurrency(rows, ingestPolicy.bundleConcurrency, async (row) => {
     try {
       const provenance = row.provenance as VersionProvenance;
       const { files } = await loadBundle({
@@ -106,7 +116,8 @@ export async function extractStructures(
       const marker = files.find((f) => /^(SKILL|AGENTS)\.md$/i.test(f.path)) ?? files[0];
       if (!marker) {
         report.failed += 1;
-        continue;
+        // `return`, not `continue`: this is a worker callback now, not a loop body.
+        return;
       }
 
       const { frontmatter, body } = splitFrontmatter(marker.content.toString("utf8"));
@@ -192,10 +203,11 @@ export async function extractStructures(
       report.extracted += 1;
       if (report.extracted % 100 === 0) log(`fingerprinted ${report.extracted}`);
     } catch {
-      // Counted, not thrown: one unreadable bundle must not end the slice.
+      // Counted, not thrown: one unreadable bundle must not end the slice — and caught
+      // inside the worker so a single failure cannot reject the whole batch.
       report.failed += 1;
     }
-  }
+  });
 
   report.unresolvedHeadings = [...unresolved].sort();
 

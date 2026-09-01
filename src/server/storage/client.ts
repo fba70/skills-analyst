@@ -2,6 +2,8 @@ import "server-only";
 
 import { AwsClient } from "aws4fetch";
 
+import { REQUEST_TIMEOUT_MS } from "@/server/http/deadline";
+
 /**
  * R2 over the S3 API.
  *
@@ -66,6 +68,41 @@ export function r2Client(): AwsClient {
     });
   }
   return globalForR2.r2Client;
+}
+
+/**
+ * Every R2 request, with a deadline.
+ *
+ * ## Why this exists separately from `fetchWithDeadline`
+ *
+ * `aws4fetch` exposes `fetch` as a **method** — `r2Client().fetch(url, init)` — so it is
+ * invisible to a search for bare `fetch(` calls. That is not a hypothetical gap: two
+ * ingestion runs hung on an R2 socket, and the first fix guarded every GitHub call while
+ * leaving these four untouched, because the grep that found the others could not see them.
+ * The stalled peer both times was `141.101.90.96/.97`, which is exactly what this bucket's
+ * endpoint resolves to.
+ *
+ * ## The signal has to survive signing
+ *
+ * `AwsClient.fetch` calls `sign()`, which builds a new `Request`, and only then hands it to
+ * global `fetch`. Whether an `AbortSignal` passed in `init` survives that round trip is a
+ * property of a dependency, not something to assume — `verify:http-deadline` asserts it
+ * against a server that never answers, so an upgrade that breaks the propagation turns a
+ * check red instead of turning the pipeline into a process that waits for ever.
+ */
+export async function r2Fetch(url: string, init: RequestInit = {}): Promise<Response> {
+  try {
+    return await r2Client().fetch(url, {
+      ...init,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const aborted =
+      error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+    if (!aborted) throw error;
+    // Named, like the HTTP helper: "aborted" alone reads as our bug rather than a dead peer.
+    throw new Error(`R2 timed out after ${REQUEST_TIMEOUT_MS}ms: ${url}`, { cause: error });
+  }
 }
 
 export function objectUrl(key: string): string {

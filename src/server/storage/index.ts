@@ -1,6 +1,6 @@
 import "server-only";
 
-import { objectUrl, r2Client } from "./client";
+import { objectUrl, r2Fetch } from "./client";
 import {
   bundlePrefix,
   digestBundle,
@@ -78,7 +78,7 @@ export type BundleManifest = {
 };
 
 async function put(key: string, body: Buffer, contentType: string): Promise<void> {
-  const response = await r2Client().fetch(objectUrl(key), {
+  const response = await r2Fetch(objectUrl(key), {
     method: "PUT",
     body: new Uint8Array(body),
     headers: {
@@ -148,7 +148,7 @@ export async function getBundleFile(
   path: string,
 ): Promise<Buffer | null> {
   const key = objectKey(tier, contentHash, path);
-  const response = await r2Client().fetch(objectUrl(key));
+  const response = await r2Fetch(objectUrl(key));
   if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`R2 GET ${key} failed: ${response.status}`);
@@ -160,7 +160,7 @@ export async function getManifest(
   tier: StorageTier,
   contentHash: string,
 ): Promise<BundleManifest | null> {
-  const response = await r2Client().fetch(objectUrl(manifestKey(tier, contentHash)));
+  const response = await r2Fetch(objectUrl(manifestKey(tier, contentHash)));
   if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`R2 GET manifest ${contentHash} failed: ${response.status}`);
@@ -208,7 +208,7 @@ export async function deleteBundle(
     ...paths.map((path) => objectKey(tier, contentHash, path)),
     manifestKey(tier, contentHash),
   ]) {
-    const response = await r2Client().fetch(objectUrl(key), { method: "DELETE" });
+    const response = await r2Fetch(objectUrl(key), { method: "DELETE" });
     if (response.ok || response.status === 404) deleted += 1;
   }
   return deleted;
