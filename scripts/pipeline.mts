@@ -23,6 +23,29 @@ const num = (flag: string, fallback?: number) => {
   return Number.isFinite(v) ? v : fallback;
 };
 
+/**
+ * `pnpm pipeline --status` — "is it stuck?", answered in one line.
+ *
+ * The question that cost hours three times over, now cheap enough to ask casually.
+ */
+if (args.includes("--status")) {
+  const { readHeartbeat } = await import("../src/server/pipeline/heartbeat");
+  const hb = await readHeartbeat();
+  if (!hb) {
+    console.info("\nNo pipeline is running (no heartbeat).\n");
+  } else {
+    const pass = hb.passStartedAt
+      ? `${Math.round((Date.now() - hb.passStartedAt.getTime()) / 60000)}m into this pass`
+      : "pass start unknown";
+    console.info(
+      `\n${hb.stale ? "STALLED?" : "running "}  ${hb.stage ?? "?"}  ${hb.detail ?? ""}\n` +
+        `  last progress   ${hb.secondsSinceBeat}s ago${hb.stale ? "  ← nothing for over 2 minutes" : ""}\n` +
+        `  ${pass} · pid ${hb.pid ?? "?"}\n`,
+    );
+  }
+  process.exit(hb?.stale ? 1 : 0);
+}
+
 const passes = num("loop", 1) ?? 1;
 const skipSync = args.includes("--skip-sync");
 

@@ -1,4 +1,6 @@
 import "server-only";
+import { ingestPolicy } from "@/server/crawl/policy";
+import { mapWithConcurrency } from "@/server/lib/concurrency";
 
 import { objectUrl, r2Fetch } from "./client";
 import {
@@ -121,10 +123,23 @@ export async function storeBundle(input: StoreBundleInput): Promise<StoreBundleR
     storedAt: new Date().toISOString(),
   };
 
-  for (const file of input.files) {
+  /**
+   * Files in parallel; the manifest still strictly last.
+   *
+   * Sequential uploads made a multi-file bundle cost one round trip per file to an EU
+   * bucket, and a sync writes one bundle per skill — so on a 2,000-skill repository this
+   * was the dominant cost, paid one file at a time.
+   *
+   * The ordering guarantee below is unaffected and is the reason this is not simply
+   * `Promise.all` over everything: the manifest's presence marks the bundle complete, so it
+   * must not be written until every file it describes is. Parallelism *within* the files is
+   * free; parallelism *across* that boundary would let a crash leave a manifest describing
+   * objects that were never uploaded.
+   */
+  await mapWithConcurrency(input.files, ingestPolicy.bundleConcurrency, async (file) => {
     const path = normalizeBundlePath(file.path);
     await put(objectKey(input.tier, digest.contentHash, path), file.content, guessType(path));
-  }
+  });
 
   // Manifest last: its presence is the marker that the bundle is complete, so a crash
   // mid-upload leaves an obviously partial bundle rather than a silently truncated one.

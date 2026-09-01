@@ -20,6 +20,7 @@ import {
 import { EXTRACTOR_VERSION } from "@/server/analytics/structure";
 import { extractStructures } from "@/server/analytics/structure-run";
 import { pendingSources, SourceHeldForReviewError, syncSource } from "@/server/ingest/sync";
+import { beat, clearHeartbeat, startPass } from "@/server/pipeline/heartbeat";
 import { validatePending } from "@/server/validation/run";
 
 /**
@@ -121,9 +122,13 @@ async function stage(
   run: () => Promise<string>,
 ): Promise<void> {
   log(`▸ ${name}`);
+  // A stage beat on entry, so even a stage that produces no per-item progress (an
+  // enumeration, a clustering sweep) still moves the clock and cannot look stalled.
+  await beat(name, `${name} started`, undefined, { force: true });
   try {
     const detail = await run();
     report.stages.push({ stage: name, ok: true, detail });
+    await beat(name, detail, undefined, { force: true });
     log(`  ${detail}`);
   } catch (error) {
     const detail = (error as Error).message.slice(0, 300);
@@ -138,6 +143,7 @@ export async function runPipeline(options: PipelineOptions = {}): Promise<Pipeli
   const log = options.onProgress ?? (() => {});
   const report: PipelineReport = { stages: [], ok: true };
   const startedAt = Date.now();
+  startPass();
 
   if (!options.skipSync) {
     await stage("sync", report, log, async () => {
@@ -297,6 +303,10 @@ export async function runPipeline(options: PipelineOptions = {}): Promise<Pipeli
       trigger: options.trigger ?? "manual",
     },
   });
+
+  // Cleared on a clean finish: an old heartbeat left behind would read as a stalled run
+  // rather than as no run, and "there is nothing running" has to be sayable.
+  await clearHeartbeat();
 
   return report;
 }

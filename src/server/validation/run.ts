@@ -1,6 +1,6 @@
 import "server-only";
 import { ingestPolicy } from "@/server/crawl/policy";
-import { mapWithConcurrency } from "@/server/lib/concurrency";
+import { mapSettled } from "@/server/lib/concurrency";
 
 import { SEVERITY_WEIGHTS, substanceFactor } from "@/lib/quality";
 
@@ -182,7 +182,15 @@ export async function validatePending(
    * has none, by construction: the selector takes versions awaiting a verdict, and a second
    * version of a skill is only created once the first has been judged.
    */
-  const outcomes = await mapWithConcurrency(
+  /**
+   * `mapSettled`, so one unreadable bundle costs one verdict rather than the batch.
+   *
+   * This previously used the fail-fast helper with no per-item catch: a single throw — a
+   * missing object, a storage blip — discarded up to 500 verdicts that had already been
+   * computed, and the pass reported the whole stage as failed. Latent while the loop was
+   * sequential; live the moment it was not.
+   */
+  const { results, failures } = await mapSettled(
     rows,
     ingestPolicy.bundleConcurrency,
     async (row) => {
@@ -191,7 +199,12 @@ export async function validatePending(
     },
   );
 
-  return outcomes;
+  for (const failure of failures) {
+    const reason = failure.error instanceof Error ? failure.error.message : String(failure.error);
+    log(`  failed    ${failure.item.slug} — ${reason.slice(0, 120)}`);
+  }
+
+  return results;
 }
 
 type VersionRow = {

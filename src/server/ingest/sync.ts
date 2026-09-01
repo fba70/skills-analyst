@@ -5,7 +5,9 @@ import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { activeBlocks } from "@/server/compliance/takedown";
 import { githubConnector } from "@/server/connectors/github";
 import type { Connector, SourceConfig } from "@/server/connectors/types";
-import { discoveryPolicy } from "@/server/crawl/policy";
+import { discoveryPolicy, ingestPolicy } from "@/server/crawl/policy";
+import { mapWithConcurrency } from "@/server/lib/concurrency";
+import { beat } from "@/server/pipeline/heartbeat";
 import { db } from "@/server/db";
 import {
   discoveredRepos,
@@ -388,7 +390,27 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
     ? null
     : await upsertSource(options.sourceUrl, orgId, enumerated.repoLicenseSpdx);
 
-  for (const ref of refs) {
+  /**
+   * Skills in parallel, at the same width as every other bundle-shaped stage.
+   *
+   * Per skill the work is: fetch its files (already concurrent *within* a skill), upload
+   * them to R2, then one short transaction. All of that is network-bound, and doing it one
+   * skill at a time made a 6,864-skill repository take an hour and three quarters.
+   *
+   * Two things make this safe rather than merely faster. Each skill owns its own bundle and
+   * its own transaction, so lanes share no state — `report` counters are mutated between
+   * awaits on a single-threaded loop, never across one. And the one genuine race, two
+   * skills with byte-identical content inserting at once, is handled in `writeSkillVersion`
+   * where the constraint lives; see the note there.
+   *
+   * `seenPaths` for tombstoning is built from the **enumeration**, not from this loop, so a
+   * skill that fails here is still "seen" and is never mistaken for one deleted upstream —
+   * unchanged by concurrency, and worth restating because it is the property that would be
+   * most expensive to break.
+   */
+  const sourceName = options.sourceUrl.replace(/^https?:\/\/github\.com\//, "");
+
+  await mapWithConcurrency(refs, ingestPolicy.bundleConcurrency, async (ref) => {
     /**
      * One skill failing must not cost the rest of the repository.
      *
@@ -417,7 +439,7 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
     if (blocks.paths.has(ref.path)) {
       report.blocked += 1;
       log(`  withdrawn ${ref.path || "."} — takedown upheld`);
-      continue;
+      return; // a worker callback now, not a loop body
     }
 
     let fetched: Awaited<ReturnType<typeof connector.fetch>>;
@@ -429,7 +451,7 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
         reason: (error as Error).message.slice(0, 200),
       });
       log(`  skipped   ${ref.path || "."} — ${(error as Error).message.slice(0, 120)}`);
-      continue;
+      return;
     }
 
     const dirName = ref.path.split("/").pop() || "root";
@@ -486,25 +508,58 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
     };
 
     if (!options.dryRun && sourceId) {
-      const outcome = await writeSkillVersion({
-        orgId,
-        sourceId,
-        ref,
-        normalized,
-        license,
-        stored,
-        sourceUrl: options.sourceUrl,
-        signals: enumerated.signals,
-      });
-      entry.outcome = outcome;
-      if (outcome === "created") report.created += 1;
-      else if (outcome === "relicensed") report.relicensed += 1;
-      else report.unchanged += 1;
+      /**
+       * The write is inside the per-skill failure handling, and it was not before.
+       *
+       * The `try` above covered only the fetch, so a database error here escaped the worker
+       * and cost the **entire repository** — 6,864 skills lost to one row. Sequentially that
+       * was latent; concurrency made it fire, because two identical bundles racing the
+       * `content_hash` unique index is a routine event in a mirror repo.
+       *
+       * Same rule as everywhere else in this loop: one bad skill is reported and skipped,
+       * never charged to the other 6,863.
+       */
+      try {
+        const outcome = await writeSkillVersion({
+          orgId,
+          sourceId,
+          ref,
+          normalized,
+          license,
+          stored,
+          sourceUrl: options.sourceUrl,
+          signals: enumerated.signals,
+        });
+        entry.outcome = outcome;
+        if (outcome === "created") report.created += 1;
+        else if (outcome === "relicensed") report.relicensed += 1;
+        else report.unchanged += 1;
+      } catch (error) {
+        report.failedSkills.push({
+          path: ref.path || "(root)",
+          reason: (error as Error).message.slice(0, 200),
+        });
+        log(`  failed    ${ref.path || "."} — ${(error as Error).message.slice(0, 120)}`);
+        return;
+      }
     }
 
     report.skills.push(entry);
     log(`  ${entry.outcome.padEnd(9)} ${ref.path || "."} — ${entry.redistribution}`);
-  }
+
+    /**
+     * The beat that closes the diagnostic gap.
+     *
+     * This is the loop that goes quiet for hours on a large repository, and it is exactly
+     * where all three stalls happened. Throttled inside `beat` to once every fifteen
+     * seconds, so calling it per skill costs nothing at 2.6 skills a second.
+     */
+    await beat(
+      "sync",
+      `${sourceName} — ${report.skills.length}/${refs.length} skills`,
+      { done: report.skills.length, total: refs.length },
+    );
+  });
 
   // Withdraw anything this source used to have and no longer does (R1.5). Guarded on a
   // complete enumeration — see `tombstoneMissing`.
@@ -755,7 +810,43 @@ type WriteInput = {
   signals: Record<string, number | undefined>;
 };
 
+/**
+ * Postgres unique-violation.
+ *
+ * The one race concurrency introduces: two skills with byte-identical content can both pass
+ * the duplicate lookup and both insert, and the partial unique index on `content_hash`
+ * refuses the second. That is not an error — it is the dedup rule working, arrived at from
+ * the other direction — so it is caught and reported as `unchanged`.
+ *
+ * A repository full of copies is exactly where this fires, and exactly where the corpus most
+ * needs the sync to keep going: one such source held 6,864 skills, every one already known.
+ */
+function isUniqueViolation(error: unknown): boolean {
+  // Walk the cause chain. Drizzle wraps every driver error in its own `Error` whose message
+  // is the failed SQL, so the Postgres `code` is never on the object you first catch —
+  // checking the top level silently matches nothing, which is exactly how the first version
+  // of this guard passed review and then caught none of the violations it was written for.
+  for (let e: unknown = error, hops = 0; e && hops < 5; hops += 1) {
+    if (typeof e === "object" && e !== null) {
+      if ((e as { code?: unknown }).code === "23505") return true;
+      e = (e as { cause?: unknown }).cause;
+    } else break;
+  }
+  return false;
+}
+
 async function writeSkillVersion(
+  input: WriteInput,
+): Promise<"created" | "unchanged" | "relicensed"> {
+  try {
+    return await writeSkillVersionOnce(input);
+  } catch (error) {
+    if (isUniqueViolation(error)) return "unchanged";
+    throw error;
+  }
+}
+
+async function writeSkillVersionOnce(
   input: WriteInput,
 ): Promise<"created" | "unchanged" | "relicensed"> {
   const { orgId, sourceId, ref, normalized, license, stored } = input;

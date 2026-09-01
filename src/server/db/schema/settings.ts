@@ -87,3 +87,45 @@ export const rateLimitBuckets = pgTable(
     index("rate_limit_buckets_window_idx").on(t.windowStart),
   ],
 );
+
+/**
+ * Where the pipeline is, right now (one row, updated in place).
+ *
+ * ## The gap this closes
+ *
+ * A pass writes its `events` row when it **finishes**. So a pass that never finishes writes
+ * nothing at all, and from outside "working on a 6,000-skill repository" and "hung on a dead
+ * socket" look identical: no new events, no new versions for a while, a process that is
+ * alive. That ambiguity cost hours on three separate occasions, each diagnosed by hand with
+ * `ps` and `lsof` — which is not a thing anyone should need to do to answer "is it stuck".
+ *
+ * A completion record cannot answer that question by construction. Only a *progress* record
+ * can, so this is written **during** a stage rather than after it.
+ *
+ * ## One row, updated in place — deliberately not events
+ *
+ * `events` is append-only and is the audit trail; a beat every fifteen seconds for a
+ * multi-hour run would add tens of thousands of rows that no audit would ever want, and bury
+ * the transitions that matter. This is ephemeral operational state: it has no history worth
+ * keeping, because the only interesting question is *how old is it*.
+ *
+ * The primary key is a constant, so the table cannot grow a second row however many
+ * processes write to it. Two pipelines running at once is itself a mistake, and a heartbeat
+ * that silently interleaved them would hide it — the last writer wins and the `pid` says who.
+ */
+export const pipelineHeartbeat = pgTable("pipeline_heartbeat", {
+  /** Always `singleton`. A one-row table by construction rather than by convention. */
+  id: text("id").primaryKey().default("singleton"),
+  /** `sync`, `validate`, … — which stage is running. */
+  stage: text("stage"),
+  /** A human sentence: "infometa/workbuddyskills — 436/2355 skills". */
+  detail: text("detail"),
+  itemsDone: integer("items_done"),
+  itemsTotal: integer("items_total"),
+  /** When the current pass began, so a slow pass is distinguishable from a stalled one. */
+  passStartedAt: timestamp("pass_started_at", { withTimezone: true }),
+  /** The beat itself. **This is the number that answers "is it stuck".** */
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  /** Which process, so two concurrent runs are visible rather than confusing. */
+  pid: integer("pid"),
+});
