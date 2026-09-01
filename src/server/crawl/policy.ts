@@ -130,6 +130,18 @@ export const ingestPolicy = {
    */
   fetchConcurrency: 4,
 
+  /**
+   * How many bundles the derived stages read back from object storage at once.
+   *
+   * Validation, structure extraction and signature building are IO-bound on R2, not on CPU:
+   * each spends its time waiting for an object, and each used to wait for one at a time.
+   *
+   * Six, because the database pool is capped at ten and each of these lanes holds a
+   * connection while it writes its result. Leaving four in reserve keeps the rest of a pass
+   * — the queries that decide what to do next — from queueing behind the batch.
+   */
+  bundleConcurrency: 6,
+
   /** Retries for a throttled or failed raw fetch, before the skill is treated as failed. */
   rawMaxRetries: 4,
   rawBackoffBaseMs: 1_000,

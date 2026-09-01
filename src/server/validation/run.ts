@@ -1,4 +1,6 @@
 import "server-only";
+import { ingestPolicy } from "@/server/crawl/policy";
+import { mapWithConcurrency } from "@/server/lib/concurrency";
 
 import { SEVERITY_WEIGHTS, substanceFactor } from "@/lib/quality";
 
@@ -169,12 +171,25 @@ export async function validatePending(
     ? await withExplicitOrgScope(options.orgId, (tx) => select(tx))
     : await select(db);
 
-  const outcomes: ValidationOutcome[] = [];
-
-  for (const row of rows) {
-    log(`validating ${row.slug}`);
-    outcomes.push(await validateOne(row, options.includeCostly ?? false));
-  }
+  /**
+   * Bundles are read from object storage, one network round trip each, and that read is
+   * where this stage spends its time — not in the analyzers, which are local and fast.
+   * Sequentially it was the largest single cost in a pipeline pass.
+   *
+   * Safe to run in parallel because each version's work is independent: its own bundle, its
+   * own verdict rows, its own transaction. The one shared write is `skills.currentVersionId`,
+   * which only two *pending versions of the same skill* could contend for — and the batch
+   * has none, by construction: the selector takes versions awaiting a verdict, and a second
+   * version of a skill is only created once the first has been judged.
+   */
+  const outcomes = await mapWithConcurrency(
+    rows,
+    ingestPolicy.bundleConcurrency,
+    async (row) => {
+      log(`validating ${row.slug}`);
+      return validateOne(row, options.includeCostly ?? false);
+    },
+  );
 
   return outcomes;
 }

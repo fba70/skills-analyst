@@ -1,4 +1,6 @@
 import "server-only";
+import { ingestPolicy } from "@/server/crawl/policy";
+import { mapWithConcurrency } from "@/server/lib/concurrency";
 
 import { and, eq, isNull, notInArray, sql } from "drizzle-orm";
 
@@ -121,7 +123,15 @@ export async function buildSignatures(options: { limit?: number; onProgress?: (m
     )
     .limit(options.limit ?? 500);
 
-  for (const version of targets) {
+  /**
+   * Concurrent for the same reason as the other two derived stages: the cost is the bundle
+   * read, and MinHash over one document is trivial beside it.
+   *
+   * Each lane writes only its own signature and band rows, both `onConflictDoNothing`, so a
+   * repeat is a no-op rather than a conflict. Nothing here reads another lane's output —
+   * clustering is a separate pass that runs after every signature exists.
+   */
+  await mapWithConcurrency(targets, ingestPolicy.bundleConcurrency, async (version) => {
     try {
       const { files } = await loadBundle({
         contentStored: version.contentStored,
@@ -133,7 +143,7 @@ export async function buildSignatures(options: { limit?: number; onProgress?: (m
       const marker = files.find((file) => /^(SKILL|AGENTS)\.md$/i.test(file.path)) ?? files[0];
       if (!marker) {
         report.skipped += 1;
-        continue;
+        return; // a worker callback now, not a loop body
       }
 
       const { body } = splitFrontmatter(marker.content.toString("utf8"));
@@ -144,7 +154,7 @@ export async function buildSignatures(options: { limit?: number; onProgress?: (m
         // Nothing to compare. Recorded as skipped rather than clustered with every other
         // empty document, which would be the worst possible false positive.
         report.skipped += 1;
-        continue;
+        return;
       }
 
       const signature = minhashSignature(shingleSet);
@@ -185,9 +195,10 @@ export async function buildSignatures(options: { limit?: number; onProgress?: (m
       report.processed += 1;
       if (report.processed % 100 === 0) log(`  ${report.processed} signatures`);
     } catch {
+      // Caught inside the worker: one unreadable bundle must not reject the batch.
       report.failed += 1;
     }
-  }
+  });
 
   return report;
 }

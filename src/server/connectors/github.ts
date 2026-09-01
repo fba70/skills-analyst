@@ -1,6 +1,7 @@
 import "server-only";
 
 import { fetchWithDeadline, LARGE_RESPONSE_TIMEOUT_MS } from "@/server/http/deadline";
+import { mapWithConcurrency } from "@/server/lib/concurrency";
 import { ingestPolicy } from "@/server/crawl/policy";
 import { detectSkills } from "@/server/skills/detect";
 
@@ -314,28 +315,6 @@ export const githubConnector: Connector = {
     return { ref, files, licenseFiles };
   },
 };
-
-/** Runs `worker` over `items`, at most `limit` at a time, preserving input order. */
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  worker: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-
-  async function run(): Promise<void> {
-    while (true) {
-      const index = next;
-      next += 1;
-      if (index >= items.length) return;
-      results[index] = await worker(items[index]);
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
-  return results;
-}
 
 /** GitHub reports "NOASSERTION" and "other" for things it cannot identify. */
 function normalizeSpdx(spdx: string | null): string | null {
