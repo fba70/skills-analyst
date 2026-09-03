@@ -1,13 +1,14 @@
 import "dotenv/config";
 
 import { DEFAULT_BATCH, MAX_BATCH, MODEL } from "../src/server/taxonomy/classify";
+import { MIN_SOURCES, MIN_STRUCTURES } from "../src/server/analytics/archetype";
 import {
-  ARCHETYPE_THRESHOLD,
   classifySample,
   resyncCategoryArrays,
   reviewQueue,
   sweepNotClassifiable,
   taxonomySummary,
+  versionComparison,
 } from "../src/server/taxonomy/run";
 import { REVIEW_FLOOR, labelFor } from "../src/server/taxonomy/vocabulary";
 
@@ -17,6 +18,8 @@ import { REVIEW_FLOOR, labelFor } from "../src/server/taxonomy/vocabulary";
  *   pnpm taxonomy --status
  *   pnpm taxonomy --sample 20                  # classify 20 skills, spread across the corpus
  *   pnpm taxonomy --sample 20 --strategy top-quality
+ *   pnpm taxonomy --sample 300 --relabel       # only skills labelled under an older version
+ *   pnpm taxonomy --compare                    # did the vocabulary change help? (free)
  *   pnpm taxonomy --sweep [--dry]              # clear rows nothing can decide (free)
  *   pnpm taxonomy --review                     # the low-confidence queue, page 1
  *   pnpm taxonomy --review 4                   # page 4 of it (20 per page)
@@ -39,7 +42,8 @@ const number = (flag: string) => {
 };
 
 async function status() {
-  const { counts, totals, readyForArchetype, remaining } = await taxonomySummary();
+  const { counts, totals, evidence, readyForArchetype, remaining } = await taxonomySummary();
+  const byCategory = new Map(evidence.map((e) => [e.category, e]));
 
   console.info("\nTaxonomy coverage");
   console.info(`  skills labelled   ${totals.skillsLabelled}`);
@@ -48,7 +52,8 @@ async function status() {
   console.info(`  curator-reviewed  ${totals.reviewed}`);
   console.info(`  not yet labelled  ${remaining}`);
   console.info(
-    `  archetype-ready   ${readyForArchetype} function categories at >= ${ARCHETYPE_THRESHOLD} confident skills`,
+    `  minable           ${readyForArchetype} function categories clear the evidence gate ` +
+      `(>= ${MIN_STRUCTURES} structures, >= ${MIN_SOURCES} sources)`,
   );
 
   for (const axis of ["function", "domain"] as const) {
@@ -56,10 +61,23 @@ async function status() {
     if (rows.length === 0) continue;
     console.info(`\n${axis.toUpperCase()} axis`);
     for (const row of rows) {
-      const ready = axis === "function" && row.confident >= ARCHETYPE_THRESHOLD ? " ✓" : "";
+      /**
+       * Structures, not skills, and shown rather than only summarised.
+       *
+       * The confident-skill count is what the classifier produced; the structure count is
+       * what the miner will read. Printing only the first and ticking on it announced
+       * `automate-browser` as ready at 54 skills while the miner refused it at 46
+       * structures. Both numbers are on the row now, so the gap is visible instead of
+       * being a contradiction between two commands.
+       */
+      const e = axis === "function" ? byCategory.get(row.value) : undefined;
+      const gated = e ? e.structures >= MIN_STRUCTURES && e.sources >= MIN_SOURCES : false;
+      const detail = e
+        ? ` · ${String(e.structures).padStart(3)} structures / ${String(e.sources).padStart(2)} sources${gated ? " ✓" : ""}`
+        : "";
       console.info(
         `  ${labelFor(axis, row.value).padEnd(28)} ${String(row.confident).padStart(4)} confident ` +
-          `(${String(row.total).padStart(4)} total, avg conf ${row.avgConfidence})${ready}`,
+          `(${String(row.total).padStart(4)} total, avg conf ${row.avgConfidence})${detail}`,
       );
     }
   }
@@ -127,6 +145,66 @@ if (args.includes("--review")) {
   process.exit(0);
 }
 
+if (args.includes("--compare")) {
+  /**
+   * Free. Reads stored assignments and compares each skill against itself.
+   *
+   * Paired on purpose — see `versionComparison`. Batch-to-batch comparison confounds the
+   * vocabulary change with a different sample, and when 1.2.0 landed it produced a 1.6-sigma
+   * "regression" that was really sample mix.
+   */
+  const c = await versionComparison();
+  if (!c.priorVersion) {
+    console.info(`\nNothing to compare — every assignment is at ${c.currentVersion}.\n`);
+    process.exit(0);
+  }
+
+  console.info(
+    `\n${c.priorVersion} → ${c.currentVersion}, ${c.pairedSkills} skill(s) carry both`,
+  );
+
+  if (!c.comparable && c.pairedSkills > 0) {
+    console.error(`\nNOT COMPARABLE\n\n  ${c.reason}\n`);
+    console.error(
+      `  Use unpaired aggregates instead — and prefer the label *distribution* over the\n` +
+        `  held rate, which is the part sample mix does not swamp. Giving this table real\n` +
+        `  history means adding classifier_version to skill_categories_uq.\n`,
+    );
+    process.exit(1);
+  }
+
+  if (c.pairedSkills === 0) {
+    console.info(
+      `\nNo skill carries labels under both versions yet. Run ` +
+        `pnpm taxonomy --sample N --relabel to build the paired set.\n`,
+    );
+    process.exit(0);
+  }
+
+  console.info("\naxis        assigns      avg conf         held");
+  for (const a of c.axes) {
+    console.info(
+      `  ${a.axis.padEnd(9)} ${String(a.priorAssignments).padStart(4)} → ${String(a.currentAssignments).padEnd(5)} ` +
+        `${String(a.priorAvgConfidence).padStart(3)} → ${String(a.currentAvgConfidence).padEnd(4)} ` +
+        `${String(a.priorHeldPct).padStart(5)}% → ${String(a.currentHeldPct).padStart(5)}%` +
+        `  (${a.priorHeld} → ${a.currentHeld})`,
+    );
+  }
+
+  if (c.moved.length > 0) {
+    console.info("\ncategories whose usage moved most:");
+    for (const m of c.moved) {
+      const delta = m.current - m.prior;
+      console.info(
+        `  ${m.axis.padEnd(9)} ${m.value.padEnd(24)} ${String(m.prior).padStart(4)} → ` +
+          `${String(m.current).padStart(4)}  ${delta > 0 ? "+" : ""}${delta}`,
+      );
+    }
+  }
+  console.info("");
+  process.exit(0);
+}
+
 if (args.includes("--sample")) {
   const limit = number("sample") ?? DEFAULT_BATCH;
   if (limit > MAX_BATCH) {
@@ -138,14 +216,22 @@ if (args.includes("--sample")) {
   }
 
   const strategy = value("strategy") as "diverse" | "recent" | "top-quality" | undefined;
+  /**
+   * `--relabel` narrows the population to skills already labelled under an older
+   * vocabulary version, so the batch is comparable to itself via `--compare`. Distinct
+   * from `--force`, which re-does skills labelled at the *current* version.
+   */
+  const onlyPriorVersion = args.includes("--relabel");
   console.info(
-    `\nClassifying ${limit} skill(s) with ${MODEL} · strategy ${strategy ?? "diverse"}`,
+    `\nClassifying ${limit} skill(s) with ${MODEL} · strategy ${strategy ?? "diverse"}` +
+      `${onlyPriorVersion ? " · only skills labelled under an older version" : ""}`,
   );
 
   const report = await classifySample({
     limit,
     strategy,
     force: args.includes("--force"),
+    onlyPriorVersion,
     onProgress: (m) => console.info(`  ${m}`),
   });
 

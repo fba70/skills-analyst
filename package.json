@@ -44,7 +44,8 @@
     "submit": "tsx --conditions=react-server scripts/submit-repo.mts",
     "verify:rate-limit": "tsx --conditions=react-server scripts/verify-rate-limit.mts",
     "registry": "tsx --conditions=react-server scripts/registry.mts",
-    "verify:http-deadline": "tsx --conditions=react-server scripts/verify-http-deadline.mts"
+    "verify:http-deadline": "tsx --conditions=react-server scripts/verify-http-deadline.mts",
+    "verify:dedup": "tsx --conditions=react-server scripts/verify-dedup.mts"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",

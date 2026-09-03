@@ -8,6 +8,7 @@ import { githubConnector, parseRepoUrl } from "@/server/connectors/github";
 import { db } from "@/server/db";
 import { discoveredRepos, events, sources } from "@/server/db/schema";
 
+import { sameRepoSegment, sameRepoUrl } from "./repo-identity";
 import { discoveryPolicy, isExcludedPath } from "./policy";
 
 /**
@@ -142,7 +143,7 @@ export async function submitRepository(
   const [existingSource] = await db
     .select({ id: sources.id, name: sources.name })
     .from(sources)
-    .where(and(eq(sources.url, url), isNull(sources.orgId)))
+    .where(and(sameRepoUrl(sources.url, url), isNull(sources.orgId)))
     .limit(1);
 
   const [existingRepo] = await db
@@ -151,8 +152,8 @@ export async function submitRepository(
     .where(
       and(
         eq(discoveredRepos.host, "github.com"),
-        eq(discoveredRepos.owner, owner),
-        eq(discoveredRepos.repo, repo),
+        sameRepoSegment(discoveredRepos.owner, owner),
+        sameRepoSegment(discoveredRepos.repo, repo),
       ),
     )
     .limit(1);

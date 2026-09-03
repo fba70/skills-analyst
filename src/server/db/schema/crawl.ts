@@ -119,7 +119,13 @@ export const discoveredRepos = pgTable(
     byteSize: bigint("byte_size", { mode: "number" }),
   },
   (t) => [
-    uniqueIndex("discovered_repos_uq").on(t.host, t.owner, t.repo),
+    /**
+     * Folded, because GitHub resolves `owner/repo` case-insensitively and this index did
+     * not — so code search returning `NVIDIA/skills` on one crawl day and `nvidia/skills`
+     * on another produced two candidates, which `promote()` then turned into two `sources`
+     * rows. This is the upstream half of that bug; `sources_public_url_uq` is the other.
+     */
+    uniqueIndex("discovered_repos_uq").on(t.host, sql`lower(${t.owner})`, sql`lower(${t.repo})`),
     index("discovered_repos_status_idx").on(t.status, t.stars),
     index("discovered_repos_fork_idx").on(t.isFork),
   ],

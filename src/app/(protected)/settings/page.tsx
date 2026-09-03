@@ -41,7 +41,8 @@ import {
 import { ADMIN_PAGE_SIZES } from "@/server/dal/paging";
 import { requireSession } from "@/server/dal/session";
 import { MAX_BATCH } from "@/server/taxonomy/classify";
-import { ARCHETYPE_THRESHOLD, reviewQueue, taxonomySummary } from "@/server/taxonomy/run";
+import { MIN_SOURCES, MIN_STRUCTURES } from "@/server/analytics/archetype";
+import { reviewQueue, taxonomySummary } from "@/server/taxonomy/run";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -305,7 +306,12 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
             totals={taxonomy.totals}
             remaining={taxonomy.remaining}
             notClassifiable={taxonomy.notClassifiable}
-            archetypeThreshold={ARCHETYPE_THRESHOLD}
+            evidence={taxonomy.evidence}
+            minStructures={MIN_STRUCTURES}
+            minSources={MIN_SOURCES}
+            stale={taxonomy.stale}
+            priorCounts={taxonomy.priorCounts}
+            currentVersion={taxonomy.currentVersion}
             maxBatch={MAX_BATCH}
           />
         ) : null}

@@ -55,7 +55,30 @@ export type TaxonomyPanelProps = {
   remaining: number;
   /** Indexed skills with no description to classify. Never queued, never paid for. */
   notClassifiable: number;
-  archetypeThreshold: number;
+  /**
+  * Distinct structures and sources per function category — the miner's real gate.
+  *
+  * Confident-skill counts are what the classifier produced; these are what
+  * `mineArchetype` will read. Showing only the first announced `automate-browser` as
+  * archetype-ready at 54 skills while the miner refused it at 46 structures. Evidence is
+  * counted in structures throughout this codebase precisely because one generator's 300
+  * clones are 300 skills and one structure.
+  */
+  evidence: Array<{ category: string; structures: number; sources: number }>;
+  minStructures: number;
+  minSources: number;
+  /**
+   * The newest vocabulary version that is no longer current. Null between bumps.
+   *
+   * Present so a bumped panel is not blank. `coverage` is filtered to the current
+   * `TAXONOMY_VERSION`, so bumping it empties every card — over a table still holding
+   * thousands of assignments. "Nothing classified yet" is then indistinguishable from data
+   * loss, and that is the one state an operator must never have to guess about.
+   */
+  stale: { version: string; assignments: number; skills: number } | null;
+  /** The stale version's per-category coverage, rendered muted when nothing is current. */
+  priorCounts: CoverageRow[];
+  currentVersion: string;
   maxBatch: number;
 };
 
@@ -73,12 +96,24 @@ export function TaxonomyPanel(props: TaxonomyPanelProps) {
     totals,
     remaining,
     notClassifiable,
-    archetypeThreshold,
+    evidence,
+    minStructures,
+    minSources,
+    stale,
+    priorCounts,
+    currentVersion,
     maxBatch,
   } = props;
   const functions = coverage.filter((row) => row.axis === "function");
   const domains = coverage.filter((row) => row.axis === "domain");
-  const ready = functions.filter((row) => row.confident >= archetypeThreshold).length;
+  const priorFunctions = priorCounts.filter((row) => row.axis === "function");
+  const priorDomains = priorCounts.filter((row) => row.axis === "domain");
+  const byCategory = new Map(evidence.map((e) => [e.category, e]));
+  const clearsGate = (category: string) => {
+    const e = byCategory.get(category);
+    return Boolean(e && e.structures >= minStructures && e.sources >= minSources);
+  };
+  const ready = functions.filter((row) => clearsGate(row.value)).length;
 
   return (
     <div className="grid gap-4">
@@ -88,6 +123,25 @@ export function TaxonomyPanel(props: TaxonomyPanelProps) {
         a contract and one that reviews a pull request share a shape.{" "}
         <strong>Domain</strong> is the field it serves, and it drives browse and filter.
       </p>
+
+      {stale ? (
+        <div className="border-muted-foreground/25 bg-muted/40 rounded-lg border border-dashed p-3">
+          <p className="text-sm">
+            <span className="font-medium">
+              The vocabulary moved to {currentVersion}.
+            </span>{" "}
+            <span className="text-muted-foreground">
+              {stale.assignments.toLocaleString()} assignment
+              {stale.assignments === 1 ? "" : "s"} across{" "}
+              {stale.skills.toLocaleString()} skill
+              {stale.skills === 1 ? "" : "s"} were decided under {stale.version} and no
+              longer count as current, so the coverage below starts from zero. Nothing was
+              deleted — those labels are still what the registry serves and what archetype
+              mining reads, and they re-enter the sample queue on their own.
+            </span>
+          </p>
+        </div>
+      ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
@@ -112,9 +166,9 @@ export function TaxonomyPanel(props: TaxonomyPanelProps) {
           detail={`confidence below ${REVIEW_FLOOR}`}
         />
         <Stat
-          label="Archetype-ready"
+          label="Minable"
           value={ready}
-          detail={`functions at ${archetypeThreshold}+ skills`}
+          detail={`functions at ${minStructures}+ structures, ${minSources}+ sources`}
         />
       </div>
 
@@ -123,16 +177,21 @@ export function TaxonomyPanel(props: TaxonomyPanelProps) {
       <div className="grid gap-4 lg:grid-cols-2">
         <CoverageCard
           title="Function"
-          description="Mined for archetypes. A function needs enough skills before its archetype means anything."
+          description="Mined for archetypes. A function needs enough distinct document structures — not skills — before its archetype means anything."
           axis="function"
           rows={functions}
-          threshold={archetypeThreshold}
+          priorRows={priorFunctions}
+          staleVersion={stale?.version}
+          evidence={byCategory}
+          clearsGate={clearsGate}
         />
         <CoverageCard
           title="Domain"
           description="Drives browse and filter. No structural claim hangs off these."
           axis="domain"
           rows={domains}
+          priorRows={priorDomains}
+          staleVersion={stale?.version}
         />
       </div>
 
@@ -244,15 +303,33 @@ function CoverageCard({
   description,
   axis,
   rows,
-  threshold,
+  priorRows = [],
+  staleVersion,
+  evidence,
+  clearsGate,
 }: {
   title: string;
   description: string;
   axis: CategoryAxis;
   rows: CoverageRow[];
-  threshold?: number;
+  /** Coverage at the previous vocabulary version, shown only when nothing is current. */
+  priorRows?: CoverageRow[];
+  staleVersion?: string;
+  evidence?: Map<string, { structures: number; sources: number }>;
+  clearsGate?: (category: string) => boolean;
 }) {
-  const max = Math.max(1, ...rows.map((row) => row.confident));
+  /**
+   * Falls back to the previous version rather than to an empty state.
+   *
+   * The bars are drawn muted and the header says which version they are, so the card
+   * reports "here is what the last vocabulary decided" instead of "there is nothing here".
+   * The evidence and gate ticks are deliberately dropped in this mode: those describe the
+   * corpus as the miner reads it today, and hanging them off superseded labels would mix
+   * two versions in one row.
+   */
+  const showingPrior = rows.length === 0 && priorRows.length > 0;
+  const shown = showingPrior ? priorRows : rows;
+  const max = Math.max(1, ...shown.map((row) => row.confident));
 
   return (
     <Card>
@@ -261,30 +338,44 @@ function CoverageCard({
         <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent>
-        {rows.length === 0 ? (
+        {shown.length === 0 ? (
           <p className="text-muted-foreground text-sm">
             Nothing classified yet. Run a sample above.
           </p>
         ) : (
-          <ul className="grid gap-2">
-            {rows.map((row) => (
-              <li key={row.value} className="grid gap-1">
-                <div className="flex items-baseline justify-between gap-2 text-sm">
-                  <span className="min-w-0 truncate">{labelFor(axis, row.value)}</span>
-                  <span className="text-muted-foreground shrink-0 tabular-nums text-xs">
-                    {row.confident}
-                    {threshold && row.confident >= threshold ? " ✓" : ""}
-                  </span>
-                </div>
-                <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
-                  <div
-                    className="bg-primary h-full rounded-full"
-                    style={{ width: `${(row.confident / max) * 100}%` }}
-                  />
-                </div>
-              </li>
-            ))}
-          </ul>
+          <>
+            {showingPrior ? (
+              <p className="text-muted-foreground mb-3 text-xs">
+                Awaiting re-classification. Showing {staleVersion} coverage.
+              </p>
+            ) : null}
+            <ul className="grid gap-2">
+              {shown.map((row) => (
+                <li key={row.value} className="grid gap-1">
+                  <div className="flex items-baseline justify-between gap-2 text-sm">
+                    <span
+                      className={`min-w-0 truncate${showingPrior ? " text-muted-foreground" : ""}`}
+                    >
+                      {labelFor(axis, row.value)}
+                    </span>
+                    <span className="text-muted-foreground shrink-0 tabular-nums text-xs">
+                      {row.confident}
+                      {!showingPrior && evidence?.get(row.value)
+                        ? ` · ${evidence.get(row.value)!.structures} str`
+                        : ""}
+                      {!showingPrior && clearsGate?.(row.value) ? " ✓" : ""}
+                    </span>
+                  </div>
+                  <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
+                    <div
+                      className={`h-full rounded-full ${showingPrior ? "bg-muted-foreground/40" : "bg-primary"}`}
+                      style={{ width: `${(row.confident / max) * 100}%` }}
+                    />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </CardContent>
     </Card>

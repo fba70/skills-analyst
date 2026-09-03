@@ -67,7 +67,7 @@ export const sources = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex("sources_org_url_uq").on(t.orgId, t.url),
+    uniqueIndex("sources_org_url_uq").on(t.orgId, sql`lower(${t.url})`, t.kind),
     /**
      * One public source per URL — the constraint everyone assumed the line above was
      * already enforcing.
@@ -81,9 +81,27 @@ export const sources = pgTable(
      * A partial index rather than `NULLS NOT DISTINCT` because this drizzle version cannot
      * express the latter, and because the partial form states the rule in the terms the
      * codebase actually uses: `org_id IS NULL` *is* the public corpus.
+     *
+     * ## `lower(url)`, because GitHub is case-insensitive and this index was not
+     *
+     * The URL was the identity and it was compared byte-for-byte, so
+     * `github.com/NVIDIA/skills` and `github.com/nvidia/skills` were two public sources for
+     * one repository. Fifteen repositories reached two rows this way before migration 0021
+     * merged them — `NVIDIA/skills` holding 268 indexed skills and `nvidia/skills` another
+     * 99, the same repository fetched twice and split across two rows. Nothing errored,
+     * because two rows was what this index permitted. See `crawl/repo-identity.ts`.
+     *
+     * ## `kind`, because one repository can legitimately be read two ways
+     *
+     * `ComposioHQ/awesome-claude-skills` is on the seed **list** allow-list, read for the
+     * repo links inside it, and the crawl separately promoted it as a content repo that
+     * ships six skills of its own. Those are two different reads of one URL by two
+     * different connectors, and folding the case without `kind` would have forced one of
+     * them to be deleted. It does not reopen the original bug: the duplicate rows were the
+     * same `kind`, so `(lower(url), kind)` still collides on them.
      */
     uniqueIndex("sources_public_url_uq")
-      .on(t.url)
+      .on(sql`lower(${t.url})`, t.kind)
       .where(sql`${t.orgId} is null`),
     index("sources_enabled_idx").on(t.enabled, t.health),
   ],

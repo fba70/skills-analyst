@@ -50,8 +50,40 @@ import { skills } from "@/server/db/schema";
  * backfill and nothing to reconcile.
  */
 
-/** A description that is only a bare token — `demo`, `root`, `s`, `input-repo`. */
-const SINGLE_TOKEN = "^[A-Za-z0-9_.-]+$";
+/**
+ * A description that is only a bare token — `demo`, `root`, `s`, `input-repo` — or a bare
+ * path, which is the same fault wearing a longer string.
+ *
+ * ## The `/` was added after measuring, like the rest of this rule
+ *
+ * The class is symlink remnants: a summary that is literally
+ * `../../../skills/docs-auditor/SKILL.md` or `../../../commands/okr.md`. A git symlink is
+ * stored as a blob whose content is the target path, so over raw.githubusercontent.com the
+ * path *is* what comes back — the defect `isSymlink` now filters at enumeration, still
+ * present in rows ingested before it did.
+ *
+ * Measured against the corpus the way the table above was:
+ *
+ * | rule | held cleared | **confident wrongly dropped** | skills hit |
+ * |---|---|---|---|
+ * | `^[A-Za-z0-9_.-]+$` (before) | 0 | 1 | 28 |
+ * | **`^[A-Za-z0-9_./-]+$`** | **0** | **0** | **129** |
+ * | any token with no whitespace | 24 | **23** | 47 |
+ *
+ * The 101 newly-caught skills have **never been labelled** — not one assignment between
+ * them — so this clears nothing from the review queue and is not a queue fix. What it does
+ * is stop paying to classify 101 descriptions that are a file path, and stop the
+ * low-confidence rows that would follow from ever being queued. About $0.30 today.
+ *
+ * Small, and stated as small: an earlier read of this claimed these accounted for a quarter
+ * of the held queue, which a direct count disproved. The wider "any token with no
+ * whitespace" rule is the one that looks tempting and drops 23 confident labels to clear 24
+ * held ones — the exact trade the table above exists to refuse.
+ *
+ * Adding `/` cannot catch prose: every real description contains a space, and this is
+ * anchored at both ends.
+ */
+const SINGLE_TOKEN = "^[A-Za-z0-9_./-]+$";
 
 /**
  * True when the skill has a description worth showing a classifier.
