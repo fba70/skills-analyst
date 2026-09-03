@@ -84,6 +84,21 @@ Reads a CSV from a path the user gives, computes column statistics, and writes a
 See [the column reference](references/columns.md) for the statistics produced.
 `;
 
+/**
+ * Self-contained: no internal links, so a negative case asserts the rule under test rather
+ * than tripping `broken-internal-link` from a fixture that references `references/columns.md`
+ * without shipping it.
+ */
+const SELF_CONTAINED_MARKER = `---
+name: django-perf-review
+description: Review a Django project for performance problems and report them by severity, with the query or setting responsible.
+---
+
+# Django performance review
+
+Walks the project, flags N+1 queries and missing indexes, and reports each with the code responsible.
+`;
+
 const LINTER_MARKER = `---
 name: repo-linter
 description: Runs shell commands to lint a repository and reports the results back to the user in a summary table.
@@ -107,6 +122,53 @@ type Case = {
 
 const CASES: Case[] = [
   // --- things that must be caught ---
+  /**
+   * A symlink read as a document — the whole file content is its target path.
+   *
+   * Both directions are pinned, because the risk in this rule is over-reach: a real
+   * description contains a space, and a rule that blocks on "looks pathish" would quarantine
+   * legitimate terse skills. 101 indexed skills were being listed, searched, ranked and
+   * served with a file path where their description should be.
+   */
+  {
+    name: "description is a bare symlink target path",
+    analyzer: structuralLint,
+    marker: "../../../skills/docs-auditor/SKILL.md",
+    files: [file("SKILL.md", "../../../skills/docs-auditor/SKILL.md")],
+    overrides: {
+      dialect: "anthropic_skill",
+      resolvedName: "docs-auditor",
+      resolvedSummary: "../../../skills/docs-auditor/SKILL.md",
+    },
+    expectReason: "description-is-a-path",
+    expectBlocks: true,
+  },
+  {
+    name: "a terse but real description is not mistaken for a path",
+    analyzer: structuralLint,
+    marker: SELF_CONTAINED_MARKER,
+    files: [file("SKILL.md", SELF_CONTAINED_MARKER)],
+    overrides: {
+      dialect: "anthropic_skill",
+      resolvedName: "django-perf-review",
+      resolvedSummary: "Django performance code review",
+    },
+    expectReason: null,
+    expectBlocks: false,
+  },
+  {
+    name: "a single slash-free token is not a path",
+    analyzer: structuralLint,
+    marker: SELF_CONTAINED_MARKER,
+    files: [file("SKILL.md", SELF_CONTAINED_MARKER)],
+    overrides: {
+      dialect: "anthropic_skill",
+      resolvedName: "changelog",
+      resolvedSummary: "CHANGELOG.md",
+    },
+    expectReason: null,
+    expectBlocks: false,
+  },
   {
     name: "AWS key hardcoded in a script",
     analyzer: secretScan,

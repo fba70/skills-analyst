@@ -10,7 +10,7 @@ import {
   skillStructures,
   skillVersions,
 } from "@/server/db/schema";
-import { gateEvidence, MIN_SOURCES, MIN_STRUCTURES } from "@/server/analytics/archetype";
+import { gateEvidence } from "@/server/analytics/archetype";
 import { EXTRACTOR_VERSION } from "@/server/analytics/structure";
 import {
   isClassifiable,
@@ -129,7 +129,21 @@ async function selectSkills(options: ClassifyRunOptions) {
       .where(
         and(
           eq(skillCategories.skillId, skills.id),
-          ne(skillCategories.classifierVersion, TAXONOMY_VERSION),
+          /**
+           * The *comparison* version, not "any version that is not current".
+           *
+           * `versionComparison` pairs against exactly one prior version, so a population
+           * defined as the union over 1.0.0, 1.1.0 and 1.2.0 does not fill it. With 1.1.0
+           * holding 4,349 skills against 1.2.0's 266, the documented workflow — `--sample
+           * 300 --relabel` then `--compare` — drew overwhelmingly 1.1.0 skills and then
+           * reported "no skill carries labels under both versions". The operator pays for
+           * 300 classifications and gets nothing back, on the one command whose stated job
+           * is deciding whether to spend ~$130.
+           *
+           * Both sides now resolve the prior version the same way, through
+           * `priorVersionExpr`.
+           */
+          eq(skillCategories.classifierVersion, priorVersionExpr()),
         ),
       ),
   );
@@ -261,9 +275,31 @@ export async function classifySample(
       return ok;
     });
 
-    if (pairs.length === 0) {
+    /**
+     * Both axes, or nothing is written.
+     *
+     * A skill needs a function (what archetype mining reads) and a domain (what browse and
+     * `skills.categories` read). Writing only one leaves it half-labelled — and because
+     * `selectSkills` asks whether *any* row exists at the current version, a half-labelled
+     * skill is never offered again. It is not queued, not held for review, and not
+     * reported: it simply has no domain for ever.
+     *
+     * Eight skills reached that state at 1.3.0. The cause is the loosened schema — no
+     * `.min(1)` on `domains`, deliberately, because strict array bounds threw away whole
+     * classifications and four of five skills failed that way before it was relaxed. The
+     * bound belongs here rather than in the schema for the same reason every other policy
+     * check does: the caller enforces policy, the schema describes shape. Failing the skill
+     * leaves it unlabelled, so the next sample picks it up and pays for it once more —
+     * which is the correct outcome and costs one call.
+     */
+    const axesPresent = new Set(pairs.map((pair) => pair.axis));
+    if (pairs.length === 0 || axesPresent.size < 2) {
       report.failed += 1;
-      errors.add("no valid category ids survived vocabulary validation");
+      errors.add(
+        pairs.length === 0
+          ? "no valid category ids survived vocabulary validation"
+          : `only the ${[...axesPresent][0]} axis was assigned — a skill needs both`,
+      );
       continue;
     }
 
@@ -340,6 +376,63 @@ export async function classifySample(
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
+ * Semver as a sortable value. `classifier_version` is `text`, and text sorts it wrong.
+ *
+ * `'1.9.0' > '1.10.0'` lexicographically, so every `max()` and `order by` over this column
+ * is a latent off-by-one-release. It already misfired: the stale-version banner picked
+ * 1.2.0 (266 skills) over 1.1.0 (4,349) — right by accident there, wrong the moment a
+ * two-digit minor lands.
+ */
+const versionOrder = (column: unknown) => sql`string_to_array(${column}, '.')::int[]`;
+
+/**
+ * The servable set, per skill: its **own newest** vocabulary version, plus anything a
+ * curator confirmed.
+ *
+ * Not `= TAXONOMY_VERSION`, and the difference only shows during a bump. The version clause
+ * exists for a real reason — without it a skill re-classified under 1.1.0 kept its 1.0.0
+ * labels too and `code-simplification` ended up serving `edit-refactor`, `generate-code`
+ * and `transform-data` at once. Pinning to the *global* current version fixes that and
+ * introduces a worse failure: the instant `TAXONOMY_VERSION` moves, every skill not yet
+ * re-classified has no servable label at all, so `pnpm taxonomy --resync` — free,
+ * documented as routine, described in CLAUDE.md as the thing to run *after a version bump*
+ * — would have emptied `skills.categories` for **4,349 of 5,120 labelled skills**, a 76%
+ * loss of registry browse coverage, silently.
+ *
+ * Per-skill newest keeps both properties: one vocabulary per skill, and a bump that
+ * degrades nothing until the re-classification it triggers actually happens.
+ */
+/**
+ * The single version `--compare` pairs against, resolved identically wherever it is needed.
+ *
+ * Newest superseded version by semver, as a scalar subquery so the selection population and
+ * the comparison can never disagree about which one it is.
+ */
+function priorVersionExpr() {
+  return sql`(
+    select classifier_version from skill_categories
+    where classifier_version <> ${TAXONOMY_VERSION}
+    order by string_to_array(classifier_version, '.')::int[] desc
+    limit 1
+  )`;
+}
+
+const servableCategories = sql`
+  with ranked as (
+    select skill_id, value, confidence, reviewed_at,
+           ${sql.raw("string_to_array(classifier_version, '.')::int[]")} as version_key,
+           max(${sql.raw("string_to_array(classifier_version, '.')::int[]")})
+             over (partition by skill_id) as newest_key
+    from skill_categories
+  )
+  select skill_id, array_agg(distinct value order by value) as values
+  from ranked
+  where (version_key = newest_key or reviewed_at is not null)
+    and (confidence >= ${REVIEW_FLOOR} or reviewed_at is not null)
+  group by skill_id
+`;
+
+/**
  * Mirrors confident assignments into the denormalised `skills.categories` array.
  *
  * Scoped to the **current** taxonomy version, plus anything a curator confirmed.
@@ -356,11 +449,7 @@ async function syncCategoriesArray(tx: Tx, skillId: string): Promise<void> {
   await tx.execute(sql`
     update ${skills}
     set categories = coalesce((
-      select array_agg(distinct value order by value)
-      from ${skillCategories}
-      where skill_id = ${skillId}
-        and (classifier_version = ${TAXONOMY_VERSION} or reviewed_at is not null)
-        and (confidence >= ${REVIEW_FLOOR} or reviewed_at is not null)
+      select values from (${servableCategories}) sc where sc.skill_id = ${skillId}
     ), '{}'::text[])
     where id = ${skillId}
   `);
@@ -486,8 +575,25 @@ export async function taxonomySummary() {
     .from(skillCategories)
     .where(ne(skillCategories.classifierVersion, TAXONOMY_VERSION))
     .groupBy(skillCategories.classifierVersion)
-    .orderBy(desc(skillCategories.classifierVersion))
+    .orderBy(sql`${versionOrder(skillCategories.classifierVersion)} desc`)
     .limit(1);
+
+  /**
+   * Everything awaiting re-classification, across **all** superseded versions.
+   *
+   * `stalest` is the newest of them and labels the fallback cards; this is what the banner
+   * counts, because "how much is pending" is not "how much is pending at one version". With
+   * 1.0.0, 1.1.0 and 1.2.0 all live, quoting only the newest reported 278 assignments where
+   * 11,614 were pending — a near-empty fallback presented as the whole picture, which is the
+   * state this feature exists to prevent.
+   */
+  const [staleTotals] = await db
+    .select({
+      assignments: sql<number>`count(*)::int`,
+      skills: sql<number>`count(distinct ${skillCategories.skillId})::int`,
+    })
+    .from(skillCategories)
+    .where(ne(skillCategories.classifierVersion, TAXONOMY_VERSION));
 
   const priorCounts = stalest
     ? await db
@@ -507,10 +613,8 @@ export async function taxonomySummary() {
   const evidence = await gateEvidence();
   const byCategory = new Map(evidence.map((e) => [e.category, e]));
 
-  const meetsGate = (category: string) => {
-    const e = byCategory.get(category);
-    return Boolean(e && e.structures >= MIN_STRUCTURES && e.sources >= MIN_SOURCES);
-  };
+  /** Trust the gate the evidence query computed — it applies MIN_BAND, which this cannot. */
+  const meetsGate = (category: string) => byCategory.get(category)?.meetsGate ?? false;
 
   /**
    * Counted over `evidence`, not over `counts`, and the difference is a whole taxonomy
@@ -537,7 +641,13 @@ export async function taxonomySummary() {
      * Null when nothing is stale — the normal state between bumps.
      */
     stale: stalest
-      ? { version: stalest.version, assignments: stalest.assignments, skills: stalest.skills }
+      ? {
+          /** Newest superseded version — what the fallback cards are showing. */
+          version: stalest.version,
+          /** Across every superseded version, which is what "pending" means. */
+          assignments: staleTotals?.assignments ?? 0,
+          skills: staleTotals?.skills ?? 0,
+        }
       : null,
     /** That version's per-category coverage, so a bumped panel is not blank. */
     priorCounts,
@@ -611,7 +721,7 @@ export async function versionComparison(): Promise<{
     .from(skillCategories)
     .where(ne(skillCategories.classifierVersion, TAXONOMY_VERSION))
     .groupBy(skillCategories.classifierVersion)
-    .orderBy(desc(skillCategories.classifierVersion))
+    .orderBy(sql`${versionOrder(skillCategories.classifierVersion)} desc`)
     .limit(1);
 
   if (!prior) {
@@ -875,13 +985,7 @@ export async function reviewCategory(
  */
 export async function resyncCategoryArrays(): Promise<number> {
   const result = await db.execute(sql`
-    with servable as (
-      select skill_id, array_agg(distinct value order by value) as values
-      from ${skillCategories}
-      where (classifier_version = ${TAXONOMY_VERSION} or reviewed_at is not null)
-        and (confidence >= ${REVIEW_FLOOR} or reviewed_at is not null)
-      group by skill_id
-    )
+    with servable as (${servableCategories})
     update ${skills} s
     set categories = coalesce(servable.values, '{}'::text[])
     from servable

@@ -61,6 +61,15 @@ const indexes = await c.query<{ indexname: string; indexdef: string }>(
 );
 const def = (name: string) => indexes.rows.find((r) => r.indexname === name)?.indexdef ?? "";
 
+const generated = (
+  await c.query<{ column_name: string }>(
+    `select column_name from information_schema.columns
+      where table_name = 'discovered_repos'
+        and column_name in ('owner_folded','repo_folded')
+        and is_generated = 'ALWAYS'`,
+  )
+).rows;
+
 check("sources_public_url_uq is on lower(url)", def("sources_public_url_uq").includes("lower(url)"));
 check("sources_public_url_uq still keys on kind", def("sources_public_url_uq").includes("kind"));
 check(
@@ -68,50 +77,130 @@ check(
   def("sources_public_url_uq").toLowerCase().includes("org_id is null"),
 );
 check("sources_org_url_uq is on lower(url)", def("sources_org_url_uq").includes("lower(url)"));
+/*
+ * On the generated columns, not on lower(...) expressions — and that distinction is the
+ * whole reason migration 0022 exists. An expression index enforces uniqueness correctly and
+ * cannot be named by `onConflictDoUpdate`, so 0021 broke every discovery write with 42P10
+ * while this script stayed green. Asserting the *shape* here is not pedantry: it is the
+ * property the ON CONFLICT probes below depend on.
+ */
 check(
-  "discovered_repos_uq is on lower(owner), lower(repo)",
-  def("discovered_repos_uq").includes("lower(owner)") && def("discovered_repos_uq").includes("lower(repo)"),
+  "discovered_repos_uq is on the folded columns",
+  def("discovered_repos_uq").includes("owner_folded") &&
+    def("discovered_repos_uq").includes("repo_folded"),
+  def("discovered_repos_uq").replace(/^.*USING btree /, "") || "missing",
+);
+check(
+  "owner_folded/repo_folded are generated, so they cannot drift",
+  generated.length === 2,
+  generated.map((g) => g.column_name).join(", ") || "none",
 );
 
 console.info("\nThe insert that caused the bug is refused");
 
 /**
- * Derived from a row that exists rather than hardcoded, so the probe cannot silently start
- * testing a URL nothing collides with. `NvIdIa` is a casing no crawl would produce, which
- * is the point: only case-folding can catch it.
+ * Probed through the **application's** statement shape, not a raw INSERT.
+ *
+ * The first version of this script probed `insert into ... values (...)` with no ON
+ * CONFLICT, and passed for the whole time every discovery write in the codebase was
+ * throwing 42P10 — migration 0021 had made `discovered_repos_uq` an expression index, which
+ * `onConflictDoUpdate` cannot name. Fifteen green checks over a broken ingest path.
+ *
+ * The case-flip was also a no-op for a whole class of rows: `ch === ch.toUpperCase() ?
+ * toLowerCase : toUpperCase` returns the original for any uncased character, and `.replace`
+ * on a non-matching pattern returns the string unchanged — so for a digit-leading owner the
+ * "case-variant" insert was byte-identical to the same-kind probe forty lines below, and
+ * dropping `lower()` from the index would have turned neither red. Both are now built from
+ * a literal that is unambiguously a case variant of a row known to exist.
  */
+const [nvidiaish] = (
+  await c.query<{ host: string; owner: string; repo: string }>(
+    `select host, owner, repo from discovered_repos where owner ~ '[A-Za-z]' order by first_seen_at limit 1`,
+  )
+).rows;
+
+if (!nvidiaish) {
+  check("a candidate exists to probe against", false, "discovered_repos is empty");
+} else {
+  const flip = (v: string) =>
+    v === v.toLowerCase() ? v.toUpperCase() : v.toLowerCase();
+  const variantOwner = flip(nvidiaish.owner);
+  check(
+    "the probe is genuinely a case variant",
+    variantOwner !== nvidiaish.owner,
+    `${nvidiaish.owner} -> ${variantOwner}`,
+  );
+
+  // The exact statement crawl/run.ts, submit.ts and registries.ts issue.
+  const upsertProbe = await probe(async () => {
+    await c.query(
+      `insert into discovered_repos (host, owner, repo, url)
+       values ($1, $2, $3, $4)
+       on conflict ("host","owner_folded","repo_folded") do update set last_seen_at = now()`,
+      [
+        nvidiaish.host,
+        variantOwner,
+        nvidiaish.repo,
+        `https://github.com/${variantOwner}/${nvidiaish.repo}`,
+      ],
+    );
+  });
+  check(
+    "the app's ON CONFLICT target resolves to the folded index",
+    upsertProbe === null,
+    upsertProbe === "42P10"
+      ? "42P10 — the target does not match discovered_repos_uq"
+      : (upsertProbe ?? "accepted"),
+  );
+
+  const collapsed = await probe(async () => {
+    await c.query(
+      `insert into discovered_repos (host, owner, repo, url)
+       values ($1, $2, $3, $4)
+       on conflict ("host","owner_folded","repo_folded") do update set last_seen_at = now()`,
+      [nvidiaish.host, variantOwner, nvidiaish.repo, "https://github.com/probe/collapse"],
+    );
+    const { rows } = await c.query<{ n: number }>(
+      `select count(*)::int as n from discovered_repos where host = $1 and owner_folded = lower($2) and repo_folded = lower($3)`,
+      [nvidiaish.host, variantOwner, nvidiaish.repo],
+    );
+    if (rows[0].n !== 1) throw new Error(`${rows[0].n} rows, expected 1`);
+  });
+  check(
+    "a differently-cased upsert updates rather than inserts",
+    collapsed === null,
+    collapsed ?? "1 row",
+  );
+}
+
 const [anySource] = (
   await c.query<{ url: string; kind: string }>(
-    `select url, kind from sources where org_id is null order by created_at limit 1`,
+    `select url, kind from sources where org_id is null and url ~ '[A-Za-z]' order by created_at limit 1`,
   )
 ).rows;
 
-const sourceProbe = await probe(async () => {
-  await c.query(`insert into sources (kind, name, url) values ($1, $2, $3)`, [
-    anySource.kind,
-    "case-variant probe",
-    anySource.url.replace(/^(https:\/\/github\.com\/)(.)/i, (_m, p, ch) =>
-      p + (ch === ch.toUpperCase() ? ch.toLowerCase() : ch.toUpperCase()),
-    ),
-  ]);
-});
-check("a case-variant source URL is refused", sourceProbe === "23505", sourceProbe ?? "it was accepted");
+if (!anySource) {
+  check("a public source exists to probe against", false, "sources is empty");
+} else {
+  const variantUrl = anySource.url
+    .split("")
+    .map((ch) => (ch === ch.toLowerCase() ? ch.toUpperCase() : ch.toLowerCase()))
+    .join("");
+  check("the source probe is a case variant", variantUrl !== anySource.url);
 
-const [anyRepo] = (
-  await c.query<{ host: string; owner: string; repo: string; url: string }>(
-    `select host, owner, repo, url from discovered_repos order by first_seen_at limit 1`,
-  )
-).rows;
-
-const repoProbe = await probe(async () => {
-  await c.query(`insert into discovered_repos (host, owner, repo, url) values ($1, $2, $3, $4)`, [
-    anyRepo.host,
-    anyRepo.owner.toUpperCase() === anyRepo.owner ? anyRepo.owner.toLowerCase() : anyRepo.owner.toUpperCase(),
-    anyRepo.repo,
-    `${anyRepo.url}#probe`,
-  ]);
-});
-check("a case-variant candidate owner is refused", repoProbe === "23505", repoProbe ?? "it was accepted");
+  const sourceProbe = await probe(async () => {
+    await c.query(`insert into sources (kind, name, url) values ($1, $2, $3)`, [
+      anySource.kind,
+      "case-variant probe",
+      variantUrl,
+    ]);
+  });
+  check(
+    "a case-variant source URL is refused",
+    sourceProbe === "23505",
+    sourceProbe ?? "it was accepted",
+  );
+}
 
 console.info("\nAnd the same URL may still be read two ways");
 
@@ -158,9 +247,18 @@ const state = (
 
 check("no duplicate public sources remain", state.dup_sources === 0, String(state.dup_sources));
 check("no duplicate candidates remain", state.dup_candidates === 0, String(state.dup_candidates));
-check("no skill_version points at a deleted source", state.orphan_versions === 0);
+/*
+ * These three are structurally unfailable and are kept as documentation, not as evidence.
+ *
+ * `skill_versions.source_id` is ON DELETE RESTRICT, so an orphaned version cannot exist —
+ * the delete would have been refused. `discovered_repos.source_id` is ON DELETE SET NULL,
+ * so a dangling pointer cannot exist either. Counting them as passes inflates the score of
+ * this script without testing anything; they are labelled so nobody reads them as coverage.
+ */
+check("[by constraint] no skill_version points at a deleted source", state.orphan_versions === 0);
+check("[by constraint] no candidate points at a deleted source", state.dangling_candidate_source === 0);
+// This one can genuinely fail: current_version_id has no foreign key.
 check("no skill points at a deleted version", state.dangling_current === 0);
-check("no candidate points at a deleted source", state.dangling_candidate_source === 0);
 
 /**
  * One `(source, path)` must resolve to one skill, because that pair is the write path's

@@ -307,6 +307,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
             remaining={taxonomy.remaining}
             notClassifiable={taxonomy.notClassifiable}
             evidence={taxonomy.evidence}
+            minable={taxonomy.readyForArchetype}
             minStructures={MIN_STRUCTURES}
             minSources={MIN_SOURCES}
             stale={taxonomy.stale}

@@ -101,7 +101,7 @@ const MIN_STRONG_PREVALENCE = 25;
  * Below this a single skill moves a lift by ten points or more, which is sampling noise
  * presented as advice.
  */
-const MIN_BAND = 15;
+export const MIN_BAND = 15;
 
 /**
  * The curated set, derived from the seed allow-list rather than duplicated.
@@ -272,19 +272,59 @@ async function representatives(category: string): Promise<Representative[]> {
  * invisible one. So the status reads this, and this shares its `where` clause and its
  * signature expression with `representatives()` verbatim.
  *
- * `MIN_BAND` is not applied: the curated/other split belongs to `mineArchetype`, and a
- * status line is not worth a full mine per category. A category can clear this and still
- * fail on a thin band, which the miner reports when it happens.
+ * ## Sources are counted after the dedup, and the band is applied
+ *
+ * Two divergences remained after the first attempt, and both made this the *more optimistic*
+ * of the two surfaces — the failure mode it exists to remove.
+ *
+ * `count(distinct source)` ran over every labelled row, where the miner counts sources over
+ * the deduped representative set. So this was always >= the miner's number and strictly
+ * greater whenever a source contributed only signatures another source had already won. The
+ * `deduped` CTE now performs the same `distinct on (category, signature)` reduction, ordered
+ * the same way, and sources are counted over it.
+ *
+ * `MIN_BAND` was omitted on the argument that the curated/other split belongs to
+ * `mineArchetype`. It does not need to: `curated` derives from the same `CURATED_SOURCES`
+ * set the miner bands on, so the split is computable here from one definition rather than a
+ * similar one. Omitting it let the status tick `automate-browser` at 50 structures while the
+ * miner refused it with "8 from curated sources, needs 15" — the same category, the same
+ * afternoon, for the third time.
+ *
+ * A backtick inside a `sql` template literal terminates it, so the in-query comments stay
+ * short and the reasoning lives here. That has cost two parse errors in this file alone.
  */
+/**
+ * The curated set as a bindable array.
+ *
+ * Passed as a parameter rather than interpolated into SQL text: the first attempt built an
+ * `ARRAY[...]` literal with `sql.raw` and nested template literals, which is both an
+ * injection shape and — because a backtick inside a `sql` template ends it — a parse error.
+ *
+ * Sent as one comma-joined string and split in SQL, because binding a JS array here gives
+ * `op ANY/ALL (array) requires array on right side` — the driver does not hand Postgres an
+ * array in that position. Repository names cannot contain a comma, so the join is lossless.
+ */
+const CURATED_LIST: string = [...CURATED_SOURCES].join(",");
+
 export async function gateEvidence(): Promise<
-  Array<{ category: string; skills: number; structures: number; sources: number }>
+  Array<{
+    category: string;
+    skills: number;
+    structures: number;
+    sources: number;
+    strong: number;
+    weak: number;
+    meetsGate: boolean;
+  }>
 > {
   const result = await db.execute(sql`
     with labelled as (
       select
         c.value as category,
         sk.id as skill_id,
+        sk.quality_score,
         src.name as source,
+        (lower(src.name) = any(string_to_array(${CURATED_LIST}, ','))) as curated,
         (
           select coalesce(string_agg(h.role, '>' order by h.ord), '(none)')
           from jsonb_array_elements(st.headings) with ordinality as e(value, ord)
@@ -306,22 +346,47 @@ export async function gateEvidence(): Promise<
         and sk.status = 'indexed'
         and sk.canonical_skill_id is null
         and sk.quality_score is not null
+    ),
+    -- One representative per (category, signature). See the JSDoc above.
+    deduped as (
+      select distinct on (category, signature)
+        category, signature, skill_id, source, curated
+      from labelled
+      order by category, signature, quality_score desc, skill_id
     )
     select category,
            count(distinct skill_id)::int as skills,
-           count(distinct signature)::int as structures,
-           count(distinct source)::int as sources
-    from labelled
+           count(*)::int as structures,
+           count(distinct source)::int as sources,
+           count(*) filter (where curated)::int as strong,
+           count(*) filter (where not curated)::int as weak
+    from deduped
     group by category
-    order by count(distinct signature) desc
+    order by count(*) desc
   `);
 
-  return result.rows as Array<{
-    category: string;
-    skills: number;
-    structures: number;
-    sources: number;
-  }>;
+  return (result.rows as Array<Record<string, number | string>>).map((r) => ({
+    category: r.category as string,
+    skills: r.skills as number,
+    structures: r.structures as number,
+    sources: r.sources as number,
+    strong: r.strong as number,
+    weak: r.weak as number,
+    /**
+     * All four conditions, `MIN_BAND` included.
+     *
+     * Omitting the band check is what let the status surface tick `automate-browser` at 50
+     * structures while `mineArchetype` refused it with "8 from curated sources, needs 15" —
+     * the same category, the same afternoon, for the third time. The band is computable
+     * here because `curated` is derived from the same `CURATED_SOURCES` set the miner bands
+     * on, so there is one definition rather than a similar one.
+     */
+    meetsGate:
+      (r.structures as number) >= MIN_STRUCTURES &&
+      (r.sources as number) >= MIN_SOURCES &&
+      (r.strong as number) >= MIN_BAND &&
+      (r.weak as number) >= MIN_BAND,
+  }));
 }
 
 /** What authoring taught us about a section (R6.2). Null until the bounds are cleared. */

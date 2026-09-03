@@ -2,7 +2,7 @@ import "server-only";
 
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
-import { sameRepoUrl } from "@/server/crawl/repo-identity";
+import { contentSourceAt, sameRepoUrl } from "@/server/crawl/repo-identity";
 import { db } from "@/server/db";
 import { events, skills, skillVersions, sources, takedowns } from "@/server/db/schema";
 import { deleteBundle } from "@/server/storage";
@@ -170,7 +170,7 @@ async function applyUphold(
     .innerJoin(sources, eq(sources.id, skillVersions.sourceId))
     .where(
       and(
-        sameRepoUrl(sources.url, takedown.sourceUrl),
+        contentSourceAt(takedown.sourceUrl),
         takedown.scope === "skill"
           ? sql`${skillVersions.provenance}->>'path' = ${takedown.skillPath}`
           : sql`true`,
@@ -209,7 +209,7 @@ async function applyUphold(
           healthDetail: `withdrawn on request (takedown ${id.slice(0, 8)})`,
           updatedAt: new Date(),
         })
-        .where(sameRepoUrl(sources.url, takedown.sourceUrl));
+        .where(contentSourceAt(takedown.sourceUrl));
     }
 
     await tx
@@ -380,7 +380,7 @@ async function applyReinstate(
       .where(
         and(
           eq(skillVersions.status, "withdrawn"),
-          sameRepoUrl(sources.url, row.sourceUrl),
+          contentSourceAt(row.sourceUrl),
           row.scope === "skill"
             ? sql`${skillVersions.provenance}->>'path' = ${row.skillPath}`
             : sql`true`,
@@ -403,7 +403,7 @@ async function applyReinstate(
       await tx
         .update(sources)
         .set({ enabled: true, health: "unknown", healthDetail: null, updatedAt: new Date() })
-        .where(sameRepoUrl(sources.url, row.sourceUrl));
+        .where(contentSourceAt(row.sourceUrl));
     }
 
     await tx
@@ -453,10 +453,31 @@ export type SourceBlocks = {
  * skill — which is the failure mode every takedown regime is criticised for.
  */
 export async function activeBlocks(sourceUrl: string): Promise<SourceBlocks> {
+  /**
+   * Folded, because this is the read that actually stops a fetch.
+   *
+   * `takedowns.source_url` is a duplicated copy of the URL a claimant named, kept so the
+   * block survives the rows it was recorded against being rebuilt. That makes it a second,
+   * independent spelling of a GitHub identity — and GitHub folds case. An exact match here
+   * meant an uphold recorded against `.../nvidia/skills` returned zero rows when
+   * `syncSource` asked about `.../NVIDIA/skills`: `sourceBlocked` false, `paths` empty,
+   * enumeration proceeds, `connector.fetch` runs on the withdrawn path, and
+   * `validatePending` re-indexes it.
+   *
+   * Content we were ordered to stop copying would be served again on the next pass, on a
+   * schedule, with nobody watching — verbatim the failure this module exists to prevent.
+   *
+   * It is worse than it looks, because folding the *write* side first made it quiet. While
+   * `applyUphold` also matched exactly, an uphold under the wrong casing reported "0 skills
+   * withdrawn" and a curator could see it had not worked. Converting the writes and not
+   * this read turns a visible failure into a silent one.
+   */
   const rows = await db
     .select({ scope: takedowns.scope, skillPath: takedowns.skillPath })
     .from(takedowns)
-    .where(and(eq(takedowns.sourceUrl, sourceUrl), inArray(takedowns.status, ENFORCING)));
+    .where(
+      and(sameRepoUrl(takedowns.sourceUrl, sourceUrl), inArray(takedowns.status, ENFORCING)),
+    );
 
   return {
     sourceBlocked: rows.some((row) => row.scope === "source"),
