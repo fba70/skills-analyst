@@ -6,6 +6,7 @@ import { fetchList } from "@/server/connectors/awesome-list";
 import { db } from "@/server/db";
 import { discoveredRepos, events, sources } from "@/server/db/schema";
 
+import { sameRepoSegment } from "./repo-identity";
 import { submitRepository, type SubmitOutcome } from "./submit";
 import { SEED_LISTS, SEED_REPOS, type SeedList, type SeedRepo } from "./seeds";
 
@@ -176,8 +177,8 @@ export async function expandList(
       .where(
         and(
           eq(discoveredRepos.host, "github.com"),
-          eq(discoveredRepos.owner, candidate.owner),
-          eq(discoveredRepos.repo, candidate.repo),
+          sameRepoSegment(discoveredRepos.owner, candidate.owner),
+          sameRepoSegment(discoveredRepos.repo, candidate.repo),
         ),
       )
       .limit(1);

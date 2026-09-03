@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, inArray, isNull, notExists, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, inArray, isNull, ne, notExists, sql } from "drizzle-orm";
 
 import { db } from "@/server/db";
 import {
@@ -10,6 +10,7 @@ import {
   skillStructures,
   skillVersions,
 } from "@/server/db/schema";
+import { gateEvidence, MIN_SOURCES, MIN_STRUCTURES } from "@/server/analytics/archetype";
 import { EXTRACTOR_VERSION } from "@/server/analytics/structure";
 import {
   isClassifiable,
@@ -54,6 +55,21 @@ export type ClassifyRunOptions = {
   strategy?: SampleStrategy;
   /** Re-classify skills that already carry labels at this taxonomy version. */
   force?: boolean;
+  /**
+   * Restrict the sample to skills already labelled under an **older** vocabulary version.
+   *
+   * Not the same as `force`, which re-does skills labelled at the *current* version. This
+   * narrows the population so every skill in the batch has a counterpart under the previous
+   * vocabulary — which is what makes `versionComparison()` a paired measurement instead of
+   * two different samples being compared and hoped about.
+   *
+   * The reason it exists: after bumping to 1.2.0, an ordinary sample drew 100 skills of
+   * which only **28** had 1.1.0 labels, and those 28 averaged 1.00 domain labels against
+   * 1.72 corpus-wide — a biased subset, not a control group. Batch-to-batch the held rate
+   * moved 6.9% → 9.9%, which is 1.6 standard deviations on that sample size and therefore
+   * cannot distinguish "worse" from "unchanged". Pairing removes the sample mix entirely.
+   */
+  onlyPriorVersion?: boolean;
   /** Only these skill ids — used by the curator UI to re-run one. */
   skillIds?: string[];
   onProgress?: (message: string) => void;
@@ -100,6 +116,24 @@ async function selectSkills(options: ClassifyRunOptions) {
       ),
   );
 
+  /**
+   * Has an assignment under some *other* vocabulary version.
+   *
+   * Combined with `unlabelled` below this reads "labelled before, not yet re-labelled",
+   * which is exactly the paired population.
+   */
+  const labelledUnderAnotherVersion = exists(
+    db
+      .select({ one: sql`1` })
+      .from(skillCategories)
+      .where(
+        and(
+          eq(skillCategories.skillId, skills.id),
+          ne(skillCategories.classifierVersion, TAXONOMY_VERSION),
+        ),
+      ),
+  );
+
   const base = and(
     eq(skills.status, "indexed"),
     // A variant is labelled through its canonical entry; labelling both pays twice for
@@ -109,6 +143,7 @@ async function selectSkills(options: ClassifyRunOptions) {
     // saves the call as well as the low-confidence row it would have produced.
     isClassifiable(),
     options.force ? undefined : unlabelled,
+    options.onlyPriorVersion ? labelledUnderAnotherVersion : undefined,
   );
 
   const where = options.skillIds?.length ? inArray(skills.id, options.skillIds) : base;
@@ -376,11 +411,28 @@ async function remainingCount(): Promise<number> {
 }
 
 /**
- * Coverage per axis, plus how many categories have cleared the archetype threshold.
+ * Coverage per axis, plus how many categories can actually be mined.
  *
- * The last number is the one that matters for planning: R3.2 needs ≥50 validated skills in
- * a category before an archetype built from it means anything, and until functions start
- * crossing it, archetype mining has nothing to mine.
+ * ## This number used to be measured in skills, and the miner does not agree
+ *
+ * It counted function categories with ≥50 *confident skills* and called them
+ * "archetype-ready". The miner's gate is ≥50 distinct **structures** and ≥10 sources. Those
+ * are not the same question, and the whole reason `categoryEvidence()` exists is that they
+ * come apart: one generator's 300 clones are 300 skills and one structure.
+ *
+ * They came apart in public on 2026-09-03. `automate-browser` crossed 50 confident skills,
+ * this line announced 13 categories ready, and the miner refused it at **46 structures**.
+ * The status command was the more optimistic of the two and the less correct — the worst
+ * combination, because it is the one someone reads to decide whether to mine.
+ *
+ * So readiness is now computed from `categoryEvidence()`, the same function whose floor the
+ * miner applies. One definition, so the two cannot drift apart again.
+ *
+ * `MIN_BAND` is deliberately **not** applied here. It needs the curated/other split, which
+ * is a property of `mineArchetype` rather than of the corpus, and a status command that
+ * silently ran a full mine per category to print one line would be the wrong trade. A
+ * category can therefore clear this and still fail at mine time on a thin band — which the
+ * miner says plainly when it happens.
  */
 export const ARCHETYPE_THRESHOLD = 50;
 
@@ -408,16 +460,271 @@ export async function taxonomySummary() {
     .from(skillCategories)
     .where(eq(skillCategories.classifierVersion, TAXONOMY_VERSION));
 
-  const readyForArchetype = counts.filter(
-    (c) => c.axis === "function" && c.confident >= ARCHETYPE_THRESHOLD,
-  ).length;
+  /**
+   * What the previous vocabulary decided, kept visible.
+   *
+   * `counts` above is filtered to `TAXONOMY_VERSION`, so the moment that constant is bumped
+   * every coverage row disappears and the panel reads "Nothing classified yet" over a table
+   * holding 12,944 assignments. That is technically true and operationally a lie: the labels
+   * exist, they are still what the miner reads, and they are queued for re-classification
+   * rather than gone.
+   *
+   * A blank screen is the one state an operator cannot tell apart from data loss, which is
+   * the same argument the ingestion heartbeat makes — a completion record cannot answer "is
+   * it stuck", and an empty table cannot answer "was this wiped".
+   *
+   * Newest prior version only, not every prior version summed: a skill labelled under both
+   * 1.0.0 and 1.1.0 would be counted twice, and a number nobody can reconcile against the
+   * table is worse than no number.
+   */
+  const [stalest] = await db
+    .select({
+      version: skillCategories.classifierVersion,
+      assignments: sql<number>`count(*)::int`,
+      skills: sql<number>`count(distinct ${skillCategories.skillId})::int`,
+    })
+    .from(skillCategories)
+    .where(ne(skillCategories.classifierVersion, TAXONOMY_VERSION))
+    .groupBy(skillCategories.classifierVersion)
+    .orderBy(desc(skillCategories.classifierVersion))
+    .limit(1);
+
+  const priorCounts = stalest
+    ? await db
+        .select({
+          axis: skillCategories.axis,
+          value: skillCategories.value,
+          total: sql<number>`count(*)::int`,
+          confident: sql<number>`count(*) filter (where ${skillCategories.confidence} >= ${REVIEW_FLOOR})::int`,
+          avgConfidence: sql<number>`coalesce(round(avg(${skillCategories.confidence}))::int, 0)`,
+        })
+        .from(skillCategories)
+        .where(eq(skillCategories.classifierVersion, stalest.version))
+        .groupBy(skillCategories.axis, skillCategories.value)
+        .orderBy(desc(sql`count(*) filter (where ${skillCategories.confidence} >= ${REVIEW_FLOOR})`))
+    : [];
+
+  const evidence = await gateEvidence();
+  const byCategory = new Map(evidence.map((e) => [e.category, e]));
+
+  const meetsGate = (category: string) => {
+    const e = byCategory.get(category);
+    return Boolean(e && e.structures >= MIN_STRUCTURES && e.sources >= MIN_SOURCES);
+  };
+
+  /**
+   * Counted over `evidence`, not over `counts`, and the difference is a whole taxonomy
+   * version.
+   *
+   * `counts` is filtered to `TAXONOMY_VERSION`; `mineArchetype` filters on no version at
+   * all — it reads whatever servable assignment a skill currently carries. So immediately
+   * after a bump, `counts` is empty while the miner can still mine every category from the
+   * previous version's labels. Deriving readiness from `counts` reported **0 minable** at
+   * the moment 1.2.0 landed, with twelve categories minable in fact.
+   *
+   * Which is the same bug this number was just fixed for: measuring the gate with something
+   * that is not the gate.
+   */
+  const readyForArchetype = evidence.filter((e) => meetsGate(e.category)).length;
 
   return {
     counts,
     totals,
+    /** Distinct structures and sources per function category — the miner's actual gate. */
+    evidence,
+    /**
+     * The newest vocabulary version that is no longer current, and what it labelled.
+     * Null when nothing is stale — the normal state between bumps.
+     */
+    stale: stalest
+      ? { version: stalest.version, assignments: stalest.assignments, skills: stalest.skills }
+      : null,
+    /** That version's per-category coverage, so a bumped panel is not blank. */
+    priorCounts,
+    currentVersion: TAXONOMY_VERSION,
     readyForArchetype,
     remaining: await remainingCount(),
     notClassifiable: await notClassifiableCount(),
+  };
+}
+
+/**
+ * Did changing the vocabulary help? **This cannot currently be answered, and the function
+ * refuses rather than guessing.**
+ *
+ * ## Why a paired comparison is impossible here
+ *
+ * `skill_categories_uq` is `(skill_id, axis, value)`. `classifier_version` is a *column*,
+ * not part of the key — so re-classifying a skill **updates its rows in place** and the
+ * previous version's answer for that label is gone. `verdicts` is append-only per
+ * `analyzer_version`; this table deliberately is not, because for *serving* a category only
+ * the current answer matters.
+ *
+ * The consequence is that the rows still stamped with the old version, on a skill that has
+ * been re-classified, are exactly the labels the new vocabulary **stopped assigning**.
+ * Comparing those against the new version's full output compares what the new vocabulary
+ * rejected with what it chose, and that comparison flatters the new vocabulary by
+ * construction.
+ *
+ * It was not a subtle artifact. On the first attempt — 300 skills relabelled deliberately
+ * to build a paired set — 146 skills carried both versions, holding **159 surviving old rows
+ * against 390 new ones**, and **113 of the 146 had no surviving old function label at all**,
+ * which is impossible for a skill that was ever classified. The apparent result was a domain
+ * held rate falling 22.2% → 9.8%. That number is meaningless.
+ *
+ * ## What to do instead
+ *
+ * Either compare **unpaired at large n** — batch aggregates and, better, the *distribution*
+ * of labels across categories, which is robust to sample mix in a way a held rate is not —
+ * or give the table real history by adding `classifier_version` to the unique key. The
+ * second makes this function possible and costs a migration plus a decision about which row
+ * the read paths serve.
+ *
+ * Until then this returns `comparable: false` and says why. A command that prints a
+ * confident wrong answer is worse than one that prints nothing: the whole reason this exists
+ * is to decide whether to spend ~$130 on a bulk run.
+ */
+export async function versionComparison(): Promise<{
+  currentVersion: string;
+  priorVersion: string | null;
+  pairedSkills: number;
+  /** False when the prior version's rows have been partly overwritten. See the note above. */
+  comparable: boolean;
+  /** Why not, when `comparable` is false. */
+  reason: string | null;
+  axes: Array<{
+    axis: CategoryAxis;
+    priorAssignments: number;
+    currentAssignments: number;
+    priorAvgConfidence: number;
+    currentAvgConfidence: number;
+    priorHeld: number;
+    currentHeld: number;
+    priorHeldPct: number;
+    currentHeldPct: number;
+  }>;
+  /** Categories whose share of the axis moved most, current minus prior. */
+  moved: Array<{ axis: CategoryAxis; value: string; prior: number; current: number }>;
+}> {
+  const [prior] = await db
+    .select({ version: skillCategories.classifierVersion })
+    .from(skillCategories)
+    .where(ne(skillCategories.classifierVersion, TAXONOMY_VERSION))
+    .groupBy(skillCategories.classifierVersion)
+    .orderBy(desc(skillCategories.classifierVersion))
+    .limit(1);
+
+  if (!prior) {
+    return {
+      currentVersion: TAXONOMY_VERSION,
+      priorVersion: null,
+      pairedSkills: 0,
+      comparable: false,
+      reason: `every assignment is at ${TAXONOMY_VERSION}; nothing to compare against`,
+      axes: [],
+      moved: [],
+    };
+  }
+
+  const paired = sql`
+    select skill_id from ${skillCategories} where classifier_version = ${TAXONOMY_VERSION}
+    intersect
+    select skill_id from ${skillCategories} where classifier_version = ${prior.version}
+  `;
+
+  /**
+   * The integrity check that makes this honest.
+   *
+   * Every classified skill gets at least one function label, so a skill in the paired set
+   * with no *prior* function label proves its prior rows were overwritten rather than kept.
+   * One such skill is enough to invalidate the comparison, so the threshold is zero.
+   */
+  const [{ incomplete }] = (
+    await db.execute(sql`
+      with paired as (${paired})
+      select count(*)::int as incomplete
+      from paired p
+      where not exists (
+        select 1 from ${skillCategories} c
+        where c.skill_id = p.skill_id
+          and c.axis = 'function'
+          and c.classifier_version = ${prior.version}
+      )
+    `)
+  ).rows as Array<{ incomplete: number }>;
+
+  const axes = await db.execute(sql`
+    with paired as (${paired})
+    select
+      axis,
+      count(*) filter (where classifier_version = ${prior.version})::int as prior_assignments,
+      count(*) filter (where classifier_version = ${TAXONOMY_VERSION})::int as current_assignments,
+      coalesce(round(avg(confidence) filter (where classifier_version = ${prior.version}))::int, 0) as prior_avg_confidence,
+      coalesce(round(avg(confidence) filter (where classifier_version = ${TAXONOMY_VERSION}))::int, 0) as current_avg_confidence,
+      count(*) filter (where classifier_version = ${prior.version} and confidence < ${REVIEW_FLOOR})::int as prior_held,
+      count(*) filter (where classifier_version = ${TAXONOMY_VERSION} and confidence < ${REVIEW_FLOOR})::int as current_held
+    from ${skillCategories}
+    where skill_id in (select skill_id from paired)
+      and classifier_version in (${prior.version}, ${TAXONOMY_VERSION})
+    group by axis
+    order by axis
+  `);
+
+  const moved = await db.execute(sql`
+    with paired as (${paired})
+    select axis, value,
+      count(*) filter (where classifier_version = ${prior.version})::int as prior,
+      count(*) filter (where classifier_version = ${TAXONOMY_VERSION})::int as current
+    from ${skillCategories}
+    where skill_id in (select skill_id from paired)
+      and classifier_version in (${prior.version}, ${TAXONOMY_VERSION})
+    group by axis, value
+    having count(*) filter (where classifier_version = ${prior.version})
+        <> count(*) filter (where classifier_version = ${TAXONOMY_VERSION})
+    order by abs(
+      count(*) filter (where classifier_version = ${TAXONOMY_VERSION})
+      - count(*) filter (where classifier_version = ${prior.version})
+    ) desc
+    limit 15
+  `);
+
+  const [{ n }] = (
+    await db.execute(sql`with paired as (${paired}) select count(*)::int as n from paired`)
+  ).rows as Array<{ n: number }>;
+
+  const pct = (held: number, total: number) =>
+    total === 0 ? 0 : Math.round((held / total) * 1000) / 10;
+
+  return {
+    currentVersion: TAXONOMY_VERSION,
+    priorVersion: prior.version,
+    pairedSkills: n,
+    comparable: incomplete === 0,
+    reason:
+      incomplete === 0
+        ? null
+        : `${incomplete} of ${n} paired skill(s) have no ${prior.version} function label, ` +
+          `so their prior rows were overwritten in place — skill_categories_uq is ` +
+          `(skill_id, axis, value) and does not include classifier_version. What survives ` +
+          `at ${prior.version} is only what ${TAXONOMY_VERSION} stopped assigning, which ` +
+          `is not a before-and-after.`,
+    axes: (axes.rows as Array<Record<string, number | string>>).map((r) => ({
+      axis: r.axis as CategoryAxis,
+      priorAssignments: r.prior_assignments as number,
+      currentAssignments: r.current_assignments as number,
+      priorAvgConfidence: r.prior_avg_confidence as number,
+      currentAvgConfidence: r.current_avg_confidence as number,
+      priorHeld: r.prior_held as number,
+      currentHeld: r.current_held as number,
+      priorHeldPct: pct(r.prior_held as number, r.prior_assignments as number),
+      currentHeldPct: pct(r.current_held as number, r.current_assignments as number),
+    })),
+    moved: (moved.rows as Array<Record<string, number | string>>).map((r) => ({
+      axis: r.axis as CategoryAxis,
+      value: r.value as string,
+      prior: r.prior as number,
+      current: r.current as number,
+    })),
   };
 }
 

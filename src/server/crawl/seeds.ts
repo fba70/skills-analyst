@@ -138,6 +138,118 @@ export const SEED_REPOS: readonly SeedRepo[] = [
     note: "380+ skills across engineering, marketing, product, compliance",
     markersAtVerification: 857,
   },
+
+  // ---- First-party vendor repos, second wave -----------------------------
+  //
+  // Added 2026-09-03, and the reason is a measurement rather than a preference.
+  //
+  // This list *is* the strong band archetype mining contrasts against — `CURATED_SOURCES`
+  // in `analytics/archetype.ts` derives from it. Written in August against a 16k corpus, it
+  // held 18 repos. Sync then finished and the corpus reached 49,258 indexed skills, of which
+  // the 18 supplied **865 — 1.8%**. Everything else, by construction, was the weak band.
+  //
+  // Meanwhile the skills.sh reconciliation brought in 2,323 repositories, and among them
+  // sat the first-party vendor repos this section exists to name: NVIDIA, Google, Adobe,
+  // Salesforce, Microsoft, OpenAI, Grafana, Elastic, HashiCorp — 27 of them holding 1,987
+  // indexed skills, 2.3x the whole strong band, all counted as weak.
+  //
+  // The decisive tell was the same organisation appearing on both sides of the contrast:
+  // `getsentry/skills` curated but `getsentry/sentry-for-ai` not, `anthropics/skills`
+  // curated but `anthropics/knowledge-work-plugins` — ten times larger — not. A contrast
+  // like that is not measuring craft. It is measuring which URLs somebody typed in August,
+  // and every `lift` in archetype v5 was diluted by exactly that.
+  //
+  // ## The rule applied here
+  //
+  // **First-party: the GitHub organisation owns the product the skills document.** That is
+  // checkable from the org rather than being a quality opinion, and it is the same
+  // judgement the vendor section above already made — this only applies it to the
+  // repositories that arrived after it was written. Stars are not a criterion: `celigo/ai`
+  // has three and `sumsub/agent-skills` six, and both are a vendor documenting its own
+  // product for agents, which is the craft signal the band is a proxy for. Popularity
+  // getting no vote is the same rule R2.9 applies to search ranking.
+  //
+  // Notable individuals — `antfu`, `addyosmani`, `chrisbanes` — are deliberately NOT here.
+  // That is the "high-signal community" class one section up, a different rule, and mixing
+  // the two in one pass would leave the band with no statable definition.
+  //
+  // Marker counts read from the GitHub tree API on 2026-09-03. All 51 resolved; none was
+  // added from memory.
+  { repo: "NVIDIA/skills", note: "NVIDIA, first-party", markersAtVerification: 348 },
+  { repo: "google/skills", note: "Google, first-party", markersAtVerification: 133 },
+  { repo: "google/mantis", note: "Google, first-party", markersAtVerification: 22 },
+  { repo: "google/adk-kotlin", note: "Google, ADK for Kotlin", markersAtVerification: 16 },
+  { repo: "android/skills", note: "Android (Google), first-party", markersAtVerification: 22 },
+  { repo: "microsoft/azure-skills", note: "Microsoft, Azure", markersAtVerification: 79 },
+  { repo: "microsoft/apm", note: "Microsoft, APM", markersAtVerification: 74 },
+  { repo: "microsoft/fluentui", note: "Microsoft, Fluent UI — product repo shipping its own skills", markersAtVerification: 25 },
+  { repo: "openai/skills", note: "OpenAI, first-party", markersAtVerification: 44 },
+  {
+    repo: "aliyun/alibabacloud-aiops-skills",
+    note: "Alibaba Cloud, AIOps",
+    markersAtVerification: 313,
+  },
+  { repo: "openshift-eng/ai-helpers", note: "Red Hat, OpenShift engineering", markersAtVerification: 116 },
+  { repo: "hashicorp/agent-skills", note: "HashiCorp, first-party", markersAtVerification: 21 },
+  { repo: "elastic/agent-skills", note: "Elastic, first-party", markersAtVerification: 72 },
+  { repo: "grafana/skills", note: "Grafana Labs, first-party", markersAtVerification: 52 },
+
+  // Anthropic's own, beyond `anthropics/skills` and `anthropics/claude-code` above.
+  {
+    repo: "anthropics/knowledge-work-plugins",
+    note: "Anthropic, knowledge-work plugins",
+    markersAtVerification: 213,
+  },
+  { repo: "anthropics/claude-for-legal", note: "Anthropic, legal skills", markersAtVerification: 151 },
+  {
+    repo: "anthropics/claude-plugins-official",
+    note: "Anthropic, official plugin marketplace",
+    markersAtVerification: 31,
+  },
+
+  // Same-org siblings of entries already on this list. These are the inconsistency that
+  // exposed the staleness — one repo of an organisation curated, another not.
+  { repo: "getsentry/sentry-for-ai", note: "Sentry, sibling of getsentry/skills", markersAtVerification: 35 },
+  { repo: "expo/skills", note: "Expo, sibling of expo/expo", markersAtVerification: 26 },
+  { repo: "vercel-labs/json-render", note: "Vercel Labs, sibling of vercel-labs/skills", markersAtVerification: 27 },
+
+  // SaaS and developer-tool vendors.
+  { repo: "forcedotcom/sf-skills", note: "Salesforce, first-party", markersAtVerification: 286 },
+  { repo: "adobe/skills", note: "Adobe, first-party", markersAtVerification: 163 },
+  { repo: "langchain-ai/langchain-skills", note: "LangChain, first-party", markersAtVerification: 23 },
+  { repo: "clerk/skills", note: "Clerk, first-party", markersAtVerification: 23 },
+  { repo: "shopify/shopify-ai-toolkit", note: "Shopify, first-party", markersAtVerification: 22 },
+  { repo: "browserbase/skills", note: "Browserbase, first-party", markersAtVerification: 18 },
+  { repo: "figma/mcp-server-guide", note: "Figma, first-party", markersAtVerification: 16 },
+  { repo: "netlify/context-and-tools", note: "Netlify, first-party", markersAtVerification: 47 },
+  { repo: "hubspot/agent-cli-skills", note: "HubSpot, first-party", markersAtVerification: 15 },
+  { repo: "makenotion/notion-cookbook", note: "Notion, first-party", markersAtVerification: 194 },
+  { repo: "apollographql/skills", note: "Apollo GraphQL, first-party", markersAtVerification: 15 },
+  { repo: "planetscale/skills", note: "PlanetScale, first-party", markersAtVerification: 15 },
+  { repo: "mapbox/mapbox-agent-skills", note: "Mapbox, first-party", markersAtVerification: 21 },
+  { repo: "unity-technologies/skills", note: "Unity, first-party", markersAtVerification: 22 },
+  { repo: "snyk/agent-scan", note: "Snyk, first-party", markersAtVerification: 21 },
+  { repo: "medusajs/medusa-agent-skills", note: "Medusa, first-party", markersAtVerification: 18 },
+  { repo: "copilotkit/copilotkit", note: "CopilotKit, product repo shipping its own skills", markersAtVerification: 30 },
+  { repo: "coralogix/cx-cli", note: "Coralogix, first-party CLI", markersAtVerification: 21 },
+  { repo: "firecrawl/firecrawl-workflows", note: "Firecrawl, first-party", markersAtVerification: 17 },
+  { repo: "software-mansion/argent", note: "Software Mansion, first-party", markersAtVerification: 16 },
+  { repo: "circlefin/skills", note: "Circle, first-party", markersAtVerification: 18 },
+  { repo: "sumsub/agent-skills", note: "Sumsub, first-party", markersAtVerification: 26 },
+  { repo: "celigo/ai", note: "Celigo, first-party", markersAtVerification: 24 },
+  { repo: "prompt-security/clawsec", note: "Prompt Security, first-party", markersAtVerification: 17 },
+  { repo: "remotion-dev/remotion", note: "Remotion, product repo shipping its own skills", markersAtVerification: 70 },
+  { repo: "dlt-hub/dlt", note: "dltHub, product repo shipping its own skills", markersAtVerification: 19 },
+  { repo: "MaterializeInc/materialize", note: "Materialize, product repo shipping its own skills", markersAtVerification: 20 },
+  { repo: "nix-community/home-manager", note: "nix-community, first-party for home-manager", markersAtVerification: 19 },
+  { repo: "hashintel/hash", note: "HASH, product repo shipping its own skills", markersAtVerification: 25 },
+  { repo: "openclaw/openclaw", note: "OpenClaw, first-party", markersAtVerification: 144 },
+  {
+    repo: "liferay/liferay-portal",
+    note: "Liferay, first-party; the root tree exceeds the ~100k entry cap, so it is read as scoped subtrees",
+    markersAtVerification: 616,
+    includePaths: ["workspaces/"],
+  },
 ];
 
 /**

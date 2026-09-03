@@ -755,6 +755,100 @@ auto-promoted — the upsert refreshes `lastSeenAt` and touches neither status n
 so a repository a curator already rejected is not resurrected because a registry still lists
 it. Verified: of the 99 already known, 97 stayed `promoted` and 2 stayed `skipped`.
 
+### One repository, two rows — GitHub folds case and our indexes did not
+
+`src/server/crawl/repo-identity.ts` · migration 0021 · `pnpm verify:dedup` (15 checks, free)
+
+GitHub resolves `owner/repo` **case-insensitively**. Every identity comparison in the
+ingest path was an exact string `=`, and both unique indexes were case-sensitive —
+`sources_public_url_uq` on the raw `url`, `discovered_repos_uq` on the raw `(owner, repo)`.
+
+So when code search reported `NVIDIA/skills` on one crawl day and `nvidia/skills` on
+another, the second was a *new* candidate, `promote()` looked for `url =` and found
+nothing, and the repository got a second source row. **15 repositories reached that state**
+— `NVIDIA/skills` holding 268 indexed skills and `nvidia/skills` another 99. One repository
+fetched twice, its skills split across two rows, its GitHub quota spent twice, and both
+rows counted separately in every per-source statistic.
+
+Nothing errored. Two rows was exactly what the schema permitted.
+
+> **It surfaced sideways, which is the part worth remembering.** Nobody was looking for it.
+> It fell out of a `group by lower(name)` run while checking whether the archetype band's
+> `CURATED_SOURCES` lookup — a `Set` of `owner/repo` strings — could miss a curated source.
+> It could: `NVIDIA/skills` matched the seed list and `nvidia/skills` did not, so a third of
+> that repository was banded untrusted. A case-sensitive `Set.has` on data GitHub considers
+> case-insensitive is the same bug as the index, one layer up.
+
+**Folded in the index, not normalised in the row.** `name` and `url` keep whatever casing
+GitHub reported, because that is what a reader and an attribution list should see —
+`NVIDIA/skills`, not `nvidia/skills`. Only the comparison folds. Rewriting the column would
+make the display wrong to fix the lookup, and would still leave the next call site free to
+compare exactly.
+
+Both halves are needed and they do different jobs: `sameRepoUrl` / `sameRepoSegment` keep
+the code from creating a duplicate, and the folded indexes make it impossible for a call
+site that forgets them. Applied at every identity resolution — `promote`, `submit`,
+`seed-run`, `upsertSource`, the curation queue — **and in `compliance/takedown.ts`, which
+was the one with teeth**: a takedown matches `sources.url = takedowns.source_url`, and
+notices are hand-entered by a curator from an email, so a casing difference meant a block
+that silently did not enforce.
+
+**`kind` is in the key on purpose.** `ComposioHQ/awesome-claude-skills` is on the seed
+*list* allow-list, read for the repo links inside it, and the crawl separately promoted it
+as a content repo shipping six skills of its own. Two connectors, two legitimate reads of
+one URL. Folding without `kind` would have forced one to be deleted. It does not reopen the
+bug — every duplicate group was a single `kind`, which is why the merge covers 14 groups
+and not 15.
+
+**25 skills were deleted, and only those 25.** Three repositories had the same upstream
+*path* under both casings. After repointing they would be two `skills` rows sharing one
+`(source_id, path)` — and the write path resolves that key with `limit(1)` and **no
+`ORDER BY`**, so the next sync would update an arbitrary one and leave the other
+permanently stale: never refreshed, and never tombstoned either, because its path is still
+in the enumeration. The staler *fetch* lost, not the losing source's copy; in all 25 cases
+the fresher content had come through the lowercase row, and three scored better for it
+(`vss-manage-alerts` 19 → 59).
+
+> Deleted rather than linked under `canonical_skill_id`, which was the tempting answer.
+> That column is owned by `analytics/dedupe.ts`, whose `--reset` clears **every** value in
+> the table — so a variant link written by a migration would be undone by an unrelated
+> dedup re-run, restoring the ambiguity with nobody watching. These rows are an artefact of
+> our own bug, not upstream content, and the bytes are re-fetchable.
+
+Merge rules, each protecting something: winner is **most versions, then oldest, then id**
+(most versions keeps the larger half; oldest carries GitHub's own casing; id makes a re-run
+deterministic). `config` merges as `loser || winner`, so an `allowLargeRepo`, `approvedBy`
+or `includePaths` on the row being deleted is not discarded — the same "decision recorded
+then ignored" failure as the three below. `hit_count` takes the **max, not the sum**:
+it records what code search saw in one sighting, and adding two sightings together would
+invent evidence.
+
+Result: sources **909 → 895**, candidates **3,317 → 3,277**, skills −25. The confirmation
+is arithmetic nobody had to trust: merged, `NVIDIA/skills` holds **346 indexed skills
+against the 348 markers GitHub reports** — the split had been hiding 78 of them.
+
+> **The migration was dry-run against the real database inside a rolled-back transaction
+> before it was applied, and that is what caught the bug in it.** `array_agg` over a
+> `text[]` column returns a 2-D array whose subscript is an *element*, not a row, so the
+> `sample_paths` merge failed with `COALESCE types text[] and text cannot be matched`. A
+> migration reviewed only by reading is a migration whose first execution is in production.
+
+`verify:dedup` **attempts the insert that caused the bug** and requires a `23505`, rather
+than asserting the data is currently clean — clean data proves nothing about whether it can
+get dirty again. Same shape as `verify:http-deadline` and `verify:db-retry`.
+
+> Its `(source, path)` check must be scoped to public `github_repo` sources, and the scope
+> is a finding rather than a convenience: each organisation's `builder` source deliberately
+> holds every published draft at `SKILL.md`. It is never enumerated — `enabled = false`, no
+> upstream — so the write path never resolves that key against it. The unscoped version read
+> the builder as a defect, which is how it first came back red.
+
+**Still open:** archetype v6 was mined before this merge, so its R3.4 attribution lists
+`NVIDIA/skills` and `nvidia/skills` as two contributors. `mineAndStore` skips on an
+unchanged skeleton and matching miner version, and `--force` only bypasses the evidence
+gate, so there is no way to re-store without a real change. The next mine after labelling
+corrects it.
+
 ### Three bugs with one shape: a decision recorded, then ignored
 
 All three surfaced in an afternoon, all three let an operator make a choice the system then
@@ -1628,8 +1722,64 @@ The confirming detail: curated skills average **95** on our quality score agains
 the rest. The professionally-built ones score *worse* on our own metric, which is the
 clearest possible statement that the metric was measuring the wrong thing.
 
-`MINER_VERSION` is 2.0.0 and the v1 rows are kept — archetypes are append-only, so the
+`MINER_VERSION` is 2.2.0 and every earlier row is kept — archetypes are append-only, so the
 broken generation stays visible as history rather than being quietly overwritten.
+
+#### A proxy has to be maintained, and this one silently went stale (2026-09-03)
+
+`SEED_REPOS` *is* the strong band. That makes it the one policy constant in this codebase
+where **not editing it is itself a decision**, and nobody was making it deliberately.
+
+Written in August against a 16k corpus it held 18 repos. Sync then finished at 49,258
+indexed skills and those 18 supplied **865 of them — 1.8%**. Everything else was the weak
+band by construction. Meanwhile the skills.sh reconciliation had delivered the first-party
+vendor repos the list exists to name: **27 of them holding 1,987 indexed skills, 2.3× the
+entire strong band, all banded as untrusted** — NVIDIA, Google, Adobe, Salesforce,
+Microsoft, OpenAI, Grafana, Elastic, HashiCorp.
+
+The decisive tell was one organisation on **both sides** of the contrast: `getsentry/skills`
+curated and `getsentry/sentry-for-ai` not; `anthropics/skills` curated and
+`anthropics/knowledge-work-plugins` — ten times larger — not. A contrast like that is not
+measuring craft. It is measuring which URLs somebody typed in August, and every `lift` in
+v5 was diluted by exactly that.
+
+**The rule now written into the file: first-party — the GitHub organisation owns the product
+the skills document.** Checkable from the org rather than a quality opinion, and the same
+judgement the vendor section already made. Stars are not a criterion: `celigo/ai` has three
+and `sumsub/agent-skills` six, and both are a vendor documenting its own product for agents.
+Popularity gets no vote here for the same reason it gets none in R2.9's search ranking.
+Notable individuals (`antfu`, `addyosmani`, `chrisbanes`) are deliberately **not** in — that
+is the high-signal-community class, a different rule, and mixing the two in one pass would
+leave the band with no statable definition.
+
+51 repositories added, **all 51 verified against the GitHub tree API first**, none from
+memory — the same standard `seeds.ts` already set after three of its hand-written entries
+turned out to be 404s.
+
+> **The band lookup was also case-sensitive, and the corpus holds 15 repos twice.** GitHub
+> treats `owner/repo` case-insensitively; our `sources` table does not. `NVIDIA/skills` and
+> `nvidia/skills` are **one repository** stored as two rows with 268 and 99 indexed skills,
+> so an exact-match lookup would have credited one and banded its twin as untrusted — a
+> silent half-count of a curated source, which is precisely the drift the comment above
+> `CURATED_SOURCES` exists to prevent. Both sides are lower-cased now. The 15 duplicate
+> source rows are a separate ingestion bug and are still open.
+
+Result: strong band **865 → 3,586** indexed skills (1.8% → 7.3%), and re-mining stored v6
+for ten categories (v3 for `edit-refactor` and `transform-data`, v5 for `research`). All
+twelve still clear the evidence gate; `automate-browser` still fails it at 37 structures
+against a floor of 50, unchanged. Every new row carries R3.4 attribution — verified, not
+assumed.
+
+**`edit-refactor` is the clearest single gain.** It was the thin one-section skeleton this
+file has flagged twice — only `purpose`, at +25. With the band corrected it mines four
+sections (`how-it-works`, `steps`, `examples` added). The other twelve roles had been
+measured all along; what was missing was a strong band big enough to separate them.
+
+> **The taxonomy still bounds all of this.** These v6 rows are mined from the same 4,101
+> labelled skills as v5 — **8% of the corpus**, down from ~25% at the last audit, because
+> sync tripled the corpus and labelling did not move. v6−v5 isolates the band fix. The next
+> re-mine, after labelling, isolates the evidence. Keeping those two changes in separate
+> versions is the only way either number means anything.
 
 ### Measure structural diversity, not source concentration
 
@@ -1781,6 +1931,165 @@ classified. Same reasoning as `reviewCategory("reject")`.
 > from the registry and, since the floor fix above, from archetype mining — which is exactly
 > "keep the flag, do not use it for signals". What is left to decide is `REVIEW_FLOOR`
 > itself, not the rows.
+
+### The taxonomy keeps no history, so "did the vocabulary change help?" is unanswerable
+
+`pnpm taxonomy --compare` · `--sample N --relabel` · `versionComparison()`
+
+`skill_categories_uq` is **`(skill_id, axis, value)`**. `classifier_version` is a column, not
+part of the key — so re-classifying a skill **updates its rows in place** and the previous
+version's answer for that label is destroyed. `verdicts` is append-only per
+`analyzer_version`; this table deliberately is not, because for *serving* a category only the
+current answer matters.
+
+That is fine until someone tries to evaluate a vocabulary change, which is the loop
+`classify.ts` describes as the whole point of sampling: read the labels, change a
+description, run again. **You cannot measure the "again".**
+
+The trap is that it does not look broken. On a skill that has been re-classified, the rows
+still stamped with the old version are exactly the labels the new vocabulary **stopped
+assigning** — so comparing them against the new output compares what the new vocabulary
+rejected with what it chose, and flatters the new vocabulary by construction.
+
+> **Measured, after 300 skills were relabelled specifically to build a paired set:** 146
+> skills carried both versions, holding **159 surviving old rows against 390 new ones**, and
+> **113 of the 146 had no surviving old *function* label at all** — impossible for a skill
+> that was ever classified, since every classification assigns one. The comparison duly
+> reported the domain held rate falling **22.2% → 9.8%**, a strong improvement, entirely
+> fabricated by the selection.
+>
+> The integrity check is now that arithmetic: a paired skill with no prior function label
+> proves its prior rows were overwritten, and one is enough, so the threshold is zero.
+> `--compare` exits non-zero with the reason instead of printing the numbers. A command that
+> prints a confident wrong answer is worse than one that prints nothing — this one exists to
+> decide whether to spend ~$130.
+
+**What is measurable without history** is the unpaired rate at which each category is used.
+**Per skill, never as a share of labels** — that mistake was made once here and inverted a
+conclusion. When labels-per-skill falls, a category can shrink in absolute terms while its
+*share* holds steady, because everything around it shrank too: `meta-agent-tooling` went
+19.9% → 23.3% → 22.4% by share across three versions and 0.341 → 0.368 → **0.260** per
+skill. The share said it was getting worse. It was getting better.
+
+| per skill | 1.1.0 | 1.2.0 | 1.3.0 |
+|---|---|---|---|
+| domain labels | 1.713 | 1.581 | **1.160** |
+| `meta-agent-tooling` | 0.341 | 0.368 | **0.260** |
+| `software-engineering` | 0.361 | 0.309 | **0.190** |
+| `business-operations` | 0.143 | 0.056 | **0.040** |
+| domain held | 10.3% | 11.4% | **2.6%** |
+| domain avg confidence | 74 | 73 | **81** |
+
+**The fix, when history is worth it:** add `classifier_version` to the unique key. That costs
+a migration plus a decision about which row every read path serves. Not before the bulk run,
+because the bulk run is what makes the question expensive.
+
+### The prompt beat the definition, and the axes' own asymmetry proved it
+
+1.2.0 narrowed `meta-agent-tooling` in its description — *"skills that merely happen to be
+written for an agent do not belong here"* — and it was used **more**. The description was
+never the cause. `SYSTEM` said, two rules later:
+
+> Many skills are general-purpose developer tooling: for those, use the software-engineering
+> or meta-agent-tooling domain rather than reaching for a specialised one.
+
+The prompt nominated it as the fallback. **An instruction beats a definition**, and no amount
+of rewriting the definition was going to win.
+
+The rationales proved it rather than suggesting it — every low-confidence
+`meta-agent-tooling` row named a *different* primary domain in its own reasoning:
+`spring-boot-engineer` at 35 said "serving general Java application domain",
+`import-infrastructure-as-code` at 35 said "software-engineering is primary domain",
+`codebase-documenter` at 35 said "the subject is explaining how application source code
+works". The model agreed with the definition and obeyed the instruction anyway. 104 of 163
+assignments sat alongside another domain.
+
+**The asymmetry across the two axes is the clincher, and it was sitting in the same prompt.**
+
+| rule | held |
+|---|---|
+| function — *"Prefer ONE function. A second is for a skill that genuinely performs two distinct kinds of work, not for one that is merely thorough."* | **2.7%** |
+| domain — *"Give one to three domains… use software-engineering or meta-agent-tooling rather than reaching for a specialised one."* | **9.8%** |
+
+Same model, same skills, same call. One axis was asked to be decisive and was; the other was
+invited to hedge and hedged. 1.3.0 gives the domain rule the function rule's shape and
+deletes the fallback sentence.
+
+Result on 100 skills: domain held **11.4% → 2.6%** — 3 held where 13.2 were expected at the
+old rate, **3.0 standard deviations**, so not sample noise. Domain confidence 73 → 81.
+`meta-agent-tooling` kept every case it should: 18 of its 26 assignments score ≥80 against 51
+of 137 before, avg confidence 73 → 82, held 21 → 1. The label is now used confidently or not
+at all.
+
+> **1.2.0's description work was not wasted, and this is why both belong.** The boundary
+> clauses moved what only they could move — `business-operations` 0.143 → 0.056 per skill
+> before the prompt was touched at all. Definitions fix *which* category; instructions fix
+> *how many*. Chasing the second with the first is what cost a version.
+>
+> Bumped to 1.3.0 even though no vocabulary *entry* changed, because `classifier_version`
+> has to mean "what decided this label" for R7.2 to hold. A prompt change under a fixed
+> version leaves rows from two different classifiers wearing one number.
+
+### Two numbers that disagreed with what they claimed to measure
+
+Both found on 2026-09-03, both in the taxonomy status surfaces, and both the same fault.
+
+**"Archetype-ready" counted skills; the gate counts structures.** `pnpm taxonomy --status`
+reported *13 function categories archetype-ready* the moment `automate-browser` crossed 50
+confident skills. The miner refused it in the same breath — `gate FAIL (46 distinct
+structures, needs 50)`. Both numbers were correct and they answered different questions; the
+status command was the more optimistic and the less correct, which is the worst pairing,
+because it is the one someone reads to decide whether to mine.
+
+> **The first fix was a near-proxy and would have been worse than the bug.** Wiring the
+> status to `templates.ts`'s `categoryEvidence()` produced **45** against the miner's 46 —
+> it omits the size band from the signature and skips the `canonical_skill_id` and
+> `quality_score` filters. The two errors run in opposite directions and roughly cancel, so
+> it passes a glance and fails on any category where they do not. That would have swapped a
+> *visible* contradiction for an invisible one.
+>
+> `gateEvidence()` in `archetype.ts` shares `representatives()`'s `where` clause and its
+> signature expression verbatim, and reports 46. Both numbers are now on every status row,
+> so the gap is visible rather than being a disagreement between two commands.
+
+`MIN_BAND` is deliberately not applied there: the curated/other split belongs to
+`mineArchetype`, and a status line is not worth a full mine per category. A category can
+clear the gate and still fail on a thin band, which the miner says when it happens.
+
+**And the same mistake, once more, in the fix.** `readyForArchetype` was computed by
+filtering `counts` — which is scoped to `TAXONOMY_VERSION`. Bumping the vocabulary to 1.2.0
+therefore reported **0 minable** with twelve categories minable in fact, because the miner
+filters on no version at all. It now counts over `evidence`. Measuring the gate with
+something that is not the gate, twice in one afternoon.
+
+### A bumped vocabulary must not look like data loss
+
+`TAXONOMY_VERSION` 1.1.0 → 1.2.0 emptied Settings → Taxonomy completely: every coverage card
+read *"Nothing classified yet. Run a sample above."* over a table holding **12,944
+assignments across 4,701 skills**.
+
+Technically true — `counts` is scoped to the current version and nothing had been labelled at
+1.2.0 yet — and operationally a lie. The labels exist, they are still what the registry
+serves and what archetype mining reads, and they are queued for re-classification rather
+than gone. **A blank screen is the one state an operator cannot tell apart from data loss**,
+which is the heartbeat's argument in another costume: a completion record cannot answer "is
+it stuck", and an empty table cannot answer "was this wiped".
+
+So `taxonomySummary` also returns the newest superseded version and its per-category
+coverage. The panel says what moved and the cards fall back to muted bars labelled with the
+old version, instead of an empty state.
+
+- **Newest prior version only, never every prior version summed.** A skill labelled under
+  both 1.0.0 and 1.1.0 would be counted twice, and a number nobody can reconcile against the
+  table is worse than no number.
+- **Structure counts and gate ticks are dropped in the fallback.** Those describe the corpus
+  as the miner reads it *today*; hanging them off superseded labels would put two vocabulary
+  versions in one row.
+
+> No migration was involved and none was possible: `skill_categories.value` and
+> `classifier_version` are plain `text`, and the vocabulary lives only in code behind
+> `isValidCategory()`. Worth stating because "the categories changed" sounds like a schema
+> change and is not one — the only enum on that table is `axis`.
 
 ### The low-confidence queue is paged, because it is 1,130 deep
 
@@ -2115,6 +2424,7 @@ pnpm verify:lists | verify:revocation | verify:export | verify:takedown | verify
 pnpm verify:telemetry
 pnpm verify:otp | verify:db-retry        # both free, no network, no database
 pnpm verify:http-deadline | verify:rate-limit   # free; both reproduce the bug first
+pnpm verify:dedup                        # repo identity folds case; free, probes then rolls back
 pnpm registry --status | --import        # skills.sh reconciliation via its sitemap; free
 pnpm verify:builder                      # COSTS MONEY — two model calls
 pnpm validate:verify | db:verify-rls

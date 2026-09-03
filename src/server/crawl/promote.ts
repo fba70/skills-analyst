@@ -6,6 +6,7 @@ import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/server/db";
 import { discoveredRepos, events, sources } from "@/server/db/schema";
 
+import { sameRepoUrl } from "./repo-identity";
 import { decidePromotion, discoveryPolicy, isExcludedPath, type PromotionDecision } from "./policy";
 
 /**
@@ -177,7 +178,7 @@ async function promote(
     const [existing] = await tx
       .select({ id: sources.id })
       .from(sources)
-      .where(and(eq(sources.url, url), isNull(sources.orgId)))
+      .where(and(sameRepoUrl(sources.url, url), isNull(sources.orgId)))
       .limit(1);
 
     let sourceId = existing?.id;
@@ -399,7 +400,7 @@ async function releaseSource(id: string, url: string, reason: string): Promise<v
     await tx
       .update(discoveredRepos)
       .set({ status: "promoted", skipReason: null })
-      .where(eq(discoveredRepos.url, url));
+      .where(sameRepoUrl(discoveredRepos.url, url));
 
     await tx.insert(events).values({
       actorType: "system",

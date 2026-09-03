@@ -109,8 +109,18 @@ const MIN_BAND = 15;
  * A hand-copied list here would drift from `seeds.ts` the first time someone added a vendor
  * repository, and the drift would be invisible — the archetype would simply be mined from a
  * slightly wrong idea of which sources are trusted.
+ *
+ * ## Lower-cased on both sides, because the corpus holds the same repo under two casings
+ *
+ * GitHub treats `owner/repo` case-insensitively; our `sources` table does not, and 15 pairs
+ * of rows differ only in case. `NVIDIA/skills` and `nvidia/skills` are one repository with
+ * 268 and 99 indexed skills respectively — so an exact-match band lookup would have credited
+ * one row and banded its twin as untrusted. That is a silent half-count of a curated source,
+ * which is the failure mode this comment block exists to prevent one line above.
  */
-const CURATED_SOURCES: ReadonlySet<string> = new Set(SEED_REPOS.map((seed) => seed.repo));
+const CURATED_SOURCES: ReadonlySet<string> = new Set(
+  SEED_REPOS.map((seed) => seed.repo.toLowerCase()),
+);
 
 type Representative = {
   skillId: string;
@@ -189,6 +199,7 @@ async function representatives(category: string): Promise<Representative[]> {
           else 'sm'
         end as signature
       from skill_categories c
+      -- Kept identical to gateEvidence below. See the note on that function.
       join skills sk on sk.id = c.skill_id
       join skill_versions sv on sv.id = sk.current_version_id
       join sources src on src.id = sv.source_id
@@ -233,9 +244,84 @@ async function representatives(category: string): Promise<Representative[]> {
       descriptionLength: (row.description_length as number) ?? 0,
       descriptionShape: (row.description_shape ?? {}) as Record<string, unknown>,
       redistribution: row.redistribution as string,
-      curated: CURATED_SOURCES.has(row.source as string),
+      curated: CURATED_SOURCES.has(String(row.source ?? "").toLowerCase()),
     };
   });
+}
+
+/**
+ * Per-category evidence, measured exactly the way the gate measures it.
+ *
+ * ## Why this is not `templates.ts`'s `categoryEvidence()`
+ *
+ * That function answers a neighbouring question and its numbers are close enough to look
+ * interchangeable, which is the trap. Two differences make it a different measurement:
+ *
+ *   - it has **no size band** in the signature, so two skills with the same section roles
+ *     and wildly different lengths collapse into one structure, where the miner counts two;
+ *   - it does not filter `canonical_skill_id is null` or `quality_score is not null`, so it
+ *     counts rows `representatives()` never sees.
+ *
+ * The errors run in opposite directions and roughly cancel — `automate-browser` reported 45
+ * against the miner's 46 — which is exactly why substituting one for the other passes a
+ * glance and fails on a category where they do not cancel.
+ *
+ * `pnpm taxonomy --status` used to answer "is this minable" with confident *skills*, which
+ * announced `automate-browser` ready at 54 while the miner refused it at 46 structures.
+ * Replacing that with a near-proxy would have swapped a visible contradiction for an
+ * invisible one. So the status reads this, and this shares its `where` clause and its
+ * signature expression with `representatives()` verbatim.
+ *
+ * `MIN_BAND` is not applied: the curated/other split belongs to `mineArchetype`, and a
+ * status line is not worth a full mine per category. A category can clear this and still
+ * fail on a thin band, which the miner reports when it happens.
+ */
+export async function gateEvidence(): Promise<
+  Array<{ category: string; skills: number; structures: number; sources: number }>
+> {
+  const result = await db.execute(sql`
+    with labelled as (
+      select
+        c.value as category,
+        sk.id as skill_id,
+        src.name as source,
+        (
+          select coalesce(string_agg(h.role, '>' order by h.ord), '(none)')
+          from jsonb_array_elements(st.headings) with ordinality as e(value, ord)
+          cross join lateral (select e.value->>'role' as role, e.ord as ord) h
+          where h.role is not null
+        ) || ' @' || case
+          when st.word_count >= 2000 then 'lg'
+          when st.word_count >= 750 then 'md'
+          else 'sm'
+        end as signature
+      from skill_categories c
+      join skills sk on sk.id = c.skill_id
+      join skill_versions sv on sv.id = sk.current_version_id
+      join sources src on src.id = sv.source_id
+      join skill_structures st on st.skill_version_id = sv.id
+        and st.extractor_version = ${EXTRACTOR_VERSION}
+      where c.axis = 'function'
+        and (c.confidence >= ${REVIEW_FLOOR} or c.reviewed_at is not null)
+        and sk.status = 'indexed'
+        and sk.canonical_skill_id is null
+        and sk.quality_score is not null
+    )
+    select category,
+           count(distinct skill_id)::int as skills,
+           count(distinct signature)::int as structures,
+           count(distinct source)::int as sources
+    from labelled
+    group by category
+    order by count(distinct signature) desc
+  `);
+
+  return result.rows as Array<{
+    category: string;
+    skills: number;
+    structures: number;
+    sources: number;
+  }>;
 }
 
 /** What authoring taught us about a section (R6.2). Null until the bounds are cleared. */

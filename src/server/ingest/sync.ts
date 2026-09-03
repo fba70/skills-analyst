@@ -5,6 +5,7 @@ import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { activeBlocks } from "@/server/compliance/takedown";
 import { githubConnector } from "@/server/connectors/github";
 import type { Connector, SourceConfig } from "@/server/connectors/types";
+import { sameRepoUrl } from "@/server/crawl/repo-identity";
 import { discoveryPolicy, ingestPolicy } from "@/server/crawl/policy";
 import { mapWithConcurrency } from "@/server/lib/concurrency";
 import { beat } from "@/server/pipeline/heartbeat";
@@ -233,7 +234,7 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
   const [sourceRow] = await db
     .select({ config: sources.config })
     .from(sources)
-    .where(eq(sources.url, options.sourceUrl))
+    .where(sameRepoUrl(sources.url, options.sourceUrl))
     .limit(1);
   const sourceConfig = (sourceRow?.config ?? {}) as Record<string, unknown>;
 
@@ -653,12 +654,12 @@ async function holdForReview(
         healthDetail: { reason, markerCount, threshold, heldBy: kind },
         updatedAt: new Date(),
       })
-      .where(eq(sources.url, url));
+      .where(sameRepoUrl(sources.url, url));
 
     await tx
       .update(discoveredRepos)
       .set({ status: "needs_review", skipReason: reason })
-      .where(eq(discoveredRepos.url, url));
+      .where(sameRepoUrl(discoveredRepos.url, url));
 
     await tx.insert(events).values({
       orgId,
@@ -681,7 +682,7 @@ async function upsertSource(
   const existing = await db
     .select({ id: sources.id })
     .from(sources)
-    .where(and(eq(sources.url, url), orgId === null ? isNull(sources.orgId) : eq(sources.orgId, orgId)))
+    .where(and(sameRepoUrl(sources.url, url), orgId === null ? isNull(sources.orgId) : eq(sources.orgId, orgId)))
     .limit(1);
 
   if (existing[0]) return existing[0].id;
@@ -958,6 +959,22 @@ async function writeSkillVersionOnce(
           sql`${skillVersions.provenance}->>'path' = ${ref.path}`,
         ),
       )
+      /**
+       * Ordered, because `limit(1)` over an unordered set picks arbitrarily.
+       *
+       * One `(source, path)` should resolve to exactly one skill, and normally does — the
+       * join multiplies by *versions* of the same skill, which all carry one `skills.id`.
+       * It stopped being true when a case-sensitive identity index let one repository hold
+       * two `sources` rows: migration 0021 merged them, and 25 paths existed on both sides.
+       * Had that merge repointed without resolving the overlap, this query would have
+       * updated an arbitrary one of the two per sync — and left the other permanently
+       * stale, never refreshed and never tombstoned, because its path is still enumerated.
+       *
+       * The overlap is gone and the folded indexes stop it recurring. The order stays: it
+       * costs nothing, and "arbitrary but usually only one candidate" is the shape of bug
+       * that hides for months and then reads as upstream flakiness.
+       */
+      .orderBy(skills.firstSeenAt, skills.id)
       .limit(1);
 
     let skillId: string;

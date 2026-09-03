@@ -2,6 +2,7 @@ import "server-only";
 
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
+import { sameRepoUrl } from "@/server/crawl/repo-identity";
 import { requireAdmin } from "@/server/dal/admin";
 import { pageWindow, type Paged, type PageQuery } from "@/server/dal/paging";
 import { db } from "@/server/db";
@@ -65,7 +66,7 @@ export async function listHeldRepos(query: PageQuery = {}): Promise<Paged<HeldRe
       sourceEnabled: sources.enabled,
     })
     .from(discoveredRepos)
-    .leftJoin(sources, eq(sources.url, discoveredRepos.url))
+    .leftJoin(sources, sql`lower(${sources.url}) = lower(${discoveredRepos.url})`)
     .where(eq(discoveredRepos.status, "needs_review"))
     .orderBy(desc(discoveredRepos.stars), desc(discoveredRepos.hitCount))
     .limit(window.pageSize)
@@ -94,7 +95,7 @@ export async function approveRepo(repoId: string): Promise<void> {
     const [existing] = await tx
       .select({ id: sources.id, config: sources.config })
       .from(sources)
-      .where(eq(sources.url, repo.url))
+      .where(sameRepoUrl(sources.url, repo.url))
       .limit(1);
 
     let sourceId = existing?.id;
@@ -163,7 +164,7 @@ export async function rejectRepo(repoId: string, reason: string): Promise<void> 
     await tx
       .update(sources)
       .set({ enabled: false, health: "paused", updatedAt: new Date() })
-      .where(eq(sources.url, repo.url));
+      .where(sameRepoUrl(sources.url, repo.url));
 
     await tx.insert(events).values({
       actorType: "user",

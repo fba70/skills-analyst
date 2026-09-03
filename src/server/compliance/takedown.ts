@@ -2,6 +2,7 @@ import "server-only";
 
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
+import { sameRepoUrl } from "@/server/crawl/repo-identity";
 import { db } from "@/server/db";
 import { events, skills, skillVersions, sources, takedowns } from "@/server/db/schema";
 import { deleteBundle } from "@/server/storage";
@@ -169,7 +170,7 @@ async function applyUphold(
     .innerJoin(sources, eq(sources.id, skillVersions.sourceId))
     .where(
       and(
-        eq(sources.url, takedown.sourceUrl),
+        sameRepoUrl(sources.url, takedown.sourceUrl),
         takedown.scope === "skill"
           ? sql`${skillVersions.provenance}->>'path' = ${takedown.skillPath}`
           : sql`true`,
@@ -208,7 +209,7 @@ async function applyUphold(
           healthDetail: `withdrawn on request (takedown ${id.slice(0, 8)})`,
           updatedAt: new Date(),
         })
-        .where(eq(sources.url, takedown.sourceUrl));
+        .where(sameRepoUrl(sources.url, takedown.sourceUrl));
     }
 
     await tx
@@ -379,7 +380,7 @@ async function applyReinstate(
       .where(
         and(
           eq(skillVersions.status, "withdrawn"),
-          eq(sources.url, row.sourceUrl),
+          sameRepoUrl(sources.url, row.sourceUrl),
           row.scope === "skill"
             ? sql`${skillVersions.provenance}->>'path' = ${row.skillPath}`
             : sql`true`,
@@ -402,7 +403,7 @@ async function applyReinstate(
       await tx
         .update(sources)
         .set({ enabled: true, health: "unknown", healthDetail: null, updatedAt: new Date() })
-        .where(eq(sources.url, row.sourceUrl));
+        .where(sameRepoUrl(sources.url, row.sourceUrl));
     }
 
     await tx
