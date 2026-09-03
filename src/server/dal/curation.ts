@@ -1,8 +1,8 @@
 import "server-only";
 
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 
-import { sameRepoUrl } from "@/server/crawl/repo-identity";
+import { contentSourceAt, DISCOVERY_ONLY_KINDS } from "@/server/crawl/repo-identity";
 import { requireAdmin } from "@/server/dal/admin";
 import { pageWindow, type Paged, type PageQuery } from "@/server/dal/paging";
 import { db } from "@/server/db";
@@ -66,7 +66,23 @@ export async function listHeldRepos(query: PageQuery = {}): Promise<Paged<HeldRe
       sourceEnabled: sources.enabled,
     })
     .from(discoveredRepos)
-    .leftJoin(sources, sql`lower(${sources.url}) = lower(${discoveredRepos.url})`)
+    /**
+     * Joined to the **content** source only, so one candidate cannot render twice.
+     *
+     * With `kind` in `sources_public_url_uq`, a URL may hold both an `awesome_list` row and
+     * a `github_repo` row — `ComposioHQ/awesome-claude-skills` does. An unrestricted join
+     * then emits two rows for one candidate: two approve/reject button pairs pointing at
+     * one id, a duplicate consuming a slot in `limit(pageSize)` while the separately
+     * counted `total` knows nothing about it, and the last real candidate on every page
+     * pushed off and reappearing on the next.
+     */
+    .leftJoin(
+      sources,
+      and(
+        sql`lower(${sources.url}) = lower(${discoveredRepos.url})`,
+        notInArray(sources.kind, [...DISCOVERY_ONLY_KINDS]),
+      ),
+    )
     .where(eq(discoveredRepos.status, "needs_review"))
     .orderBy(desc(discoveredRepos.stars), desc(discoveredRepos.hitCount))
     .limit(window.pageSize)
@@ -95,7 +111,7 @@ export async function approveRepo(repoId: string): Promise<void> {
     const [existing] = await tx
       .select({ id: sources.id, config: sources.config })
       .from(sources)
-      .where(sameRepoUrl(sources.url, repo.url))
+      .where(contentSourceAt(repo.url))
       .limit(1);
 
     let sourceId = existing?.id;
@@ -164,7 +180,7 @@ export async function rejectRepo(repoId: string, reason: string): Promise<void> 
     await tx
       .update(sources)
       .set({ enabled: false, health: "paused", updatedAt: new Date() })
-      .where(sameRepoUrl(sources.url, repo.url));
+      .where(contentSourceAt(repo.url));
 
     await tx.insert(events).values({
       actorType: "user",

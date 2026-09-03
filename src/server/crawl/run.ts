@@ -309,7 +309,26 @@ async function recordItems(
         skipReason: isFork ? "fork" : null,
       })
       .onConflictDoUpdate({
-        target: [discoveredRepos.host, discoveredRepos.owner, discoveredRepos.repo],
+        /**
+         * Expression target, matching `discovered_repos_uq` exactly.
+         *
+         * Migration 0021 folded that index to `(host, lower(owner), lower(repo))`. Postgres
+         * infers the arbiter index from the ON CONFLICT target, and a bare column list
+         * cannot match an expression index — it raises 42P10 rather than falling back. So
+         * every discovery write threw until this matched: `pnpm crawl` on its first
+         * repository, `pnpm registry --import` on the first of 2,422 rows, and `submit`
+         * inside its transaction, recording neither source nor candidate.
+         *
+         * `verify:dedup` stayed green throughout, because it probes a raw INSERT — a shape
+         * the application never uses. An ON CONFLICT target is a third reference to an
+         * index, after the `where` clauses and the definition itself, and it is the one no
+         * grep for a comparison operator can find.
+         */
+        target: [
+          discoveredRepos.host,
+          discoveredRepos.ownerFolded,
+          discoveredRepos.repoFolded,
+        ],
         set: {
           lastSeenAt: new Date(),
           hitCount: sql`${discoveredRepos.hitCount} + ${paths.length}`,

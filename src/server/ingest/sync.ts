@@ -5,7 +5,7 @@ import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { activeBlocks } from "@/server/compliance/takedown";
 import { githubConnector } from "@/server/connectors/github";
 import type { Connector, SourceConfig } from "@/server/connectors/types";
-import { sameRepoUrl } from "@/server/crawl/repo-identity";
+import { contentSourceAt, sameRepoUrl } from "@/server/crawl/repo-identity";
 import { discoveryPolicy, ingestPolicy } from "@/server/crawl/policy";
 import { mapWithConcurrency } from "@/server/lib/concurrency";
 import { beat } from "@/server/pipeline/heartbeat";
@@ -234,7 +234,7 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
   const [sourceRow] = await db
     .select({ config: sources.config })
     .from(sources)
-    .where(sameRepoUrl(sources.url, options.sourceUrl))
+    .where(contentSourceAt(options.sourceUrl))
     .limit(1);
   const sourceConfig = (sourceRow?.config ?? {}) as Record<string, unknown>;
 
@@ -389,7 +389,12 @@ export async function syncSource(options: SyncOptions): Promise<SyncReport> {
 
   const sourceId = options.dryRun
     ? null
-    : await upsertSource(options.sourceUrl, orgId, enumerated.repoLicenseSpdx);
+    : await upsertSource(
+        options.sourceUrl,
+        orgId,
+        enumerated.repoLicenseSpdx,
+        enumerated.canonicalName,
+      );
 
   /**
    * Skills in parallel, at the same width as every other bundle-shaped stage.
@@ -654,7 +659,7 @@ async function holdForReview(
         healthDetail: { reason, markerCount, threshold, heldBy: kind },
         updatedAt: new Date(),
       })
-      .where(sameRepoUrl(sources.url, url));
+      .where(and(contentSourceAt(url), isNull(sources.orgId)));
 
     await tx
       .update(discoveredRepos)
@@ -674,26 +679,75 @@ async function holdForReview(
   });
 }
 
+/**
+ * Finds or creates the content source, and **corrects its casing** when GitHub disagrees.
+ *
+ * The correction is the half that was missing. `sources.name` is derived from whatever URL
+ * reached us first — a code-search result, a sitemap entry, a curator's typing — and GitHub
+ * has exactly one correct spelling that only the API knows. Four seeds were stored as
+ * `hubspot`, `copilotkit`, `unity-technologies` and `shopify` for repositories GitHub calls
+ * `HubSpot`, `CopilotKit`, `Unity-Technologies` and `Shopify`.
+ *
+ * That is not cosmetic where it surfaces: `sources.name` is the string R3.4 attribution
+ * credits on `/archetypes`, so a vendor is publicly mis-credited. And it was unfixable —
+ * this function returned early on a hit and only ever set `name` on insert, while the folded
+ * lookups added for the dedup mean a correctly-cased re-submission now *finds* the
+ * wrong-cased row instead of creating a right one.
+ *
+ * So a re-sync repairs it, the same way a re-sync already repairs a licence that was
+ * resolved better than last time: self-healing on the path that runs anyway, rather than a
+ * one-off sweep somebody has to remember. Guarded to a pure case change — if the folded
+ * names differ, this is a different repository and renaming would be a bug, not a fix.
+ */
 async function upsertSource(
   url: string,
   orgId: string | null,
   repoLicenseSpdx: string | null,
+  canonicalName: string | null,
 ): Promise<string> {
   const existing = await db
-    .select({ id: sources.id })
+    .select({ id: sources.id, name: sources.name, url: sources.url })
     .from(sources)
-    .where(and(sameRepoUrl(sources.url, url), orgId === null ? isNull(sources.orgId) : eq(sources.orgId, orgId)))
+    .where(and(contentSourceAt(url), orgId === null ? isNull(sources.orgId) : eq(sources.orgId, orgId)))
     .limit(1);
 
-  if (existing[0]) return existing[0].id;
+  const fallbackName = url.replace(/^https?:\/\/(www\.)?github\.com\//i, "");
+  const name = canonicalName ?? fallbackName;
+
+  if (existing[0]) {
+    const current = existing[0];
+    const sameRepo = current.name.toLowerCase() === name.toLowerCase();
+    if (canonicalName && sameRepo && current.name !== canonicalName) {
+      await db
+        .update(sources)
+        .set({
+          name: canonicalName,
+          url: `https://github.com/${canonicalName}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(sources.id, current.id));
+
+      await db.insert(events).values({
+        orgId,
+        actorType: "system",
+        actorId: "ingest",
+        kind: "source.renamed",
+        subjectType: "sources",
+        subjectId: current.id,
+        reason: `casing corrected to GitHub's own spelling: ${current.name} -> ${canonicalName}`,
+        payload: { from: current.name, to: canonicalName },
+      });
+    }
+    return current.id;
+  }
 
   const [row] = await db
     .insert(sources)
     .values({
       orgId,
       kind: "github_repo",
-      name: url.replace(/^https?:\/\/(www\.)?github\.com\//i, ""),
-      url,
+      name,
+      url: canonicalName ? `https://github.com/${canonicalName}` : url,
       config: { repoLicenseSpdx },
       health: "healthy",
     })

@@ -8,7 +8,7 @@ import { githubConnector, parseRepoUrl } from "@/server/connectors/github";
 import { db } from "@/server/db";
 import { discoveredRepos, events, sources } from "@/server/db/schema";
 
-import { sameRepoSegment, sameRepoUrl } from "./repo-identity";
+import { contentSourceAt, sameRepoSegment } from "./repo-identity";
 import { discoveryPolicy, isExcludedPath } from "./policy";
 
 /**
@@ -136,14 +136,15 @@ export async function submitRepository(
     return { ok: false, reason: (error as Error).message };
   }
 
-  const url = `https://github.com/${owner}/${repo}`;
+  // Reassigned once GitHub tells us its own casing — see the note after the meta fetch.
+  let url = `https://github.com/${owner}/${repo}`;
 
   // Already a source? Say so plainly. Re-submitting a known repository is a normal thing
   // to do — the honest answer is "we have it", not a duplicate row.
   const [existingSource] = await db
     .select({ id: sources.id, name: sources.name })
     .from(sources)
-    .where(and(sameRepoUrl(sources.url, url), isNull(sources.orgId)))
+    .where(and(contentSourceAt(url), isNull(sources.orgId)))
     .limit(1);
 
   const [existingRepo] = await db
@@ -174,6 +175,24 @@ export async function submitRepository(
     meta = (await response.json()) as RepoMeta;
   } catch (error) {
     return { ok: false, reason: `Could not reach GitHub: ${(error as Error).message}` };
+  }
+
+  /**
+   * Adopt GitHub's own spelling now that we have it.
+   *
+   * `normalizeRepoInput` splits and strips `.git`; it cannot know that `hubspot` is really
+   * `HubSpot`. Everything below — the `sources.name` that R3.4 attribution credits on
+   * `/archetypes`, the `discovered_repos` row, the URL — was built from the submitted
+   * casing, so four seeds went in mis-cased and no later submission could correct them.
+   *
+   * `full_name` is the authority and it was already in this response, one line above,
+   * unused.
+   */
+  const canonical = meta.full_name?.split("/") ?? [];
+  if (canonical.length === 2 && canonical[0] && canonical[1]) {
+    owner = canonical[0];
+    repo = canonical[1];
+    url = `https://github.com/${owner}/${repo}`;
   }
 
   let refs: Awaited<ReturnType<typeof githubConnector.enumerate>>["refs"] = [];
@@ -315,7 +334,26 @@ export async function submitRepository(
       .insert(discoveredRepos)
       .values(values)
       .onConflictDoUpdate({
-        target: [discoveredRepos.host, discoveredRepos.owner, discoveredRepos.repo],
+        /**
+         * Expression target, matching `discovered_repos_uq` exactly.
+         *
+         * Migration 0021 folded that index to `(host, lower(owner), lower(repo))`. Postgres
+         * infers the arbiter index from the ON CONFLICT target, and a bare column list
+         * cannot match an expression index — it raises 42P10 rather than falling back. So
+         * every discovery write threw until this matched: `pnpm crawl` on its first
+         * repository, `pnpm registry --import` on the first of 2,422 rows, and `submit`
+         * inside its transaction, recording neither source nor candidate.
+         *
+         * `verify:dedup` stayed green throughout, because it probes a raw INSERT — a shape
+         * the application never uses. An ON CONFLICT target is a third reference to an
+         * index, after the `where` clauses and the definition itself, and it is the one no
+         * grep for a comparison operator can find.
+         */
+        target: [
+          discoveredRepos.host,
+          discoveredRepos.ownerFolded,
+          discoveredRepos.repoFolded,
+        ],
         set: values,
       });
 

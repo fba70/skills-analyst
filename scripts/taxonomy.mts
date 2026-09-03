@@ -1,7 +1,7 @@
 import "dotenv/config";
 
 import { DEFAULT_BATCH, MAX_BATCH, MODEL } from "../src/server/taxonomy/classify";
-import { MIN_SOURCES, MIN_STRUCTURES } from "../src/server/analytics/archetype";
+import { MIN_BAND, MIN_SOURCES, MIN_STRUCTURES } from "../src/server/analytics/archetype";
 import {
   classifySample,
   resyncCategoryArrays,
@@ -53,7 +53,7 @@ async function status() {
   console.info(`  not yet labelled  ${remaining}`);
   console.info(
     `  minable           ${readyForArchetype} function categories clear the evidence gate ` +
-      `(>= ${MIN_STRUCTURES} structures, >= ${MIN_SOURCES} sources)`,
+      `(>= ${MIN_STRUCTURES} structures, >= ${MIN_SOURCES} sources, >= ${MIN_BAND} in each band)`,
   );
 
   for (const axis of ["function", "domain"] as const) {
@@ -71,9 +71,9 @@ async function status() {
        * being a contradiction between two commands.
        */
       const e = axis === "function" ? byCategory.get(row.value) : undefined;
-      const gated = e ? e.structures >= MIN_STRUCTURES && e.sources >= MIN_SOURCES : false;
+      const gated = e?.meetsGate ?? false;
       const detail = e
-        ? ` · ${String(e.structures).padStart(3)} structures / ${String(e.sources).padStart(2)} sources${gated ? " ✓" : ""}`
+        ? ` · ${String(e.structures).padStart(3)} str / ${String(e.sources).padStart(2)} src / band ${String(e.strong).padStart(3)}v${String(e.weak).padStart(3)}${gated ? " ✓" : ""}`
         : "";
       console.info(
         `  ${labelFor(axis, row.value).padEnd(28)} ${String(row.confident).padStart(4)} confident ` +

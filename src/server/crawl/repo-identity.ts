@@ -1,6 +1,8 @@
 import "server-only";
 
-import { sql, type SQL } from "drizzle-orm";
+import { and, notInArray, sql, type SQL } from "drizzle-orm";
+
+import { sources } from "@/server/db/schema";
 import type { PgColumn } from "drizzle-orm/pg-core";
 
 /**
@@ -54,4 +56,42 @@ export function sameRepoUrl(column: PgColumn, url: string): SQL {
 /** `lower(column) = lower(value)` for a bare owner or repo segment. */
 export function sameRepoSegment(column: PgColumn, value: string): SQL {
   return sql`lower(${column}) = ${value.toLowerCase()}`;
+}
+
+/**
+ * Kinds that are read for the links inside them, never for content.
+ *
+ * `expandList` reads an `awesome_list` source for repo URLs; `pendingSources` excludes it
+ * because syncing one would try to ingest the list repository's own README as a skill.
+ */
+export const DISCOVERY_ONLY_KINDS = ["awesome_list", "github_code_search"] as const;
+
+/**
+ * "The source that holds this repository's content", which is not the same as
+ * "the source at this URL" any more.
+ *
+ * Migration 0021 put `kind` into `sources_public_url_uq` so that one repository could be
+ * both a curated **list** and a content repo — `ComposioHQ/awesome-claude-skills` is on the
+ * seed list allow-list *and* ships six skills of its own, and folding the case without
+ * `kind` would have forced one of those rows to be deleted.
+ *
+ * That was right, and it quietly removed a guarantee twelve call sites were relying on.
+ * Every one of them resolved a source by URL with `limit(1)` and no ordering, which was
+ * exactly one row by construction and is now a coin flip. The worst case is silent:
+ * `promote()` returning the list row sets `discovered_repos.source_id` to it, skips
+ * creating the content source, and marks the candidate `promoted` — while `pendingSources`
+ * filters `awesome_list` out, so the repository reads as done and is never fetched. No
+ * error, no held row.
+ *
+ * The four UPDATEs are the same shape in reverse: `rejectRepo` paused *both* rows, which
+ * stops `expandList` re-reading a curated list nobody rejected, and `seed-run`'s
+ * `onConflictDoNothing` means a later `pnpm seed --lists` cannot re-enable it.
+ *
+ * So every lookup that means "content" says so, and the ones that mean "any row at this
+ * URL" — only the curator queue's display join — say that instead.
+ */
+export function contentSourceAt(url: string): SQL {
+  // notInArray, not an array interpolated into raw SQL: binding a JS array inside a `sql`
+  // template renders a single parameter and Postgres rejects it.
+  return and(sameRepoUrl(sources.url, url), notInArray(sources.kind, [...DISCOVERY_ONLY_KINDS]))!;
 }

@@ -86,6 +86,29 @@ export const discoveredRepos = pgTable(
     url: text("url").notNull(),
 
     /**
+     * Case-folded identity, generated and stored.
+     *
+     * GitHub resolves `owner/repo` case-insensitively, so these are what uniqueness is on.
+     * `owner` and `repo` keep the casing GitHub reported, because that is what a reader and
+     * an R3.4 attribution list should see — `NVIDIA/skills`, not `nvidia/skills`.
+     *
+     * ## Columns rather than an expression index, and that is not cosmetic
+     *
+     * Migration 0021 first wrote this as `unique (host, lower(owner), lower(repo))`. It
+     * enforced correctly and broke every write: `onConflictDoUpdate` infers its arbiter
+     * index from the target, a bare column list cannot match an expression index, and
+     * Postgres raises **42P10** rather than falling back. `pnpm crawl`, `registry --import`
+     * and `submit` all threw. Drizzle 0.45's `target` accepts `PgColumn` only, so there was
+     * no way to name the expression from the call site either.
+     *
+     * Generated columns make the index expressible as ordinary columns, so every present
+     * and future upsert can name it. Same device `searchVector` uses, and for the same
+     * reason: generated and stored cannot drift from the row, with no trigger to forget.
+     */
+    ownerFolded: text("owner_folded").generatedAlwaysAs(sql`lower(owner)`),
+    repoFolded: text("repo_folded").generatedAlwaysAs(sql`lower(repo)`),
+
+    /**
      * Forks are the single largest duplicate class in the open crawl (Doc 2 R1.4), so
      * they are filtered at discovery rather than deduplicated after fetching.
      */
@@ -124,8 +147,11 @@ export const discoveredRepos = pgTable(
      * not — so code search returning `NVIDIA/skills` on one crawl day and `nvidia/skills`
      * on another produced two candidates, which `promote()` then turned into two `sources`
      * rows. This is the upstream half of that bug; `sources_public_url_uq` is the other.
+     *
+     * On the generated columns rather than on `lower(...)` expressions, so that
+     * `onConflictDoUpdate` can name it. See the note on `ownerFolded`.
      */
-    uniqueIndex("discovered_repos_uq").on(t.host, sql`lower(${t.owner})`, sql`lower(${t.repo})`),
+    uniqueIndex("discovered_repos_uq").on(t.host, t.ownerFolded, t.repoFolded),
     index("discovered_repos_status_idx").on(t.status, t.stars),
     index("discovered_repos_fork_idx").on(t.isFork),
   ],

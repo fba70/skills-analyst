@@ -44,6 +44,22 @@ export type SourceSignals = {
 
 export type EnumerateResult = {
   refs: SkillRef[];
+  /**
+   * The host's own canonical spelling of the repository, e.g. `NVIDIA/skills`.
+   *
+   * GitHub resolves `owner/repo` case-insensitively but has exactly one correct casing, and
+   * only the API knows it. Every other path into this system carries whatever a crawler,
+   * a sitemap or a curator's keyboard produced — so `hubspot/agent-cli-skills` was stored
+   * for `HubSpot/agent-cli-skills`, and four seeds went in mis-cased.
+   *
+   * That is not cosmetic where it lands: `sources.name` is what R3.4 attribution credits on
+   * `/archetypes`, so a vendor is publicly mis-credited. And nothing could correct it —
+   * `upsertSource` only ever inserts, and the folded lookups added for the dedup mean a
+   * later correctly-cased submission finds the wrong-cased row and leaves it alone.
+   *
+   * Null for connectors that have no authoritative name to offer.
+   */
+  canonicalName: string | null;
   /** Repo-level facts that apply to every skill found in this pass. */
   signals: SourceSignals;
   /** SPDX id from the host's own licence detection, or null. Repo-level: a hint only. */

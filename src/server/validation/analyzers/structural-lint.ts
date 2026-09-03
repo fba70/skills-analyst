@@ -35,10 +35,41 @@ export const structuralLint: Analyzer = {
    *         drift R2.12 exists to prevent. A dedicated scorer version would be more precise
    *         and is worth having once scoring changes more often than rules do.
    */
-  version: "1.4.0",
+  version: "1.5.0",
 
   run({ files, body, frontmatter, markerPath, dialect, resolvedName, resolvedSummary, parseError }) {
+
     const findings: Finding[] = [];
+
+    /**
+     * A description that is only a path is a symlink we read as a document.
+     *
+     * Git stores a symlink as a blob whose *content is the target path*, and over
+     * raw.githubusercontent.com that is literally what comes back —
+     * `../../../skills/docs-auditor/SKILL.md`. `isSymlink` filters these at enumeration
+     * now, but 101 indexed skills predate that filter and are still served: listed,
+     * searched, ranked, and downloadable, with a file path where their description should
+     * be.
+     *
+     * Blocking, because this is the one identity question that blocks — nothing describes
+     * the skill, and nothing can decide when it should trigger. The taxonomy already refuses
+     * to classify them (`classifiable.ts`), which stopped us *paying* for them; it did not
+     * stop us serving them, and those are different problems with different fixes.
+     *
+     * Anchored at both ends with no whitespace allowed, so it cannot catch prose: every real
+     * description contains a space.
+     */
+    const summaryText = (resolvedSummary ?? "").trim();
+    if (summaryText.length > 0 && /^[A-Za-z0-9_./-]+$/.test(summaryText) && summaryText.includes("/")) {
+      findings.push({
+        reason: "description-is-a-path",
+        severity: "high",
+        message:
+          `The description is a file path (\`${summaryText}\`), not a description — almost ` +
+          `always a git symlink read as a document, whose stored content is its target path.`,
+        file: markerPath,
+      });
+    }
     const bodyBytes = Buffer.byteLength(body, "utf8");
 
     const name = typeof frontmatter.name === "string" ? frontmatter.name.trim() : "";

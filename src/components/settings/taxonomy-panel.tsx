@@ -64,7 +64,25 @@ export type TaxonomyPanelProps = {
   * counted in structures throughout this codebase precisely because one generator's 300
   * clones are 300 skills and one structure.
   */
-  evidence: Array<{ category: string; structures: number; sources: number }>;
+  evidence: Array<{
+    category: string;
+    structures: number;
+    sources: number;
+    /** Curated / other band sizes, and whether all four gate conditions hold. */
+    strong: number;
+    weak: number;
+    meetsGate: boolean;
+  }>;
+  /**
+   * Computed server-side over version-agnostic evidence — do not recompute it here.
+   *
+   * The panel used to derive this from `coverage`, which is filtered to the current
+   * `TAXONOMY_VERSION`, so a vocabulary bump drove the tile to 0 while `pnpm taxonomy
+   * --status` printed 12 from the same underlying data. `taxonomySummary` fixed that in
+   * `readyForArchetype`; the value was then computed, returned, and dropped on the floor
+   * between the server component and this prop list.
+   */
+  minable: number;
   minStructures: number;
   minSources: number;
   /**
@@ -97,6 +115,7 @@ export function TaxonomyPanel(props: TaxonomyPanelProps) {
     remaining,
     notClassifiable,
     evidence,
+    minable,
     minStructures,
     minSources,
     stale,
@@ -109,11 +128,8 @@ export function TaxonomyPanel(props: TaxonomyPanelProps) {
   const priorFunctions = priorCounts.filter((row) => row.axis === "function");
   const priorDomains = priorCounts.filter((row) => row.axis === "domain");
   const byCategory = new Map(evidence.map((e) => [e.category, e]));
-  const clearsGate = (category: string) => {
-    const e = byCategory.get(category);
-    return Boolean(e && e.structures >= minStructures && e.sources >= minSources);
-  };
-  const ready = functions.filter((row) => clearsGate(row.value)).length;
+  const clearsGate = (category: string) => byCategory.get(category)?.meetsGate ?? false;
+
 
   return (
     <div className="grid gap-4">
@@ -124,6 +140,15 @@ export function TaxonomyPanel(props: TaxonomyPanelProps) {
         <strong>Domain</strong> is the field it serves, and it drives browse and filter.
       </p>
 
+      {/*
+        * Worded off what is actually on screen, not off `stale != null`.
+        *
+        * The first version asserted "the coverage below starts from zero" whenever any
+        * superseded row existed — printing a false sentence directly above cards drawing
+        * 2,431 current assignments, and staying there permanently while the relabel spend
+        * was deferred. `coverage.length` is the only thing that knows whether the cards are
+        * empty, so it decides the clause.
+        */}
       {stale ? (
         <div className="border-muted-foreground/25 bg-muted/40 rounded-lg border border-dashed p-3">
           <p className="text-sm">
@@ -134,10 +159,13 @@ export function TaxonomyPanel(props: TaxonomyPanelProps) {
               {stale.assignments.toLocaleString()} assignment
               {stale.assignments === 1 ? "" : "s"} across{" "}
               {stale.skills.toLocaleString()} skill
-              {stale.skills === 1 ? "" : "s"} were decided under {stale.version} and no
-              longer count as current, so the coverage below starts from zero. Nothing was
-              deleted — those labels are still what the registry serves and what archetype
-              mining reads, and they re-enter the sample queue on their own.
+              {stale.skills === 1 ? "" : "s"} were decided under an earlier vocabulary and
+              are queued for re-classification.{" "}
+              {coverage.length === 0
+                ? "Nothing has been labelled at the current version yet, so the coverage below shows the previous one."
+                : "The coverage below counts only what has been re-classified so far."}{" "}
+              Nothing was deleted — those labels are still what the registry serves and what
+              archetype mining reads.
             </span>
           </p>
         </div>
@@ -167,8 +195,8 @@ export function TaxonomyPanel(props: TaxonomyPanelProps) {
         />
         <Stat
           label="Minable"
-          value={ready}
-          detail={`functions at ${minStructures}+ structures, ${minSources}+ sources`}
+          value={minable}
+          detail={`functions at ${minStructures}+ structures, ${minSources}+ sources, both bands filled`}
         />
       </div>
 

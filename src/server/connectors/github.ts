@@ -260,6 +260,8 @@ export const githubConnector: Connector = {
     const detected = detectSkills(paths, { includePaths: config.includePaths });
 
     return {
+      // The API's own spelling, not the one we were asked with.
+      canonicalName: meta.full_name ?? null,
       refs: detected.map((skill) => ({
         path: skill.dir,
         dialect: skill.dialect,

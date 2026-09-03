@@ -55,10 +55,28 @@ export const MODEL = "anthropic/claude-haiku-4.5";
  * Not a tuning knob — a fuse. Every caller already passes its own limit; this is what
  * stops a typo'd argument or a loop from turning into a full-corpus spend. Raising it
  * should be a deliberate edit with a reason, not a default that drifted upward.
+ *
+ * **Raised 100 → 1000 on 2026-09-03, and here is the reason the comment above demands.**
+ * A 100-skill sample at TAXONOMY_VERSION 1.2.0 came back with function-axis confidence
+ * averaging 85 and zero assignments below the review floor, so the vocabulary had been read
+ * and checked before the ceiling moved — which is the condition this fuse exists to enforce,
+ * not a ceiling that is inherently right. At $0.002945 a skill a full 1000 run is ~$2.95,
+ * bounded well under the $50 platform cap.
+ *
+ * `classifyBatch` still walks pre-sliced chunks at concurrency 4, so a maximum run is 250
+ * sequential rounds — roughly 17 minutes. That is a throughput limit rather than a safety
+ * one, but it is the reason a 1000 batch is not simply better than ten 100s.
  */
 export const MAX_BATCH = 1000;
 
-/** Conservative default for an unattended call. Explicit beats implicit for spend. */
+/**
+ * Conservative default for an unattended call. Explicit beats implicit for spend.
+ *
+ * Raised 20 → 100 alongside the fuse. A bare `pnpm taxonomy --sample` now spends ~$0.29
+ * rather than ~$0.06 — still small, but no longer the "conservative" this line claims in
+ * absolute terms. It is conservative relative to the ceiling, which is what matters when the
+ * risk being managed is a typo'd argument.
+ */
 export const DEFAULT_BATCH = 100;
 
 /**

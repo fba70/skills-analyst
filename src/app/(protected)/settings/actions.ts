@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 
 import { buildSignatures, clusterDuplicates } from "@/server/analytics/dedupe";
 import { archetypeSummary, mineAll } from "@/server/analytics/archetype-run";
@@ -18,6 +18,7 @@ import {
   upholdTakedown,
   type TakedownInput,
 } from "@/server/compliance/takedown";
+import { contentSourceAt } from "@/server/crawl/repo-identity";
 import { db } from "@/server/db";
 import { skills, skillVersions, sources } from "@/server/db/schema";
 import { requireAdmin, setUserBanned, setUserRole } from "@/server/dal/admin";
@@ -646,10 +647,20 @@ async function resolveTakedownTarget(
   if (scope === "source") {
     const { owner, repo } = normalizeRepoInput(target);
     const url = `https://github.com/${owner}/${repo}`;
+    /**
+     * Folded: `normalizeRepoInput` splits and strips `.git` but does not touch case, and
+     * 205 public sources carry an uppercase segment. An exact match made a source-scope
+     * takedown unfileable whenever the curator typed a different casing to the one stored,
+     * and the error blamed their input rather than the lookup.
+     *
+     * Recording and enforcing are the two ends of the same chain; converting one and not
+     * the other is how a takedown ends up filed and not applied, or applicable and not
+     * filable. `activeBlocks` is the other end.
+     */
     const [source] = await db
       .select({ id: sources.id })
       .from(sources)
-      .where(eq(sources.url, url))
+      .where(and(contentSourceAt(url), isNull(sources.orgId)))
       .limit(1);
     if (!source) throw new Error(`No source is registered at ${url}.`);
     return { scope: "source", sourceUrl: url, skillPath: null, skillId: null, sourceId: source.id };
