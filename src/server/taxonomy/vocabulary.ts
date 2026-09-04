@@ -57,9 +57,25 @@ export const FUNCTIONS: readonly Category[] = [
   },
   {
     id: "generate-document",
-    label: "Generate a document",
+    /**
+     * The id stays `generate-document` while the meaning broadens, deliberately.
+     *
+     * It is stored on 7,114 assignments, inside every `skills.categories` array that holds
+     * it, on the archetype rows keyed by category, and in the public
+     * `/archetypes/generate-document` URL that R8.4 wants to keep resolving. Renaming the id
+     * is a data migration across four places; renaming what it *means* is a vocabulary edit.
+     * The classifier is shown `id: label — description`, so the label and description are
+     * what actually steer it.
+     */
+    label: "Generate a document or media asset",
     description:
-      "Produces prose or a structured document from a brief or template — reports, policies, specs, posts, emails, proposals, summaries meant to be delivered as a document.",
+      "Produces a deliverable artefact from a brief or template. Text: reports, policies, " +
+      "specs, posts, emails, proposals, summaries. Also non-text output produced the same " +
+      "way — an image, a video, a voiceover, a diagram, a slide deck, generated audio. The " +
+      "shape is what matters on this axis, not the file type: a brief goes in, a finished " +
+      "artefact comes out, and that is one shape whether it renders as markdown or MP4. " +
+      "Not editing an artefact that already exists, which is edit-refactor. Not producing " +
+      "runnable source, which is generate-code.",
   },
   {
     id: "generate-code",
@@ -136,17 +152,53 @@ export const FUNCTIONS: readonly Category[] = [
  * and a domain that turns out to be two domains is cheap to split because nothing
  * structural hangs off it.
  */
+/**
+ * ## The test for admitting a domain: is it a field, or a technology?
+ *
+ * A domain is a field of human activity a skill *serves*. It is never a technology, a
+ * medium, a file format or a vendor. That line is the one thing that keeps this list from
+ * becoming npm keywords, which Doc 2 names as the negative example.
+ *
+ * It has been argued twice, and the second time it changed the answer. `blockchain-web3` was
+ * proposed on evidence — 1,636 skills, which would have made it the tenth largest domain,
+ * scattered across `software-engineering`, `finance-accounting` and `meta-agent-tooling` with
+ * no coherent home. Sizeable, and still wrong: decomposed, **80% of it is trading, swaps,
+ * liquidity, lending and portfolios**, which is finance, and 11% is contract development,
+ * which is software engineering. A blockchain domain would have grouped skills by the ledger
+ * they touch rather than the work they do — the same mistake as filing every skill that emits
+ * HTML under `web-frontend`. The fix was to widen `finance-accounting` to say markets and
+ * on-chain assets out loud, so those skills land where they always belonged.
+ *
+ * **Size is not the test, and leading with it was the error.** Size only says whether a field
+ * is present often enough to be worth naming; it cannot tell you whether the thing is a field
+ * at all. `real-estate` is admitted here at 142 skills — fewer than `customer-support` has —
+ * because property, tenancy and mortgages are plainly a field, while a domain three times its
+ * size was refused for being a medium.
+ *
+ * Curated and closed, after Hugging Face's `pipeline_tag`. Adding one costs a
+ * `TAXONOMY_VERSION` bump and a full re-classification, which is the point: it should be
+ * argued for, not accumulated.
+ */
 export const DOMAINS: readonly Category[] = [
   {
     id: "software-engineering",
     label: "Software engineering",
     description:
       "General programming work — application code, refactoring, debugging, testing, code quality, " +
-      "language and framework specifics. The subject is the software's own source. Not the pipeline " +
-      "or platform it runs on, which is devops-infrastructure: 'add a retry to this client' is " +
-      "here, 'configure the deploy that ships it' is not. Not work whose purpose is finding or " +
-      "preventing vulnerabilities, which is security. Not code whose subject is an agent, skill or " +
-      "MCP server, which is meta-agent-tooling however ordinary the programming looks.",
+      "language and framework specifics. The subject is the software's own source. " +
+      "This is the RESIDUAL software domain: use it only when no more specific one fits, and never " +
+      "alongside one. web-frontend, mobile, devops-infrastructure, data-engineering, data-science-ml, " +
+      "security, gaming and meta-agent-tooling are all specialisations of software work — if one of " +
+      "them applies it already says everything this would, and naming both is redundant rather than " +
+      "thorough. A Unity tilemap skill is gaming, not gaming plus this; a component-architecture " +
+      "guide is web-frontend, not web-frontend plus this. " +
+      "Nor is it a home for any skill that merely involves code: a Solana trading skill is " +
+      "finance-accounting and a speech-to-text pipeline is media-production, whatever they are " +
+      "written in. Not the pipeline or platform it runs on, which is devops-infrastructure: " +
+      "'add a retry to this client' is here, 'configure the deploy that ships it' is not. Not work " +
+      "whose purpose is finding or preventing vulnerabilities, which is security. Not code whose " +
+      "subject is an agent, skill or MCP server, which is meta-agent-tooling however ordinary the " +
+      "programming looks.",
   },
   {
     id: "web-frontend",
@@ -221,7 +273,7 @@ export const DOMAINS: readonly Category[] = [
       "Planning, tracking, estimation, agile ceremonies, status reporting, resourcing, risk " +
       "management. The subject is getting agreed work delivered on time. Not choosing what the work " +
       "should be, which is product-management. Not an individual's own task and calendar habits, " +
-      "which are productivity-personal. Not company-wide process and vendor administration, which " +
+      "which are personal-productivity. Not company-wide process and vendor administration, which " +
       "is business-operations.",
   },
   {
@@ -253,7 +305,12 @@ export const DOMAINS: readonly Category[] = [
     id: "finance-accounting",
     label: "Finance & accounting",
     description:
-      "Budgeting, forecasting, bookkeeping, invoicing, financial modelling and reporting, tax, audit.",
+      "Money as the subject — budgeting, forecasting, bookkeeping, invoicing, financial modelling " +
+      "and reporting, tax, audit. Also **markets and assets**: trading, portfolios, pricing, " +
+      "lending, payments and treasury, including when they are on-chain. A DeFi swap or a " +
+      "portfolio tracker belongs here, not in software-engineering — the chain is the medium, " +
+      "finance is the field. Writing or auditing the contract itself is software-engineering; " +
+      "using it to move value is this.",
   },
   {
     id: "legal-compliance",
@@ -287,7 +344,10 @@ export const DOMAINS: readonly Category[] = [
     id: "media-production",
     label: "Media production",
     description:
-      "Image, audio and video creation and editing, generative media, presentations, publishing.",
+      "Image, audio and video creation and editing, generative media, presentations, publishing, " +
+      "and collectible or generative artwork including NFT art. The subject is a produced media " +
+      "artefact. Not the campaign it serves, which is marketing; not the prose inside it, which " +
+      "is content-writing.",
   },
   {
     id: "e-commerce",
@@ -305,7 +365,7 @@ export const DOMAINS: readonly Category[] = [
       "specific domain whenever one fits. Not product decisions (product-management), not delivery " +
       "tracking (project-management), not contracts, policy or regulatory obligation " +
       "(legal-compliance), not money and books (finance-accounting), not hiring and staff policy " +
-      "(human-resources), and not an individual's own habits and workflow (productivity-personal).",
+      "(human-resources), and not an individual's own habits and workflow (personal-productivity).",
   },
   {
     id: "education-training",
@@ -315,7 +375,7 @@ export const DOMAINS: readonly Category[] = [
       "is teaching someone else, with learning objectives or a way of checking understanding. Not " +
       "explaining a topic in passing — that is the explain *function*, and the domain is whatever " +
       "field is being explained. Not one's own habits, focus or study routine, which is " +
-      "productivity-personal. Not research method and literature work, which is science-research.",
+      "personal-productivity. Not research method and literature work, which is science-research.",
   },
   {
     id: "science-research",
@@ -338,13 +398,50 @@ export const DOMAINS: readonly Category[] = [
     description: "Game design, engines, gameplay systems, level and narrative work, game assets.",
   },
   {
-    id: "productivity-personal",
+    id: "personal-productivity",
     label: "Personal productivity",
     description:
       "One individual's own workflow — notes, tasks, scheduling, email triage, focus and habits, " +
       "reading and knowledge management. The subject is a single person organising themselves. Not " +
       "team or company process, which is business-operations or project-management. Not teaching a " +
       "method to others, which is education-training.",
+  },
+  {
+    id: "real-estate",
+    label: "Real estate & property",
+    description:
+      "Property as the subject — listings, valuations, mortgages and lending against property, " +
+      "tenancy and letting, conveyancing, surveys, portfolio and facilities management. Small in " +
+      "this corpus and a field regardless. Not general lending or bookkeeping, which is " +
+      "finance-accounting; not the contract law around a sale, which is legal-compliance.",
+  },
+  {
+    id: "logistics-transport",
+    label: "Logistics & transport",
+    description:
+      "Moving goods and people — freight, shipping and customs, fleet and driver management, " +
+      "routing and last-mile delivery, warehousing, aviation and rail operations. The subject is " +
+      "the movement itself. Not a company's internal admin, which is business-operations; not " +
+      "stock levels for a storefront, which is e-commerce; not the factory that made the goods, " +
+      "which is business-operations.",
+  },
+  {
+    id: "travel-hospitality",
+    label: "Travel & hospitality",
+    description:
+      "Trips and guests — itineraries, flight and hotel booking, tourism and destination " +
+      "research, restaurant and venue reservations, guest experience, events and catering. Not " +
+      "promoting a destination, which is marketing; not the airline's fleet operations, which is " +
+      "logistics-transport; not an individual's own calendar, which is personal-productivity.",
+  },
+  {
+    id: "energy-sustainability",
+    label: "Energy & sustainability",
+    description:
+      "Energy and environmental impact — generation and grid, utilities and consumption, " +
+      "renewables, carbon accounting, emissions and ESG measurement, climate and environmental " +
+      "reporting. Not the disclosure regime that compels the report, which is legal-compliance; " +
+      "not the science of climate itself, which is science-research.",
   },
   {
     id: "meta-agent-tooling",
@@ -437,7 +534,95 @@ export function isValidCategory(axis: CategoryAxis, id: string): boolean {
  *   leave 1.2.0 rows produced by two different classifiers. Cost: the 400 rows at 1.2.0
  *   re-enter the queue, about $1.20.
  */
-export const TAXONOMY_VERSION = "1.3.0";
+/*
+ * 1.4.0 — the classifier model changed, and that is a classifier change like any other.
+ *
+ *   `anthropic/claude-haiku-4.5` -> `google/gemini-2.5-flash-lite`, chosen off the gateway's
+ *   own catalogue rather than memory: 10x cheaper per call on the measured workload (3,241
+ *   input / 93 output), $173 -> $17 for the remaining corpus, and $7 if implicit caching
+ *   engages. Thinking is disabled explicitly, because reasoning tokens bill as output at 4x
+ *   the input rate on a task whose answer is two ids and a confidence.
+ *
+ *   Bumped even though no word of the vocabulary moved. `classifier_version` has to mean
+ *   "what decided this label" for R7.2 reproducibility to hold, and a different model is a
+ *   different decider — arguably more so than a reworded description. Leaving it fixed would
+ *   put labels from two models under one number and make the corpus unable to say which
+ *   produced what.
+ *
+ *   Cost of the bump: the 1,136 rows at 1.3.0 re-enter the queue, about **$0.20** at the new
+ *   rate. That is the whole argument for doing the model switch now rather than after the
+ *   backfill — the same bump after 47,000 skills would cost $8 at the new rate and would
+ *   have been $173 at the old one.
+ */
+/*
+ * 1.5.0 — the domain rule retuned for Gemini, which reads it differently to Haiku.
+ *
+ *   1.3.0's rule cut Haiku's domain held rate 9.8% -> 2.6%. The same words under
+ *   `gemini-2.5-flash-lite` gave **1.47 domain labels per skill against Haiku's 1.03**, with
+ *   46.7% of skills getting a second domain where Haiku gave one to 10%, held 2.3% -> 6.1%
+ *   and confidence 81 -> 74. A rule is tuned against a model, not written once.
+ *
+ *   The rationales said what to fix. Gemini was not hallucinating — its second domains score
+ *   **59-62**, honestly low, and the floor was catching them. It was listing every *aspect*
+ *   of a skill rather than the field it serves: `finance-accounting + legal-compliance` for
+ *   Malta social-security contributions, `marketing + web-frontend` for a dashboard that
+ *   happens to be one HTML file. And **70 of ~177 second domains were software-engineering**
+ *   at average confidence 59 — the medium a skill is built in, mistaken for its subject.
+ *
+ *   So the rule stops being a preference ("prefer ONE") and becomes three tests it can
+ *   apply: a retrieval test (would a browser of that domain expect this skill), a numeric
+ *   gate (do not offer what you would score under 70, which is exactly where these sat), and
+ *   an explicit statement that producing HTML or running in CI is not a domain.
+ */
+/*
+ * 1.6.0 — software-engineering declared the residual software domain.
+ *
+ *   1.5.0 fixed *how many* domains Gemini offered (1.47 -> 1.18 per skill, held 6.1% ->
+ *   0.6%). It did not fix *which*: `software-engineering` stayed at 0.360 per skill against
+ *   Haiku's 0.184, and the rationales showed one shape behind nearly all of it — the general
+ *   category added on top of a specific one that already covered it. `gaming +
+ *   software-engineering` for a Unity tilemap, `web-frontend + software-engineering` for a
+ *   component-architecture guide, `finance-accounting + software-engineering` for a Solana
+ *   DEX skill. web-frontend *is* software engineering; naming both is redundant, not
+ *   thorough.
+ *
+ *   That is a hierarchy error rather than a boundary one, so the fix is in the description
+ *   rather than the prompt rule — definitions decide *which* category, instructions decide
+ *   *how many*, and 1.2.0 already cost a version learning that the wrong way round.
+ */
+/*
+ * 1.7.0 — four domains added, two widened, one renamed, and one function broadened.
+ *
+ *   Driven by 6,957 skills the classifier could not place: 500 of them, run through the model
+ *   without writing, proposed 64 invalid ids against 1,008 valid. Ranked, those said three
+ *   different things.
+ *
+ *   **A naming defect of ours.** `personal-productivity` was 29 of the 64 — 45% of every id
+ *   we rejected — because our own id was inverted (`productivity-personal`) while every other
+ *   one reads naturally. Renamed, with migration 0023 moving 604 assignments and 376
+ *   `skills.categories` arrays.
+ *
+ *   **Genuine field gaps**: real-estate, logistics-transport, travel-hospitality,
+ *   energy-sustainability. Each is a field of activity with nowhere to go, and each carries
+ *   boundary clauses naming what it is not.
+ *
+ *   **Things that only looked like gaps.** `blockchain-web3` (1,636 skills) was refused as a
+ *   technology rather than a field — see the note above `DOMAINS`. `social-media` (766) is
+ *   already correctly served by marketing; `music-audio` (378) by media-production;
+ *   `sports-fitness` (1,055) was a keyword artefact whose sample was prediction markets and
+ *   reinforcement learning. Rejecting these mattered as much as the additions: the request
+ *   was a taxonomy with no logical duplicates.
+ *
+ *   `finance-accounting` and `media-production` were widened instead, so the on-chain trading
+ *   skills and the NFT artwork land where they belong without a new category.
+ *
+ *   On the function axis, `generate-document` became "Generate a document or media asset"
+ *   rather than gaining a `generate-media` sibling. 290 of the 524 media-generation skills
+ *   were already landing there; the shape is the same whether the artefact renders as
+ *   markdown or MP4, and a new function would have fragmented archetype evidence for no gain.
+ *   The id is unchanged, so nothing stored had to move.
+ */
+export const TAXONOMY_VERSION = "1.7.0";
 
 /**
  * Below this, an assignment is held for a curator instead of being served (R3.1's
