@@ -435,15 +435,6 @@ export const DOMAINS: readonly Category[] = [
       "logistics-transport; not an individual's own calendar, which is personal-productivity.",
   },
   {
-    id: "energy-sustainability",
-    label: "Energy & sustainability",
-    description:
-      "Energy and environmental impact — generation and grid, utilities and consumption, " +
-      "renewables, carbon accounting, emissions and ESG measurement, climate and environmental " +
-      "reporting. Not the disclosure regime that compels the report, which is legal-compliance; " +
-      "not the science of climate itself, which is science-research.",
-  },
-  {
     id: "meta-agent-tooling",
     label: "Agent & skill tooling",
     description:
@@ -602,9 +593,24 @@ export function isValidCategory(axis: CategoryAxis, id: string): boolean {
  *   one reads naturally. Renamed, with migration 0023 moving 604 assignments and 376
  *   `skills.categories` arrays.
  *
- *   **Genuine field gaps**: real-estate, logistics-transport, travel-hospitality,
- *   energy-sustainability. Each is a field of activity with nowhere to go, and each carries
- *   boundary clauses naming what it is not.
+ *   **Genuine field gaps**: real-estate, logistics-transport, travel-hospitality. Each is a
+ *   field of activity with nowhere to go, and each carries boundary clauses naming what it
+ *   is not.
+ *
+ *   **A fourth was proposed and withdrawn, on a number I got wrong.**
+ *   `energy-sustainability` was sized at 376 skills by a keyword probe and admitted on that
+ *   basis. Re-probed before the re-label, the honest count is **~10**: the loose pattern was
+ *   97.6% noise, matching `carbon-lang` (a programming language), CSS `grid` and Unity
+ *   tilemap grids. A targeted run showed the category was *precise* — it landed on
+ *   `carbon-accounting-check` and `solar-breakeven` and ignored `kernel-debugging` — so it
+ *   failed on size alone, which is the one thing size *is* the right test for: whether a
+ *   field appears often enough to be worth naming. Carbon, ESG and energy work now falls to
+ *   `finance-accounting` (carbon accounting), `legal-compliance` (disclosure regimes) and
+ *   `science-research`, which is where the classifier already put most of it.
+ *
+ *   The lesson is the probe, not the category. `sports-fitness` was rejected as a keyword
+ *   artefact and `energy-sustainability` was admitted without the same scepticism applied —
+ *   the same test, run inconsistently, two paragraphs apart.
  *
  *   **Things that only looked like gaps.** `blockchain-web3` (1,636 skills) was refused as a
  *   technology rather than a field — see the note above `DOMAINS`. `social-media` (766) is
