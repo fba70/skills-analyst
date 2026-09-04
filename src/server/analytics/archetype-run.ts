@@ -164,6 +164,15 @@ export async function mineAndStore(
          * from whoever was in it in August — a plausible-looking lie about provenance.
          */
         contributors: archetype.contributors,
+        /**
+         * Every role considered, not only those that survived.
+         *
+         * `sections` above holds the skeleton; this holds the evidence behind it, including
+         * the rejects and the threshold each was judged against. Without it a section that
+         * missed by two points is indistinguishable from one never measured, which is what
+         * made the v7 investigation expensive.
+         */
+        measured: archetype.measured,
         /** R6.2's inputs, pinned with the skeleton they shaped. */
         telemetry: archetype.telemetry,
       },
