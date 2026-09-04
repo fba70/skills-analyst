@@ -46,7 +46,8 @@
     "registry": "tsx --conditions=react-server scripts/registry.mts",
     "verify:http-deadline": "tsx --conditions=react-server scripts/verify-http-deadline.mts",
     "verify:dedup": "tsx --conditions=react-server scripts/verify-dedup.mts",
-    "verify:taxonomy": "tsx --conditions=react-server scripts/verify-taxonomy.mts"
+    "verify:taxonomy": "tsx --conditions=react-server scripts/verify-taxonomy.mts",
+    "verify:archetypes": "tsx --conditions=react-server scripts/verify-archetypes.mts"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0",

@@ -77,7 +77,27 @@ import { REVIEW_FLOOR } from "@/server/taxonomy/vocabulary";
  *   distinct-organisation floor. The loop closes here: what the corpus published and what
  *   authors kept are now both read, and kept separable so a reader can tell them apart.
  */
-export const MINER_VERSION = "2.2.0";
+/*
+ * 2.3.0 — the inclusion threshold scales with the evidence, and every measurement is stored.
+ *
+ *   `MIN_LIFT` was a flat 12, set when a band held ~90 representatives and the standard error
+ *   on a prevalence difference was around 7 points. At 97% corpus coverage bands are ~300
+ *   strong against ~2,300 weak and that error is ~2.8 points, so the unchanged 12 had
+ *   silently become a 4-sigma test. It now takes three standard errors *and* a floor of 8
+ *   points: statistically real, and large enough to be worth telling an author about.
+ *
+ *   Retuning it changed less than expected, which is the finding. Across the three largest
+ *   categories the best section lift is **+10** where traits reach **+35** — so section
+ *   presence really has stopped discriminating, and the empty v7 skeletons were measuring
+ *   the corpus correctly rather than failing. A per-source cap was tried first and made lifts
+ *   *worse* at every strength, which ruled out generator concentration as the cause.
+ *
+ *   `measured` is now stored beside the skeleton: every role considered, its bands, its lift,
+ *   the threshold it was judged against and why it was rejected. Diagnosing v7 without it
+ *   cost four throwaway scripts rebuilding numbers the miner had already computed and thrown
+ *   away.
+ */
+export const MINER_VERSION = "2.3.0";
 
 /** R3.2's gate, in the terms that actually resist a monoculture. */
 export const MIN_STRUCTURES = 50;
@@ -90,7 +110,48 @@ export const MIN_SOURCES = 10;
  * noise does not become advice. Worth re-tuning against a bigger corpus — it is the one
  * number here that is a judgement rather than a measurement.
  */
-const MIN_LIFT = 12;
+const MIN_LIFT = 8;
+
+/**
+ * How many standard errors a lift must clear, on top of `MIN_LIFT`.
+ *
+ * ## Why a flat threshold stopped working
+ *
+ * `MIN_LIFT` was 12, chosen when a band held ~90 representatives. At that size the standard
+ * error on a difference of two prevalences is around 7 points, so 12 was under two sigma —
+ * a sensible guard against calling noise a finding.
+ *
+ * The corpus then went from 8% labelled to 97% and bands grew to ~300 strong against ~2,300
+ * weak, where the same standard error is about **2.8 points**. The unchanged 12 silently
+ * became a 4-sigma test: far stricter than intended, and strict in the wrong currency,
+ * because it does not know how much evidence it is standing on.
+ *
+ * So the rule is now both halves stated separately. A section must be **statistically real**
+ * (three standard errors, which scales itself with the band) *and* **practically meaningful**
+ * (`MIN_LIFT` points, which stops a two-point difference being called guidance merely
+ * because the sample is enormous). At today's sizes that lands near 8.4 points; on a thin
+ * category it demands 20 or more, which is the behaviour the flat number was reaching for
+ * and could not express.
+ */
+const LIFT_SIGMA = 3;
+
+/**
+ * Standard error of the difference between two prevalences, in percentage points.
+ *
+ * Textbook two-proportion form. Guarded against a zero-size band so a category that fails
+ * `MIN_BAND` cannot divide by zero on its way to being rejected anyway.
+ */
+function liftStandardError(
+  strongPrevalence: number,
+  strongN: number,
+  weakPrevalence: number,
+  weakN: number,
+): number {
+  if (strongN === 0 || weakN === 0) return Number.POSITIVE_INFINITY;
+  const p1 = strongPrevalence / 100;
+  const p2 = weakPrevalence / 100;
+  return 100 * Math.sqrt((p1 * (1 - p1)) / strongN + (p2 * (1 - p2)) / weakN);
+}
 
 /** An element has to exist somewhere before its lift means anything. */
 const MIN_STRONG_PREVALENCE = 25;
@@ -102,6 +163,7 @@ const MIN_STRONG_PREVALENCE = 25;
  * presented as advice.
  */
 export const MIN_BAND = 15;
+
 
 /**
  * The curated set, derived from the seed allow-list rather than duplicated.
@@ -121,6 +183,20 @@ export const MIN_BAND = 15;
 const CURATED_SOURCES: ReadonlySet<string> = new Set(
   SEED_REPOS.map((seed) => seed.repo.toLowerCase()),
 );
+
+export type MeasuredRole = {
+  role: SectionRole;
+  strongPrevalence: number;
+  weakPrevalence: number;
+  lift: number;
+  /** Lift after the bounded R6.5 authoring delta. */
+  effectiveLift: number;
+  standardError: number;
+  /** max(MIN_LIFT, LIFT_SIGMA * standardError) — what it had to beat. */
+  requiredLift: number;
+  kept: boolean;
+  rejectedFor: string | null;
+};
 
 type Representative = {
   skillId: string;
@@ -464,6 +540,8 @@ export type Archetype = {
     };
   };
   antiPatterns: SkeletonTrait[];
+  /** Every role measured, kept or rejected, with the threshold it was judged against. */
+  measured: MeasuredRole[];
   /** The authoring signal this mine consumed, for the changelog and the page (R6.2). */
   telemetry: {
     drafts: number;
@@ -603,6 +681,15 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
   const signalFor = new Map(telemetry.sections.map((entry) => [entry.role, entry]));
 
   const sections: SkeletonSection[] = [];
+  /**
+   * Every role that was measured, kept or not — the evidence behind the skeleton.
+   *
+   * `stats.sections` used to store only what passed, so a section that missed the threshold
+   * by two points left no trace at all. Diagnosing the v7 collapse meant rebuilding numbers
+   * the miner had already computed and discarded, in four separate throwaway scripts. A
+   * measurement you cannot see is one that has to be paid for twice.
+   */
+  const measured: MeasuredRole[] = [];
   for (const role of roleSet) {
     const strongCount = strong.filter((r) => r.roles.includes(role)).length;
     const weakCount = weak.filter((r) => r.roles.includes(role)).length;
@@ -625,7 +712,24 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
 
     // The two rules that keep this prescriptive: it has to be common among good skills,
     // and it has to *distinguish* them. Either alone produces noise dressed as advice.
-    if (strongPrevalence < MIN_STRONG_PREVALENCE || effectiveLift < MIN_LIFT) continue;
+    const se = liftStandardError(strongPrevalence, strong.length, weakPrevalence, weak.length);
+    const required = Math.max(MIN_LIFT, LIFT_SIGMA * se);
+    const commonEnough = strongPrevalence >= MIN_STRONG_PREVALENCE;
+    const kept = commonEnough && effectiveLift >= required;
+
+    measured.push({
+      role,
+      strongPrevalence,
+      weakPrevalence,
+      lift,
+      effectiveLift,
+      standardError: Math.round(se * 10) / 10,
+      requiredLift: Math.round(required * 10) / 10,
+      kept,
+      rejectedFor: kept ? null : !commonEnough ? "not common in the strong band" : "lift below threshold",
+    });
+
+    if (!kept) continue;
 
     const positions = strong
       .map((r) => r.roleOrder.indexOf(role))
@@ -652,10 +756,13 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
     const lift = strongPrevalence - weakPrevalence;
     const entry = { key: trait.key, label: trait.label, strongPrevalence, weakPrevalence, lift };
 
-    if (lift >= MIN_LIFT) traits.push(entry);
+    const se = liftStandardError(strongPrevalence, strong.length, weakPrevalence, weak.length);
+    const required = Math.max(MIN_LIFT, LIFT_SIGMA * se);
+
+    if (lift >= required) traits.push(entry);
     // The same measurement read backwards: a trait the weak band has and the strong band
     // does not is guidance about what to avoid, and it costs nothing extra to produce.
-    else if (lift <= -MIN_LIFT) antiPatterns.push(entry);
+    else if (lift <= -required) antiPatterns.push(entry);
   }
   traits.sort((a, b) => b.lift - a.lift);
   antiPatterns.sort((a, b) => a.lift - b.lift);
@@ -725,6 +832,7 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
       },
     },
     antiPatterns,
+    measured,
     telemetry: {
       drafts: telemetry.drafts,
       orgs: telemetry.orgs,
