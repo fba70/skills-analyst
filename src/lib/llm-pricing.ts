@@ -28,6 +28,19 @@ export const MODEL_RATES: Record<string, ModelRate> = {
   "anthropic/claude-sonnet-5": { inputPerMTok: 2.0, outputPerMTok: 10.0 },
   "anthropic/claude-haiku-4.5": { inputPerMTok: 1.0, outputPerMTok: 5.0 },
   "anthropic/claude-opus-5": { inputPerMTok: 5.0, outputPerMTok: 25.0 },
+  /**
+   * The taxonomy classifier. Rates read from the AI Gateway catalogue on 2026-09-03, not
+   * from memory — `https://ai-gateway.vercel.sh/v1/models` publishes them per model.
+   *
+   * Adding the entry is not optional bookkeeping. `rateFor` falls back to
+   * `UNKNOWN_MODEL_RATE`, deliberately the most expensive rate we know of, so an unlisted
+   * model does not silently under-report — it would have charged this one at 50x its real
+   * input rate and driven the platform cap to a refusal after a few thousand skills.
+   *
+   * Its cache read is $0.01 against $0.10 input — exactly `CACHE_READ_MULTIPLIER`, so the
+   * existing arithmetic is right for it with no special case.
+   */
+  "google/gemini-2.5-flash-lite": { inputPerMTok: 0.1, outputPerMTok: 0.4 },
 };
 
 /**
