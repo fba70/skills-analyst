@@ -57,6 +57,34 @@ export const skillVersionStatus = pgEnum("skill_version_status", [
   "withdrawn", // withdrawn on request (R7.5); blocked from re-ingestion
 ]);
 
+/**
+ * The commercial plan an organisation is on (Doc 2 RC.1, Doc 1 §5).
+ *
+ * An enum rather than free text for the reason at the top of this file: every value drives a
+ * decision, and a typo in a plan column is a customer silently losing what they paid for.
+ * `free` is the default and is never written — an absent entitlement row *means* free, so
+ * a fresh deployment gates nothing.
+ */
+export const orgPlan = pgEnum("org_plan", ["free", "pro", "team"]);
+
+/**
+ * The two lifecycle states a *person* asserts (Doc 6 RK.1).
+ *
+ * Deliberately only two. The full lifecycle — validated, battle-tested, stale, deprecated,
+ * superseded — is mostly **derived** from evidence at read time, because RK.1 requires that
+ * battle-tested be earned rather than granted and that stale be detected rather than
+ * declared. Leaving no column to write them in is how that requirement is enforced instead
+ * of merely intended. See `src/lib/lifecycle.ts`.
+ *
+ * Separate from `skill_status`, which answers "may we serve this" and is the pipeline's to
+ * set. A sync must never be able to overwrite a curator's deprecation notice, and one column
+ * holding both would let it.
+ */
+export const lifecycleDeclaration = pgEnum("lifecycle_declaration", [
+  "deprecated",
+  "superseded",
+]);
+
 /** Rolled up from the skill's current version, for listing and ranking. */
 export const skillStatus = pgEnum("skill_status", [
   "pending",
@@ -132,6 +160,8 @@ export const llmPurpose = pgEnum("llm_purpose", [
   "corpus_taxonomy",
   /** R2.3 over the public corpus. Platform budget. */
   "corpus_validation",
+  /** The pgvector backfill over the public corpus. Platform budget. */
+  "corpus_embedding",
 ]);
 
 /**

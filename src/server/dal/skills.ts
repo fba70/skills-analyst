@@ -1,17 +1,22 @@
 import "server-only";
 
 import { and, asc, desc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import {
   capabilitySurfaces,
   skillCategories,
   skillDuplicates,
   skills,
+  skillStructures,
   skillVersions,
   sources,
   verdicts,
 } from "@/server/db/schema";
 import { capabilityLabel } from "@/lib/capabilities";
+import type { LifecycleState } from "@/lib/lifecycle";
+import { EXTRACTOR_VERSION } from "@/server/analytics/structure";
+import { lifecycleExpression } from "@/server/skills/lifecycle";
 import { withOrgScope, withPublicScope } from "@/server/dal/scope";
 import { labelFor, REVIEW_FLOOR, type CategoryAxis } from "@/server/taxonomy/vocabulary";
 
@@ -583,6 +588,26 @@ export type SkillDetail = SkillListItem & {
   contentHash: string;
   fileCount: number | null;
   byteSize: number | null;
+  /**
+   * How proven the skill is (Doc 6 RK.1), derived — never read from a column.
+   *
+   * `null` for anything not `indexed`: a quarantined or withdrawn skill has a trust
+   * problem, and the page already states that in the language of trust.
+   */
+  lifecycle: LifecycleState | null;
+  lifecycleNote: string | null;
+  reviewBy: Date | null;
+  /** Resolved so the reader has somewhere to click, not just a state. */
+  supersededBy: { slug: string; name: string } | null;
+  /**
+   * Estimated activation cost in tokens (Doc 6 RW.9), or `null` when this version has no
+   * fingerprint at the current extractor version.
+   *
+   * Nullable and rendered as absent rather than as zero. During a re-extract campaign most
+   * versions legitimately have no row yet, and "0 tokens" is a claim about the skill where
+   * "not measured" is a claim about us.
+   */
+  tokenEstimate: number | null;
   frontmatter: Record<string, unknown>;
   provenance: Record<string, unknown>;
   licenseSource: string;
@@ -627,6 +652,15 @@ export type SkillDetail = SkillListItem & {
   canonicalOf: { slug: string; name: string; similarity: number } | null;
 };
 
+/**
+ * `skills` again, for the self-join that resolves a supersession's replacement.
+ *
+ * Module scope so the alias name is stable across calls — Drizzle derives the SQL alias
+ * from this identifier, and creating it inside the function would work but makes the
+ * generated SQL harder to recognise in a slow-query log.
+ */
+const replacement = alias(skills, "replacement");
+
 export async function getSkillBySlug(slug: string): Promise<SkillDetail | null> {
   return withOrgScope(async (tx) => {
     const [row] = await tx
@@ -643,6 +677,12 @@ export async function getSkillBySlug(slug: string): Promise<SkillDetail | null> 
         contentStored: skillVersions.contentStored,
         fileCount: skillVersions.fileCount,
         byteSize: skillVersions.byteSize,
+        tokenEstimate: skillStructures.tokenEstimate,
+        lifecycle: lifecycleExpression(),
+        lifecycleNote: skills.lifecycleNote,
+        reviewBy: skills.reviewBy,
+        supersededBySlug: replacement.slug,
+        supersededByName: replacement.name,
         frontmatter: skillVersions.frontmatter,
         provenance: skillVersions.provenance,
         licenseSpdx: skillVersions.licenseSpdx,
@@ -659,6 +699,36 @@ export async function getSkillBySlug(slug: string): Promise<SkillDetail | null> 
       .from(skills)
       .innerJoin(skillVersions, eq(skillVersions.id, skills.currentVersionId))
       .leftJoin(sources, eq(sources.id, skillVersions.sourceId))
+      /**
+       * LEFT join, and pinned to the current extractor version.
+       *
+       * Left because a fingerprint is derived data that lags the corpus — during a
+       * re-extract campaign most versions have no row at the new version, and an inner join
+       * would make those skills disappear from the registry entirely. A derived-data table
+       * must never be able to hide a skill.
+       */
+      .leftJoin(
+        skillStructures,
+        and(
+          eq(skillStructures.skillVersionId, skillVersions.id),
+          eq(skillStructures.extractorVersion, EXTRACTOR_VERSION),
+        ),
+      )
+      /**
+       * The replacement named by a supersession (RK.1), resolved here rather than stored.
+       *
+       * Same reasoning as archetype exemplars: a stored name goes on recommending a skill
+       * that has since been quarantined or withdrawn. Joining live means the pointer is only
+       * ever as good as the target is today — and the `indexed` filter is what makes the
+       * link safe to render.
+       */
+      .leftJoin(
+        replacement,
+        and(
+          eq(replacement.id, skills.supersededBySkillId),
+          eq(replacement.status, "indexed"),
+        ),
+      )
       .where(eq(skills.slug, slug))
       /**
        * Slugs are NOT unique in the public corpus.
@@ -762,6 +832,15 @@ export async function getSkillBySlug(slug: string): Promise<SkillDetail | null> 
 
     return {
       ...row,
+      /**
+       * Both halves or neither. The join is filtered to `indexed`, so a replacement that
+       * has since been quarantined comes back as NULL and the page shows the state without
+       * a dead link — rather than a link a reader would follow into a 404.
+       */
+      supersededBy:
+        row.supersededBySlug && row.supersededByName
+          ? { slug: row.supersededBySlug, name: row.supersededByName }
+          : null,
       frontmatter: (row.frontmatter ?? {}) as Record<string, unknown>,
       provenance: (row.provenance ?? {}) as Record<string, unknown>,
       licenseEvidence: (row.licenseEvidence ?? null) as Record<string, unknown> | null,

@@ -59,7 +59,18 @@ function readMicros(key: string, fallbackDollars: number): number {
 
 /** Purposes billed to an organisation. The rest are platform work. */
 const ORG_PURPOSES = ["builder", "validation"] as const;
-export type LlmPurpose = (typeof ORG_PURPOSES)[number] | "corpus_taxonomy" | "corpus_validation";
+export type LlmPurpose =
+  | (typeof ORG_PURPOSES)[number]
+  | "corpus_taxonomy"
+  | "corpus_validation"
+  /**
+   * The pgvector backfill. Platform work, not billed to any organisation.
+   *
+   * Platform-scoped for the same reason taxonomy is: it embeds the *public* corpus, and
+   * charging one customer's monthly allowance for work that benefits every reader would be
+   * the mixing RC.2 separates the two budgets to prevent.
+   */
+  | "corpus_embedding";
 
 const isOrgPurpose = (purpose: LlmPurpose): boolean =>
   (ORG_PURPOSES as readonly string[]).includes(purpose);

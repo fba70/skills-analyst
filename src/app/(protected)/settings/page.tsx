@@ -6,6 +6,7 @@ import { IngestionPanel } from "@/components/settings/ingestion-panel";
 import { ArchetypePanel } from "@/components/settings/archetype-panel";
 import { PipelinePanel } from "@/components/settings/pipeline-panel";
 import { ListControls, SettingsTabs } from "@/components/settings/list-controls";
+import { PlansPanel, type PlanRow } from "@/components/settings/plans-panel";
 import { QuarantinePanel } from "@/components/settings/quarantine-panel";
 import { ReviewPanel } from "@/components/settings/review-panel";
 import { SourcesPanel } from "@/components/settings/sources-panel";
@@ -31,6 +32,7 @@ import { listTakedowns, takedownCounts } from "@/server/compliance/takedown";
 import { pipelineBacklog, recentRuns, type PipelineBacklog } from "@/server/pipeline/run";
 import { readHeartbeat } from "@/server/pipeline/heartbeat";
 import { staleSlices } from "@/server/validation/rescan";
+import { planRoster as listPlanRoster } from "@/server/dal/entitlements";
 import { isAdmin, listPlatformUsers, platformCounts } from "@/server/dal/admin";
 import {
   curationCounts,
@@ -77,6 +79,7 @@ const TABS = [
   "loop",
   "schedule",
   "limits",
+  "plans",
   "users",
 ] as const;
 type Tab = (typeof TABS)[number];
@@ -120,7 +123,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, platformBudget, breakdown, metrics, activity, loopLog, schedule, rateLimits] =
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, platformBudget, breakdown, metrics, activity, loopLog, schedule, rateLimits] =
     await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
@@ -135,6 +138,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "ingestion" ? readHeartbeat() : null,
     tab === "archetypes" ? archetypeSummary() : null,
     tab === "takedowns" ? listTakedowns(query) : null,
+    tab === "plans" ? listPlanRoster() : null,
     tab === "spend" ? budgetState("corpus_taxonomy", null) : null,
     tab === "spend" ? spendBreakdown() : null,
     tab === "loop" ? loopMetrics() : null,
@@ -192,6 +196,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
           { value: "schedule", label: "Schedule" },
           { value: "limits", label: "Rate limits" },
           { value: "spend", label: "Spend" },
+          { value: "plans", label: "Plans" },
           {
             value: "takedowns",
             // The open count is in the label because an unanswered notice has a clock on
@@ -326,6 +331,23 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
             total={sourceHealth.total}
             stale={sourceHealth.stale}
             disabled={sourceHealth.disabled}
+          />
+        ) : null}
+        {tab === "plans" && planRoster ? (
+          <PlansPanel
+            rows={planRoster.map(
+              (row): PlanRow => ({
+                organizationId: row.organizationId,
+                name: row.name,
+                slug: row.slug,
+                plan: row.plan,
+                note: row.note,
+                // Serialised here rather than in the panel: the boundary into a client
+                // component is the right place to stop passing Date objects around.
+                validUntil: row.validUntil ? row.validUntil.toISOString() : null,
+                members: row.members,
+              }),
+            )}
           />
         ) : null}
         {tab === "users" && users ? (

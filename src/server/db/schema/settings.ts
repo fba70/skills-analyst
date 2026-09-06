@@ -1,7 +1,17 @@
 import { sql } from "drizzle-orm";
-import { index, integer, jsonb, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
+import {
+  index,
+  integer,
+  jsonb,
+  pgPolicy,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+} from "drizzle-orm/pg-core";
 
-import { user } from "./auth";
+import { organization, user } from "./auth";
+import { orgPlan } from "./enums";
 
 /**
  * Operational policy, as data (Doc 3, and the standing note in CLAUDE.md).
@@ -129,3 +139,97 @@ export const pipelineHeartbeat = pgTable("pipeline_heartbeat", {
   /** Which process, so two concurrent runs are visible rather than confusing. */
   pid: integer("pid"),
 });
+
+/**
+ * What an organisation is entitled to (Doc 2 RC.1).
+ *
+ * ## Its own table, not a column on `organization`
+ *
+ * The plan for this step said "a plan column on the organisation", and that was the wrong
+ * call. `organization` is Better Auth's table: CLAUDE.md's standing rule is that those
+ * shapes are re-derived with `getAuthTables()` whenever a plugin is added or the version
+ * moves, and a hand-added column is precisely what that regeneration would not know about.
+ * A commercial fact does not belong in an auth vendor's schema.
+ *
+ * It also buys room RC.4 will need — a billing customer id, a period end, a seat count —
+ * none of which belong on an auth table either.
+ *
+ * ## An absent row means `free`
+ *
+ * Deliberate, and it is what makes the free-tier guarantee hold on a fresh deployment: the
+ * table is empty, every lookup falls back to `free`, and nothing is gated. The alternative —
+ * a row per organisation written at creation — would mean a bootstrap that failed halfway
+ * left organisations with no plan at all, and "no plan" would have to mean something.
+ *
+ * ## One row per organisation
+ *
+ * `organizationId` is the primary key rather than a surrogate id with a unique index. There
+ * is exactly one current entitlement per organisation and history lives in `events`, which
+ * is the same split `platform_settings` uses: the row is the current answer, the log is how
+ * it got there.
+ */
+export const orgEntitlements = pgTable(
+  "org_entitlements",
+  {
+    organizationId: text("organization_id")
+      .primaryKey()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    plan: orgPlan("plan").notNull().default("free"),
+    /** Why, in the admin's words — a trial, a design partner, a downgrade. */
+    note: text("note"),
+    /** Who last set it. `events` carries the full history; this is the quick answer. */
+    grantedBy: text("granted_by").references(() => user.id, { onDelete: "set null" }),
+    /**
+     * When the plan lapses back to free, if it is time-boxed.
+     *
+     * Read by the gate, so an expired trial stops granting without anyone running a job —
+     * the same posture as the lifecycle's `review_by`. A plan with no end date does not
+     * expire, which is the ordinary paid case.
+     */
+    validUntil: timestamp("valid_until", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  () => [
+    /**
+     * The schema's **third split policy**, and it is safe for the same reason as the other two.
+     *
+     * SELECT is open to `app_runtime`; INSERT and UPDATE are org-scoped. That split is
+     * forced by two reads that are cross-organisation by definition:
+     *
+     *   - an operator listing every workspace's plan, which is the admin panel's whole job;
+     *   - resolving the plan behind an MCP token, which happens *before* any organisation
+     *       scope has been set — the same shape that made `mcp_tokens.SELECT` open, where
+     *       looking the token up is how the organisation is discovered in the first place.
+     *
+     * It is safe **because of the column list**: a plan name, an admin's own note, who set
+     * it and when it lapses. No tenant content, ever. `builder_signals` rests on exactly
+     * this argument and its migration says the same thing — add a column carrying customer
+     * data and this policy becomes wrong.
+     *
+     * Writes stay scoped, so one organisation can never grant itself another's plan.
+     *
+     * **No DELETE policy, deliberately.** A downgrade is `plan = 'free'`, which is a row an
+     * auditor can see and an event that names who did it. Deleting the row would produce an
+     * identical outcome with no trace — the absent-row-means-free default doing the work
+     * silently. Same reasoning as `platform_settings`, where a delete would quietly restore
+     * a default and the audit log would show nothing at all.
+     */
+    pgPolicy("read_all", {
+      for: "select",
+      to: "app_runtime",
+      using: sql`true`,
+    }),
+    pgPolicy("org_write", {
+      for: "insert",
+      to: "app_runtime",
+      withCheck: sql`organization_id = current_setting('app.org_id', true)`,
+    }),
+    pgPolicy("org_update", {
+      for: "update",
+      to: "app_runtime",
+      using: sql`organization_id = current_setting('app.org_id', true)`,
+      withCheck: sql`organization_id = current_setting('app.org_id', true)`,
+    }),
+  ],
+);

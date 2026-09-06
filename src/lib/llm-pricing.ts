@@ -41,6 +41,24 @@ export const MODEL_RATES: Record<string, ModelRate> = {
    * existing arithmetic is right for it with no special case.
    */
   "google/gemini-2.5-flash-lite": { inputPerMTok: 0.1, outputPerMTok: 0.4 },
+  /**
+   * The corpus embedder. Rate read from the gateway catalogue on 2026-09-06 — the endpoint
+   * this file's header names — and not from memory: it publishes
+   * `0.00000002` per token, which is $0.02 per million.
+   *
+   * `outputPerMTok: 0` is a fact about the model, not a placeholder. An embedding call
+   * returns a vector, and the provider bills nothing for it. Leaving the entry out
+   * altogether would have been the expensive mistake: `rateFor` falls back to
+   * `UNKNOWN_MODEL_RATE`, so a 29-million-token backfill would have been charged at
+   * $5/MTok — **$145 against a real $0.58** — and the $50 platform cap would have refused
+   * the run about a fifth of the way in, looking like a budget problem rather than a
+   * missing table row.
+   *
+   * Cheapest embedding model in the catalogue at this quality, and the one Doc 3's cost
+   * table was written against. `google/text-embedding-005` is the nearest alternative at
+   * $0.025/MTok and 768 dimensions.
+   */
+  "openai/text-embedding-3-small": { inputPerMTok: 0.02, outputPerMTok: 0 },
 };
 
 /**

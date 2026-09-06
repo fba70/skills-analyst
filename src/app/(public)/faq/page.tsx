@@ -7,6 +7,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CAPABILITY_META } from "@/lib/capabilities";
 import { getDocsOrigin } from "@/lib/app-url";
 import { FAQ_SECTIONS, type FaqAnchor } from "@/lib/faq";
+import { LIFECYCLE_META, LIFECYCLE_STATES } from "@/lib/lifecycle";
+import { FREE_FOREVER } from "@/lib/plans";
+import {
+  CHARS_PER_TOKEN,
+  COST_BAND_META,
+  COST_BANDS,
+  DISCLOSURE_HINT_BYTES,
+  formatTokens,
+  MAX_BODY_BYTES,
+} from "@/lib/tokens";
 import {
   QUALITY_BANDS,
   SEVERITY_WEIGHTS,
@@ -136,6 +146,144 @@ export default function FaqPage() {
             {QUALITY_BANDS.strong} and above is strong, {QUALITY_BANDS.fair}–
             {QUALITY_BANDS.strong - 1} is fair, below {QUALITY_BANDS.fair} is weak.{" "}
             <em>Unscored</em> means validation has not finished, not that it failed.
+          </p>
+        </Q>
+      </Section>
+
+      <Section id="cost" title="Activation cost">
+        <Q q="What does “~1.8K tokens” on a skill mean?">
+          <p>
+            It is what the skill costs the agent that loads it. A skill is paid for in{" "}
+            <strong>context tokens on every activation</strong> — the whole document enters
+            the conversation each time it fires, so a large skill is a standing charge
+            against the space the agent has left to think in.
+          </p>
+          <p className="text-muted-foreground">
+            Nothing else in the registry measures this, and it is the number an author is
+            least likely to have thought about.
+          </p>
+        </Q>
+
+        <Q q="Is it a real token count?">
+          <p>
+            No, and it always carries an <strong>est.</strong> label for that reason. It is
+            estimated from document size at {CHARS_PER_TOKEN.prose} characters per token for
+            prose and {CHARS_PER_TOKEN.code} for code, because identifiers and punctuation
+            split more often than words do.
+          </p>
+          <p className="text-muted-foreground">
+            The honest consequence: it is reliable for <em>comparing</em> two skills, or one
+            skill against a shorter rewrite of itself, and approximate as an absolute. A
+            model&rsquo;s real tokenizer would need either a dependency this project has not
+            taken or an API call per skill, and neither would change the comparisons this
+            figure exists to support.
+          </p>
+        </Q>
+
+        <Q q="What do the bands mean?">
+          <ul className="grid gap-1">
+            {(Object.keys(COST_BAND_META) as Array<keyof typeof COST_BAND_META>).map((band) => {
+              const floor =
+                band === "lean" ? 0 : COST_BANDS[band as keyof typeof COST_BANDS];
+              return (
+                <li key={band} className="flex items-baseline justify-between gap-3 text-sm">
+                  <span>{COST_BAND_META[band].label}</span>
+                  <span className="text-muted-foreground tabular-nums">
+                    {floor === 0 ? `under ${formatTokens(COST_BANDS.typical)}` : `${formatTokens(floor)}+`}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="text-muted-foreground">
+            The boundaries are not chosen for this page. They are the{" "}
+            <em>same size budget the validator enforces</em>, converted into tokens:{" "}
+            {DISCLOSURE_HINT_BYTES.toLocaleString()} bytes is where a skill is told to move
+            detail into <code>references/</code>, and {MAX_BODY_BYTES.toLocaleString()} bytes
+            is where it is flagged as an oversized monolith. A cost display with thresholds
+            of its own would eventually call a document fine while the validator called it
+            too big.
+          </p>
+        </Q>
+
+        <Q q="Why is it missing on some skills?">
+          <p>
+            Because the figure comes from a structural fingerprint, and fingerprints are
+            re-derived whenever the extractor changes. A version with no fingerprint at the
+            current extractor version shows nothing at all rather than a zero — absent is a
+            fact about us, and zero would be a claim about the skill.
+          </p>
+        </Q>
+      </Section>
+
+      <Section id="lifecycle" title="Lifecycle">
+        <Q q="What is the difference between a lifecycle state and a validation verdict?">
+          <p>
+            A verdict answers <strong>may this be served</strong>. The lifecycle answers{" "}
+            <strong>how proven is it, and is it still current</strong>. They are independent:
+            a skill can pass every analyzer and still be three years out of date, or be
+            replaced by something better while remaining perfectly valid.
+          </p>
+          <p className="text-muted-foreground">
+            Keeping them apart matters for a duller reason too. The pipeline owns the
+            verdict, so if a deprecation notice lived in the same column a routine re-sync
+            would eventually overwrite a curator&rsquo;s decision.
+          </p>
+        </Q>
+
+        <Q q="What are the states?">
+          <ul className="grid gap-2">
+            {LIFECYCLE_STATES.map((state) => (
+              <li key={state} className="grid gap-0.5 text-sm">
+                <span className="flex items-baseline gap-2">
+                  <strong>{LIFECYCLE_META[state].label}</strong>
+                  <span className="text-muted-foreground text-xs">
+                    {LIFECYCLE_META[state].origin === "declared"
+                      ? "declared by a person"
+                      : LIFECYCLE_META[state].origin === "earned"
+                        ? "earned from evidence"
+                        : "derived from evidence"}
+                  </span>
+                </span>
+                <span className="text-muted-foreground">{LIFECYCLE_META[state].blurb}</span>
+              </li>
+            ))}
+          </ul>
+        </Q>
+
+        <Q q="Why does no skill say “battle-tested”?">
+          <p>
+            Because it has to be earned and there is nothing yet to earn it with. It is meant
+            to rest on what happened <em>after</em> publication — installs, eval results, age
+            without incident — and that evidence is not collected yet.
+          </p>
+          <p className="text-muted-foreground">
+            It could be faked from what we do have, by calling anything old and
+            high-scoring battle-tested. That would make the badge a restatement of the
+            quality score wearing a stronger word, which is worse than an empty tier: the
+            whole value of a second trust tier is that static scanning cannot produce it. So
+            it is named here and nothing carries it.
+          </p>
+        </Q>
+
+        <Q q="Who decides, and can it be set by hand?">
+          <p>
+            Only two states can be asserted at all — <strong>deprecated</strong> and{" "}
+            <strong>superseded</strong> — and only by a curator, with the reason recorded in
+            the audit log. Everything else is computed each time the page is read.
+          </p>
+          <p className="text-muted-foreground">
+            That is enforced by the schema rather than by policy: there is no column to write{" "}
+            <em>stale</em> or <em>battle-tested</em> into, so neither can be granted as a
+            favour or set by mistake.
+          </p>
+        </Q>
+
+        <Q q="Can I still download a deprecated skill?">
+          <p>
+            Yes. Deprecation is advice from a curator, not a legal or safety block — the
+            licence still permits the download and the bytes are still exactly what was
+            validated. A <em>withdrawn</em> skill is the different case, and that one refuses.
           </p>
         </Q>
       </Section>
@@ -522,6 +670,50 @@ export default function FaqPage() {
           </p>
         </Q>
       </Section>
+
+      <Section id="pricing" title="What costs money">
+        <Q q="Is the trust information behind a paywall?">
+          <p>
+            No, and it cannot be put behind one. Verdicts, provenance, quarantine reasons, the
+            capability surface, the quality score, licence posture, reading the registry and
+            downloading anything the licence permits are free on every plan, permanently.
+          </p>
+          <p className="text-muted-foreground">
+            That is enforced in code rather than promised in a policy: the entitlement gate{" "}
+            <strong>throws an error</strong> if any part of the platform asks whether a
+            workspace is entitled to one of them. A paywall on these cannot be switched on by
+            configuration, because the question itself is refused.
+          </p>
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {FREE_FOREVER.map((key) => (
+              <Badge key={key} variant="outline" className="font-normal">
+                {key.replace(/-/g, " ")}
+              </Badge>
+            ))}
+          </div>
+        </Q>
+
+        <Q q="So what is paid for?">
+          <p>
+            The expensive-to-run half of authoring: deriving a skill from your own transcripts
+            and documents, running evaluations, testing how a skill triggers against the
+            corpus, and authoring from inside an agent session. Team plans add a private
+            corpus, shared convention blocks and usage analytics.
+          </p>
+          <p className="text-muted-foreground">
+            Most of it is not built yet. Nothing served today is gated, so the free tier is
+            currently everything there is.
+          </p>
+        </Q>
+
+        <Q q="Does ranking change if someone pays?">
+          <p>
+            No. Search ranks on quality and relevance, and popularity gets no vote at all —
+            paying for a plan buys authoring capability, never placement.
+          </p>
+        </Q>
+      </Section>
+
     </div>
   );
 }

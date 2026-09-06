@@ -199,33 +199,63 @@ Better Auth's table shapes are not guesswork: re-derive them with `getAuthTables
 `better-auth/db` whenever a plugin is added or the version moves, then generate a
 migration. Do not hand-tune those columns.
 
-## Where things stand — audited 2026-09-05
+## Where things stand — audited 2026-09-06
 
 Snapshot for picking this up cold. Numbers move; the shape does not. Full requirement-level
 audit is **`specs/core/02-requirements-spec.md` §10b** — that table is the source of truth,
-this is the summary. Both were re-audited on 2026-09-05, and §10b now also carries Doc 6's
-RW.x / RK.x rows and the re-homed R8.x block (§7.8). The ordered plan is §10, dated 2026-09-06.
+this is the summary. The ordered plan is §10, and **Phase A of it is complete**.
+
+Run `pnpm db:audit` for the live version of the table below; it is free, read-only, and is
+where these numbers came from.
 
 | | |
 |---|---|
-| Corpus | 49,133 indexed · 47,854 canonical / 1,279 near-duplicate variants · 1,053 quarantined |
-| Sources | **888 synced of 895** — ingestion is done; the source table is deduplicated (migration 0021) |
+| Corpus | 49,134 indexed · 47,855 canonical · 1,053 quarantined |
+| Sources | **888 synced of 896** — ingestion is done; the source table is deduplicated (migration 0021) |
 | Discovery | 1,998 candidates awaiting a decision |
-| Taxonomy | **46,489 labelled at vocabulary 1.7.0** · 1,279 held below the floor · ~1,300 unlabelled |
-| Derived | 51,222 fingerprints · 50,159 signatures · verdicts all current, 0 stale |
-| Archetypes | **13 of 13 function categories at v8** · miner 2.3.0 · public at `/archetypes` |
-| Builder | live at `/build` · scaffolds 2–4 sections plus traits and 8 exemplars per category |
-| MCP | live at `/api/mcp` · six tools, token-gated, admin-tunable rate limits |
-| Spend, cumulative | **$31.57**, all metered. The whole 47k-skill classification cost $12.41. |
+| Taxonomy | **46,489 labelled**, 103,588 assignments · 163 held below the floor · 1,327 unlabelled |
+| Validation | 443,222 verdicts, all current |
+| Archetypes | 13 categories at **v8**, miner 2.3.0 · 78 earlier rows kept as history · public at `/archetypes` |
+| Blocks | **new (A2)** — `skill_blocks`, extractor 2.0.0, eleven typed span types |
+| Embeddings | **new (A6)** — pgvector 0.8.6, HNSW cosine, 1,536 dimensions |
+| Lifecycle | **new (A4)** — derived second axis; battle-tested unreachable by construction |
+| Entitlements | **new (A5)** — three plans; the trust surfaces cannot be gated at all |
+| Builder | live at `/build` · scaffolds sections plus traits and exemplars per category |
+| MCP | live at `/api/mcp` · six tools, token-gated, rate-limit scope now follows the plan |
+| Schema | 29 migrations (0000–0028) · 33 tables · 26 RLS policies |
+| Spend, cumulative | **$31.58** — $31.52 taxonomy, $0.05 builder, $0.02 embeddings. All metered. |
 
-**Ingestion and classification both run from a local terminal**, not from the schedule — a
-6,000-skill repository needs longer than any function ceiling, and locally there is none.
-Start them in **your own shell**: a loop started from inside an agent session gets killed with
-the session, which cost two runs before anyone noticed.
+**Ingestion, classification and every backfill run from a local terminal**, not from the
+schedule — a 6,000-skill repository needs longer than any function ceiling, and locally there
+is none. Start them in **your own shell**: a loop started from inside an agent session gets
+killed with the session, which cost two runs before anyone noticed.
+
+### The one thing that will confuse you: two backfills are mid-flight
+
+`EXTRACTOR_VERSION` went to **2.0.0** for blocks (A2) and a new `EMBEDDER_VERSION` landed
+(A6). Every derived table is selected on its version string, so both read as nearly empty
+until the re-derive catches up:
+
+```
+pnpm structures --extract 500     # free, ~2-3 hours, repeat until remaining 0
+pnpm embeddings --backfill 5000   # ~$0.08 total, repeat until remaining 0
+```
+
+> **`pnpm taxonomy --status` now says 2 function categories are minable, down from 13.**
+> Nothing is broken. The evidence gate counts *distinct structures at the current extractor
+> version*, and only ~2% of the corpus has been re-extracted, so twelve categories legitimately
+> fall below the band floor. **Do not re-mine archetypes until the re-extract finishes** — it
+> would replace v8 with a thin skeleton mined from 2% of the evidence, which is precisely the
+> v7 collapse in a new costume.
+>
+> The served product is unaffected, and that was checked rather than assumed: `/archetypes`,
+> `/build` and the skill pages read the stored `archetypes` table, not fingerprints.
+> `pnpm db:audit` prints current-versus-stale per derived table, so the gap is one command
+> away rather than something to rediscover.
 
 **The taxonomy gap is closed.** It was the dominant gap in every previous audit — 11,298
-unlabelled at the last one, widening with every sync. The corpus is now 97% labelled, held
-sits at **0.30%**, and archetypes rest on the whole corpus rather than 8% of it.
+unlabelled at one point, widening with every sync. The corpus is now 97% labelled and held
+sits at 0.35%.
 
 > **What that cost, and why it is worth stating.** The classification itself was $12.41.
 > Getting there took four vocabulary versions and a model change, and almost none of that
@@ -236,10 +266,42 @@ sits at **0.30%**, and archetypes rest on the whole corpus rather than 8% of it.
 > cheap; verifying it honestly was the expensive part, and that is the durable lesson from
 > this stretch.
 
-**What is left is no longer about the corpus.** Ingestion, deduplication, classification,
-fingerprinting and validation are all current and self-maintaining. Every remaining P0 is a
-*product* gap — outcome telemetry, community flagging, entitlements — and the builder gaps
-are superseded by the Doc 6 workbench programme rather than worth closing as specified.
+### Phase A is done; what is left is Phase B onwards
+
+Six steps, all shipped and all verified against the live database:
+
+| | | |
+|---|---|---|
+| A1 | Spec bookkeeping | §10 plan rewritten, §10b re-audited, R8.x re-homed as §7.8 |
+| A2 | Block taxonomy + mining v1 | `verify:blocks` 43 checks |
+| A3 | Activation cost (RW.9 measurement) | `verify:tokens` 17 checks |
+| A4 | Lifecycle states (RK.1) | `verify:lifecycle` 32 checks |
+| A5 | Entitlements (RC.1) | `verify:entitlements` 25 checks |
+| A6 | pgvector unparked | `verify:embeddings` 21 checks |
+
+**Every remaining P0 is a product gap, and the corpus half is self-maintaining.** The
+ordered plan is Doc 2 §10. Next is **B1, outcome telemetry (R6.3)** — the largest single gap
+in the product, and the half that turns a loop into a loop.
+
+The gaps that survived Phase A:
+
+- **R6.3 outcome telemetry** — absent. No post-publication signal is attributed to an
+  archetype version, so "what good looks like" is still a claim about what the corpus
+  contains rather than about what worked. It is also what makes RK.1's `battle-tested`
+  reachable and RK.7's impact analytics possible.
+- **R2.5 community flagging** — absent. No route from a reader to the quarantine queue.
+- **R1.8 public submission** — partial. `submitRepository` is already the shared path, so
+  this is a route and a rate limit rather than new logic.
+- **R3.6 similarity insight for authors** — the vectors now exist (A6) and
+  `similarToText` answers the query; nothing surfaces it to an author yet. Cheapest of these.
+- **R1.1(d) ClawHub connector** — absent and parked. skills.sh reconciliation delivered
+  2,323 repositories from four sitemap fetches; the corpus is no longer short of volume.
+- **R8.4 per-version permalink** — absent, so a verdict still cannot be cited.
+- **R7.4 performance** — search was last measured on a 16K corpus and is now 49K. Worth
+  re-measuring; the p95-at-500K target remains unproven.
+
+**RC.1 has left this list**: entitlements exist as of A5, nothing served is gated, and the
+free-tier guarantee now holds by mechanism as well as by construction.
 
 ### What changed on 2026-09-01
 
@@ -294,49 +356,18 @@ Everything else on the list is smaller than this.
 
 **The ordered plan lives in `specs/core/02-requirements-spec.md` §10**, next to the §10b
 status table it is derived from. It is not duplicated here: a roadmap in two places is a
-roadmap that disagrees with itself, and the spec is the one people review.
-
-The one-line version has changed for the first time in three audits. **Ingestion and the
-taxonomy are no longer the critical path — they are done.** What remains is product, and it
-splits cleanly in two.
+roadmap that disagrees with itself, and the spec is the one people review. The surviving P0
+gaps are listed once, under *Phase A is done* above.
 
 **The Doc 6 workbench programme** (`specs/core/06-workbench-and-km-extensions.md`, RW.x/RK.x)
-supersedes the builder and assistant gaps below. Do not close R4.2, R5.1, R5.3 or R5.4 as
+supersedes the builder and assistant gaps. Do not close R4.2, R5.1, R5.3 or R5.4 as
 originally specified — Doc 6 argues the v1 builder is shallow at the *structure* level and
-proposes a block model underneath it. Building the old spec first would be work thrown away.
+proposes a block model underneath it, and **that block model now exists** (A2). Building the
+old spec would be work thrown away.
 
-**Everything outside the builder** is the honest remaining delta, and it is short. R6.3 is the
-one that matters: see below.
-
-### The remaining P0 gaps, outside the builder programme
-
-Verified against the code on 2026-09-05, not read off the table.
-
-- **R6.3 outcome telemetry** — **absent, and the largest single gap in the product.** No
-  post-publication signal is attributed to an archetype version, so "what good looks like"
-  is still a claim about what the corpus contains rather than about what worked. Everything
-  else in §7.6 is done, which makes this the half that turns a loop into a loop.
-- **R2.5 community flagging** — absent. There is no route from a reader to the quarantine
-  queue, so the only way a bad skill gets re-examined is an analyzer bump.
-- **RC.1 entitlements** — absent rather than enforced-in-the-DAL. Nothing is gated today, so
-  the free-tier guarantee holds by construction and none of the mechanism exists. Blocks
-  RM.3 and RC.4.
-- **R1.8 public submission** — partial. Admin submission and Settings → Add source work;
-  there is no public endpoint. `submitRepository` is already the shared path, so this is a
-  route and a rate limit rather than new logic.
-- **R1.1(d) ClawHub connector** — absent. skills.sh reconciliation exists and found 2,323 new
-  repositories; ClawHub has never been read.
-- **R3.6 similarity insight for authors** — absent. The dedup data exists and nothing surfaces
-  it, which is the cheapest of these to close.
-
-**R1.6 licence gating stays partial and should be left alone.** Steps 4–5 (ClearlyDefined,
-ScanCode) were measured rather than assumed: of the unresolved skills, 85 repositories
-holding 1,713 of them have **no licence at all**, and no scanner can invent a grant. The real
-gap was step 2 and it is fixed.
-
-**R7.4 performance is worth re-measuring now, and was not before.** The p95-at-500K target is
-still unproven, but search was last measured on a 16K corpus and the corpus is now 49K — three
-times the evidence, and the `tsvector`/GIN/trigram path has never been timed at this size.
+Phase A landed the foundations the rest of the programme is built against: blocks (A2),
+activation cost (A3), lifecycle (A4), entitlements (A5) and vectors (A6). Phase B closes the
+Doc 2 loop gaps, starting with outcome telemetry.
 
 ### Smaller named gaps, from the §10b audit
 
@@ -345,14 +376,16 @@ times the evidence, and the `tsvector`/GIN/trigram path has never been timed at 
   *Superseded by Doc 6.*
 - **R5.1 / R5.3 / R5.4** — elicitation is a form not a conversation; no gap detection; no
   per-suggestion accept/reject, so no structured feedback events. *Superseded by Doc 6.*
-- **RC.4** — no billing webhooks; there is nothing to sync entitlements from yet.
+- **RC.4** — no billing webhooks. No longer blocked: `setPlan` is the idempotent write a
+  webhook would call, and its upsert supplies the late-and-duplicate tolerance RC.4 asks for.
 
 ### Deliberately deferred
 
-- **Embeddings / pgvector** — needed for R5.2 retrieval at scale, R3.5's emerging-category
-  clusters and R3.1's low-confidence queue. Not before the corpus settles.
-- **R2.10 sandbox / R2.11 eval harness** — Phase 4, and both need infrastructure this
-  project does not have yet.
+- ~~**Embeddings / pgvector**~~ — **built** (A6, migration 0028). Was correctly parked until
+  the corpus settled; vectors over a half-ingested corpus get rebuilt.
+- **R2.10 sandbox** — needs execution infrastructure this project does not have. **R2.11's
+  eval harness no longer waits on it**: the Eval Lab (plan step D1) runs prompts, not
+  scripts, so it needs the entitlement A5 landed and nothing else.
 - **Finishing the code-search crawl** — 38 shards saturated and unsplittable on the size
   axis. **The second axis turned out to be registry reconciliation, not a shard key:** four
   sitemap fetches against skills.sh produced 2,323 new repositories, quality-biased, from a
@@ -361,9 +394,12 @@ times the evidence, and the `tsvector`/GIN/trigram path has never been timed at 
 ### Re-run these as the corpus grows — all free, all incremental
 
 ```
+pnpm db:audit                  # did every migration land, and what is stale? free
 pnpm taxonomy --sample 100     # only unlabelled skills; ~$0.29 per 100 — COSTS MONEY
 pnpm taxonomy --sweep          # clears held rows nothing can decide; free
-pnpm archetypes --mine-all     # free; append-only, lands as v6 with a changelog
+pnpm structures --extract 500  # fingerprints AND blocks; free — outstanding, see above
+pnpm embeddings --backfill 5000 # vectors; ~$0.08 for the corpus — outstanding, see above
+pnpm archetypes --mine-all     # free, append-only — NOT until the re-extract finishes
 pnpm rescan --status           # verdict freshness after any analyzer bump
 pnpm structures --templates    # structural diversity; the monoculture check
 ```
@@ -1851,6 +1887,324 @@ returning zero on one side looks like a filter bug.
 > scaffold an empty form. That distinction is the whole bug: the measurement was right and the
 > output was unusable, and only the first had anything checking it.
 
+### pgvector, unparked — and it costs eight cents, not ten dollars
+
+`src/lib/llm-pricing.ts` · `src/server/analytics/embeddings.ts` · migration 0028
+`pnpm embeddings --status | --sample N | --backfill N` · `pnpm verify:embeddings` (23 checks, **free**)
+
+Four features were blocked on vector similarity and none can be built on text matching:
+R3.6's "twelve similar skills exist, here is how yours differs", RW.8's trigger-collision
+check, RK.3's contradiction detection, RK.5's clustering of what the corpus does not cover.
+It was parked until the corpus stopped moving — sound reasoning, since vectors built over a
+half-ingested corpus get rebuilt — and ingestion finished, so the condition is met.
+
+#### What is embedded: the claim, not the document
+
+Name, summary and category labels. **No body**, and that is a decision.
+
+Every waiting consumer matches on *what a skill claims to do*. R3.6 compares claims. RW.8
+tests what triggers a skill, which **is** its description — embedding the body would blur the
+exact thing that lab measures. RK.5 clusters queries against what the corpus offers. The
+description is what an agent reads to decide, so it is what similarity should run over.
+
+The practical half agrees. The body lives in object storage, so including it means re-reading
+~48,000 bundles from an EU bucket — the block extraction just measured that at about 2.5
+hours — for a marginal gain on an axis nobody asked for. Summary-only makes the backfill
+minutes and drops the bill from a planned **$5–10 to about $0.08**. The plan's estimate was
+written assuming a 1,000-token body window; the estimate was not wrong, the design changed.
+
+> Measured after the first 5,020: **84 tokens a skill**, against the 60 the status line
+> assumed — a 40% understate on the one number an operator reads before deciding to run it.
+> The projection now divides the tokens already charged by the rows already embedded, and
+> says which of the two it is doing. The constant survives only for the first run.
+
+Stated limitation: two skills with equally bland summaries will not separate. If body-level
+similarity is ever wanted — E2's guardrail contradiction detection is the likely first caller
+— the answer is a **second embedder over blocks**, a different unit with its own composition,
+not a wider window on this one.
+
+#### The price entry is the whole story of this step
+
+> `rateFor` falls back to `UNKNOWN_MODEL_RATE`, deliberately the most expensive rate known.
+> Without an entry for the embedding model, a 29-million-token backfill would have been
+> charged at **$14.40 against a real $0.058** — and on a bigger corpus the $50 platform cap
+> would have refused the run partway through, looking like a budget problem rather than a
+> missing table row. The rate came from the gateway catalogue endpoint that
+> `llm-pricing.ts` names as the source of truth, **fetched, not remembered**: 26 embedding
+> models with live prices, of which this is the cheapest at $0.02/MTok. `outputPerMTok: 0`
+> is a fact about the model, not a placeholder — a vector is not billed as output.
+>
+> The second trap is one line away. `embedMany` reports **`usage.tokens`**, not
+> `usage.inputTokens`. Reading the latter returns `undefined` and meters the entire run as
+> free — the exact shape of the `recordUsage` bug that made builder spend invisible and left
+> RC.2 satisfied on paper only. `verify:embeddings` asserts no stored vector has zero
+> recorded tokens, because that is what the mistake looks like from the outside.
+
+#### Versioned on the composition, not just the model
+
+`EMBEDDER_VERSION` carries model, width **and** the field list. A model or width change fails
+loudly at the insert because the column is fixed-width; only a composition change can produce
+vectors that sit beside older ones, look current, and cannot be compared. Same failure
+`classifier_version` exists to prevent. `input_hash` is the cheap half: a version whose
+composed input is byte-identical is skipped even under `--force`, because paying twice for
+the same string is never what force meant.
+
+#### Two decisions that go the opposite way from their neighbours
+
+**Batches run sequentially**, where bundle reads run six-wide. Different bottleneck: those are
+latency-bound against object storage; this is a metered call behind a shared budget, and
+parallel batches all pass `assertWithinBudget` before any cost is recorded — which breaks the
+one-call overshoot bound that RC.2's before-check/after-ledger order depends on.
+
+**HNSW, not IVFFlat.** IVFFlat needs a training pass over existing rows, so its index is
+degraded until somebody remembers to rebuild it after a backfill. HNSW is correct from the
+first insert. Costlier to build; 48k rows is nowhere near where that matters.
+
+**Canonical only.** Near-duplicate variants are by definition the rows nearest to something
+already embedded, so including them fills every similarity result with clones and multiplies
+the bill by the cluster sizes.
+
+#### Not scheduled, against my own plan
+
+The plan said "an incremental hook in the pipeline". It does not get one. CLAUDE.md's standing
+rule is that **nothing costing money is scheduled**, and while that rule's own condition
+("once RC.2's spend caps exist") is now satisfied, switching it on is a deliberate decision
+like archetype refresh shipping OFF — not a side effect of building the thing. The resumable
+selector serves the same need with no configuration: `pnpm embeddings --backfill` picks up
+whatever is new and charges nothing for what is already done.
+
+`CREATE EXTENSION IF NOT EXISTS vector` is the one hand-written line in migration 0028 — the
+same documented exception migration 0017 took for `pg_trgm`, because an extension is not
+expressible in a Drizzle schema and `vector(1536)` is not a type until it exists. Availability
+was checked against the live database (pgvector 0.8.6, present, uninstalled) rather than
+assumed.
+
+### Entitlements: the guarantee is a refusal, not a flag (Doc 2 RC.1)
+
+`src/lib/plans.ts` · `src/server/dal/entitlements.ts` · migration 0027 · Settings → **Plans**
+`pnpm verify:entitlements` (24 checks, free — the gate half needs no database)
+
+RC.1's substance is not "support tiers". It is that the free-tier trust surfaces — verdicts,
+provenance, quarantine status, capability surface, quality score, licence posture, registry
+reads, permitted downloads — **cannot be paywalled by configuration**. Doc 1 is blunter:
+paywalling the per-skill verdict would destroy the platform's reason to exist.
+
+**So the gate throws when handed one of those keys.** `hasEntitlement("…", "verdicts")` does
+not return `true` — it raises `UngateableError`.
+
+> **Returning `true` was the obvious implementation and it is the wrong one.** A gate that
+> always passes still *exists*: the call site reads as a paywall, a reviewer sees a check
+> being made, and the day somebody tidies the special case away the paywall switches on.
+> Refusing the question means the wrong call site cannot be written and still run — the
+> failure lands on the developer writing it, in development, which is the only place it is
+> cheap. Two error types, not one, because "customer should upgrade" and "we were about to
+> break a standing commitment" must not be caught by the same `catch`.
+
+`verify:entitlements` asserts every one of the eight keys throws through **both** entry
+points, and that no key appears in both vocabularies — a key that was gateable and
+ungateable at once would resolve whichever way two `if`s happened to be ordered.
+
+#### Its own table, against my own plan
+
+The plan for this step said "a plan column on the organisation". That was wrong.
+`organization` is Better Auth's table, and the standing rule here is that those shapes get
+re-derived with `getAuthTables()` whenever a plugin is added or the version moves — a
+hand-added column is exactly what that would not know about. A commercial fact does not
+belong in an auth vendor's schema, and RC.4 will want a billing customer id and a period end
+that belong there even less.
+
+**An absent row means `free`**, which is what makes a fresh deployment gate nothing. The
+alternative — a row written at organisation creation — means a half-finished bootstrap leaves
+workspaces with no plan, and "no plan" would have to mean something.
+
+**Expiry is read at the gate, never swept by a job.** A task that downgrades lapsed plans is
+a task that can fail, and its failure mode is a customer keeping what they stopped paying
+for. Same reasoning as the lifecycle's derived `stale`.
+
+#### The schema's third split policy
+
+SELECT open to `app_runtime`, INSERT and UPDATE org-scoped. Forced by two reads that are
+cross-organisation by definition: an operator listing every workspace's plan, and resolving
+the plan behind an MCP token *before* any org scope is set — the same shape that made
+`mcp_tokens.SELECT` open, where the lookup is how the organisation is discovered. Safe
+**because of the column list**: a plan name, an admin's note, who granted it, when it lapses.
+Add a column carrying customer data and the policy becomes wrong.
+
+**No DELETE policy.** A downgrade is `plan = 'free'` — a row an auditor can read and an event
+naming who did it. Deleting reaches the same outcome with no trace, because an absent row
+already means free. Same argument as `platform_settings`.
+
+> A near-miss caught before it shipped: `planFor` was first wrapped in `withExplicitOrgScope`
+> against an all-scopes policy, which would have made every unscoped caller see no row and
+> therefore read as `free`. A permissions failure disguised as data — precisely the shape
+> `validatePending` shipped with when RLS answered its unscoped read with `org_id IS NULL`
+> only.
+
+#### One live consumer, and it needed no new branch
+
+`rate-limits.ts` was written anticipating this and said so: the tier-selecting path was built
+and tested while always answering `free`, "so when entitlements land the limiter needs no new
+branch." It did not. The MCP route now resolves the token's plan and picks `mcpPaid` or
+`mcpFree`, and the paid numbers that were stored and unreachable are reachable.
+
+`hasEntitlement`, not `requireEntitlement`, at that call site: a free caller is not doing
+anything wrong and gets the free window. Throwing would turn the absence of a subscription
+into a failed request.
+
+**Every other feature key names something that does not exist yet** — Distill (C4), the Eval
+Lab (D), MCP authoring (RM.3) — because each was blocked on there being an entitlement to
+check. Nothing served today is gated, so the free-tier guarantee now holds by construction
+*and* by mechanism. The Plans panel says which features are live rather than offering a
+control that silently does nothing, and lists the free-forever surfaces on the one screen
+where somebody would go looking for a way to sell them.
+
+### The lifecycle is mostly derived, so nobody can grant it (Doc 6 RK.1)
+
+`src/lib/lifecycle.ts` · `src/server/skills/lifecycle.ts` · migration 0026 · `pnpm lifecycle`
+`pnpm verify:lifecycle` (32 checks, free — probes then rolls back)
+
+`skills.status` answers **may we serve this**. The lifecycle answers a question static
+scanning cannot reach: **how proven is this, and is it still current.** A skill can pass
+every analyzer and be three years stale; it can be replaced by something better and still be
+perfectly valid. Two axes, two columns — fold them together and a routine re-sync eventually
+overwrites a curator's deprecation notice, which is the "recorded then ignored" shape this
+file has already recorded three times.
+
+#### Only two states are storable, and that is the enforcement
+
+Doc 6 is specific: battle-tested is **earned from evidence**, stale is **detected, not
+declared**. The honest way to hold a system to that is to leave it nowhere to cheat. So the
+enum has exactly two values — `deprecated` and `superseded` — and everything else is computed
+at read time. Nobody can hand a skill a battle-tested badge, because there is no column to
+write one into, and **Postgres rejects the value** rather than a code review catching it.
+
+`verify:lifecycle` asserts that at both levels: the TypeScript guard refuses it, and
+`select 'battle-tested'::lifecycle_declaration` must throw.
+
+#### Battle-tested has no branch at all
+
+It needs installs, eval deltas and age without incident — R6.3, plan step B1 — and none of
+that is collected. The tempting shortcut is a proxy from what *is* available: call anything
+old and high-scoring battle-tested. That is **exactly** the mistake the archetype miner made
+when it banded on `quality_score` and confidently reported that good review skills are
+single-file with no code examples. So the tier is named in the vocabulary, absent from the
+derivation, and reported as zero with the reason attached — because a table of zeros with no
+explanation is how `archetypes --blocks` came to look like a finding.
+
+`draft` is also absent, deliberately: a row in `skills` exists because something was
+published, so the value could never occur, and a vocabulary carrying a state nothing can hold
+is lying about the space it describes.
+
+#### One derivation, in SQL, and the checker compiles it rather than copying it
+
+`lifecycleExpression()` is the only place the state is computed — a badge on a skill page and
+a filter in a listing have to agree by construction. It cannot be a generated column, tempting
+as that looks next to `search_vector`: the `stale` branch compares `review_by` against
+`now()`, and a generated column requires an IMMUTABLE expression.
+
+> **The verification shipped with the bug it exists to prevent, for about ten minutes.** The
+> first draft pasted the CASE into the check and asserted in a comment that it was "kept
+> identical on purpose". A checker holding its own copy of a rule verifies that the copy is
+> self-consistent and stops noticing the day the real one moves — the `taxonomy --status`
+> mistake exactly. It now renders `lifecycleExpression()` through Drizzle's own dialect, so
+> changing the derivation changes what is tested.
+
+Precedence: not indexed → **no state at all** (the trust surface answers for those, and a
+second badge would compete with the withdrawal notice) → `superseded` → `deprecated` →
+`stale` → `validated`. A human's assertion outranks a measurement because it carries intent;
+`superseded` outranks `deprecated` because it comes with somewhere else to go.
+
+#### Two operations, because one of them was quietly lying
+
+`declareLifecycle` and `setReviewDate` are separate functions. They were one, and the seam
+leaked immediately: setting a review date on an undeclared skill passed `declaration: null`,
+which wrote an audit row reading **`lifecycle.cleared`** and wiped the existing note on the
+way past. An operator who set a date would have found the log saying they had lifted a
+deprecation. An audit trail may be incomplete; it may not be confidently wrong.
+
+A review date is governance, not a state — it is an *input* the `stale` branch reads.
+
+#### Refusals worth knowing
+
+- **Superseded needs a replacement.** A state that tells a reader to go elsewhere and cannot
+  say where is a worse `deprecated`, and should have been that instead.
+- **The replacement must be `indexed`**, or the page sends a reader to a dead end after
+  telling them to go there. Resolved by a **live join**, like archetype exemplars, so a
+  replacement quarantined since the declaration stops being linked rather than going on
+  being recommended.
+- **The replacement must be in the same workspace**, or a public page leaks the existence of
+  a private skill — RC.5 arriving through an unexpected door.
+- **Nothing supersedes itself.**
+
+Deprecation does **not** block the download. It is a curator's advice, the licence still
+permits it, and the bytes are still what was validated — refusing would be us converting
+advice into a prohibition nobody asked for. `withdrawn` is the case that refuses, and it
+already does.
+
+> **Two more paths that had never been run, both found by running them.** The rollback probe
+> exercises the *derivation* with raw SQL, so it proved nothing about `declareLifecycle`
+> itself — and driving the CLI for real turned up both: `scripts/lifecycle.mts` imported
+> `skills` from the schema **barrel**, which a native-ESM `.mts` cannot see named exports
+> through (every other script already imports the concrete file; this one was the exception),
+> and `--review-by <slug> clear` ran `new Date("clear")` and was rejected by its own date
+> guard, so the one option the usage string advertised had never once worked.
+>
+> The audit trail is now checked for the shape of the bug it used to have: a
+> `lifecycle.cleared` row carrying a `reviewBy` in its payload is the precise signature of a
+> review-date change reported as a lifted deprecation, and nothing else produces it.
+
+Declared through `pnpm lifecycle` rather than a settings panel, for the same reason `submit`
+and `promote` are CLIs: it is a curator operation on one named skill and there is no per-skill
+admin page. The panel belongs with E1's freshness nudges — one that can set a review date but
+cannot yet tell anyone it has passed is furniture.
+
+### Activation cost: what a skill costs the agent that loads it (Doc 6 RW.9)
+
+`src/lib/tokens.ts` · `components/registry/activation-cost.tsx` · `pnpm verify:tokens` (17 checks, free)
+
+Every other number in the registry describes the document. This one describes what the
+document *does to you*: a skill is paid for in context tokens on **every activation**, the
+whole marker enters the conversation each time it fires, and nothing in the ecosystem tells
+an author what theirs costs. RW.9's eventual pitch — *this skill costs 4.2K tokens; here is a
+1.9K version with identical eval results* — needs the first half measured before the second
+can be built, and D4 is the second half.
+
+Shown on the skill page beside quality, and on a draft in `/build` **through the same
+component**, because the question an author actually has is "is mine bigger than the ones I
+copied from?" and two components would eventually round differently.
+
+**It says `est.` everywhere, and that label is load-bearing.** Four characters per token for
+prose, three for code, because identifiers and punctuation split more often. That is not a
+tokenizer: Claude's is not public, a BPE library would be a dependency this project has not
+taken, and an exact count per skill means an API call per skill. So the figure is honest for
+*comparing* two documents — this draft against that draft, an original against a compressed
+rewrite, which is exactly what D4 needs — and dishonest as a claim about someone's context
+window. A number that looks measured and is not is worse than no number, because a reader who
+later finds the gap stops trusting the surfaces that *are* exact.
+
+**The bands are derived from the validator's own size budget, not invented.**
+`MAX_BODY_BYTES` (40,000) and `DISCLOSURE_HINT_BYTES` (15,000) moved out of
+`structural-lint.ts` into the leaf module with their values unchanged — the same refactor
+`SEVERITY_WEIGHTS` had when the FAQ needed it. The lint already had an opinion about a
+document being too big, so a cost display with *its own* thresholds would eventually tell an
+author their skill is fine while the validator flagged it as an oversized monolith. Values
+identical means no behaviour change and therefore no analyzer version bump; `validate:verify`
+stayed at 22/22.
+
+> **The estimator's divisors are pinned by a test.** Not a tautology: it is the only thing
+> between "someone improves the estimator" and 51,000 stored `token_estimate` values quietly
+> meaning something else while `structures --status` still reports them as current. The check
+> names the fix in its own failure message — bump `EXTRACTOR_VERSION` and re-extract.
+
+**Absent, never zero.** A version with no fingerprint at the current extractor version
+renders no badge at all. During a re-extract campaign that is most of the corpus, and "0
+tokens" is a claim about the skill where silence is a claim about us. The null check lives in
+the page rather than only in the badge, because `Explain` wraps its child in a link and a
+link wrapping nothing is an invisible tab stop.
+
+First measurement, over the 510 extracted so far: **median 1.2K tokens, mean 1.8K** — and
+that sample is not random, so read it as a first look rather than a corpus figure.
+
 ### Blocks: the grain below the heading (Doc 6 RW.1 / RW.2)
 
 `src/lib/block-types.ts` · `src/server/analytics/blocks.ts` · migration 0024 · extractor **2.0.0**
@@ -2770,6 +3124,14 @@ pnpm verify:http-deadline | verify:rate-limit   # free; both reproduce the bug f
 pnpm verify:dedup                        # repo identity folds case; free, probes then rolls back
 pnpm verify:taxonomy | verify:archetypes # vocabulary and mined guidance; both free
 pnpm verify:blocks                       # block taxonomy and span invariants; free
+pnpm verify:tokens                       # activation cost, bands and honesty; free
+pnpm verify:lifecycle                    # lifecycle cannot be granted; free, rolls back
+pnpm verify:entitlements                 # trust surfaces cannot be paywalled; free
+pnpm verify:embeddings                   # embedding path priced and metered; free
+pnpm embeddings --status                  # vector coverage; free
+pnpm embeddings --backfill 5000           # COSTS MONEY (~$0.06 for the whole corpus)
+pnpm lifecycle --status                  # derived states and content governance; free
+pnpm lifecycle --deprecate <slug> --note "..." | --supersede <slug> --by <slug>
 pnpm registry --status | --import        # skills.sh reconciliation via its sitemap; free
 pnpm verify:builder                      # COSTS MONEY — two model calls
 pnpm validate:verify | db:verify-rls

@@ -12,6 +12,8 @@
 
 export const FAQ_SECTIONS = [
   { id: "quality", title: "Quality score" },
+  { id: "cost", title: "Activation cost" },
+  { id: "lifecycle", title: "Lifecycle" },
   { id: "validation", title: "Validation" },
   { id: "licences", title: "Licences" },
   { id: "capabilities", title: "Capabilities" },
@@ -19,6 +21,7 @@ export const FAQ_SECTIONS = [
   { id: "archetypes", title: "Archetypes" },
   { id: "duplicates", title: "Duplicates" },
   { id: "mcp", title: "Agent access (MCP)" },
+  { id: "pricing", title: "What costs money" },
 ] as const;
 
 export type FaqAnchor = (typeof FAQ_SECTIONS)[number]["id"];

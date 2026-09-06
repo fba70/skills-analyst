@@ -16,9 +16,10 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-import { organization } from "./auth";
+import { organization, user } from "./auth";
 import {
   licenseSource,
+  lifecycleDeclaration,
   redistributionPosture,
   signalKind,
   skillDialect,
@@ -136,6 +137,51 @@ export const skills = pgTable(
     qualityScore: smallint("quality_score"),
     /** The version currently served. NULL while a skill has never passed validation. */
     currentVersionId: uuid("current_version_id"),
+
+    // ---- Lifecycle (Doc 6 RK.1) --------------------------------------------
+    /**
+     * The one lifecycle state a person asserts. NULL is the normal case.
+     *
+     * Only `deprecated` and `superseded` are storable, and that is the point: RK.1 requires
+     * battle-tested to be *earned* from evidence and stale to be *detected*, so neither has
+     * a column to be written into. The state a reader sees is computed at read time from
+     * this plus the evidence — `src/server/skills/lifecycle.ts` is the only derivation.
+     *
+     * The pipeline never touches this column. `status` is the pipeline's; a sync that could
+     * clear a curator's deprecation notice would be the "decision recorded then ignored"
+     * failure this file has already seen three times.
+     */
+    lifecycleDeclaration: lifecycleDeclaration("lifecycle_declaration"),
+    /**
+     * What replaced it, when superseded. A self-reference, like `canonicalSkillId`.
+     *
+     * Semantic, unlike a tombstone: "this was replaced by that" is a different statement
+     * from "this went away", and a reader deciding what to install needs the pointer. The
+     * FK is not declared against `skills` in Drizzle for the same reason `canonicalSkillId`
+     * is not — a self-reference inside one table definition is a TypeScript cycle; it is
+     * enforced by the index and the write path instead.
+     */
+    supersededBySkillId: uuid("superseded_by_skill_id"),
+    /** Why, in the curator's words. Our own metadata, never mirrored upstream content. */
+    lifecycleNote: text("lifecycle_note"),
+    /**
+     * Content-governance basics (RK.1): a date by which someone should look again.
+     *
+     * The only staleness signal that exists today, and the reason `stale` is reachable at
+     * all before RK.2's decay detection lands. Nullable, because the public corpus is other
+     * people's work and we are in no position to set review dates on it.
+     */
+    reviewBy: timestamp("review_by", { withTimezone: true }),
+    /**
+     * Who is answerable for it. Meaningful for an org-scoped skill; NULL for the corpus.
+     *
+     * A review date with no owner is a date nobody is nudged about, which is how content
+     * governance fails everywhere it has ever been tried. E1 sends the nudge; this is the
+     * address.
+     */
+    ownerId: text("owner_id").references(() => user.id, { onDelete: "set null" }),
+    /** When the declaration last moved. The events row carries who and why. */
+    lifecycleChangedAt: timestamp("lifecycle_changed_at", { withTimezone: true }),
     firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

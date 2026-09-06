@@ -56,6 +56,39 @@ function failure(error: unknown): ActionResult {
   return { ok: false, message: (error as Error).message.slice(0, 300) };
 }
 
+/**
+ * Set a workspace's plan (RC.1).
+ *
+ * `requireAdmin()` first, like every action here: a server action is a POST endpoint, so the
+ * page guard protects the view and this protects the operation. The session's own user id
+ * becomes the actor on the audit row — the one thing a CLI cannot supply honestly.
+ */
+export async function setPlanAction(
+  organizationId: string,
+  plan: string,
+  note: string,
+): Promise<ActionResult> {
+  try {
+    const admin = await requireAdmin();
+    const { isPlan } = await import("@/lib/plans");
+    if (!isPlan(plan)) return { ok: false, message: `Not a plan: ${plan}` };
+
+    const { setPlan } = await import("@/server/dal/entitlements");
+    const outcome = await setPlan({
+      organizationId,
+      plan,
+      note: note.trim() ? note.trim().slice(0, 300) : null,
+      actorId: admin.userId,
+    });
+    if (!outcome.ok) return { ok: false, message: outcome.error };
+
+    revalidatePath("/settings");
+    return { ok: true, message: `Plan set to ${plan}.` };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
 export async function runCrawlAction(shards: number): Promise<ActionResult> {
   try {
     await requireAdmin();

@@ -3,7 +3,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
+import { ActivationCostBadge } from "@/components/registry/activation-cost";
 import { CapabilitySurface } from "@/components/registry/capability-surface";
+import { LifecycleBadge, LifecycleNotice } from "@/components/registry/lifecycle-notice";
 import { Explain, ExplainLink } from "@/components/registry/explain";
 import { ConsistencyCard } from "@/components/registry/consistency-card";
 import { DownloadCard } from "@/components/registry/download-card";
@@ -96,6 +98,27 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
               {skill.fileCount} file{skill.fileCount === 1 ? "" : "s"}
             </Badge>
           ) : null}
+          {/*
+            Activation cost sits with quality and file count because it is the same class of
+            fact — something a reader weighs before installing. Absent, not zero, when the
+            version has no fingerprint yet, so a re-extract in progress reads as silence
+            rather than as a measurement of nothing.
+
+            The null check is here rather than only inside the badge: `Explain` wraps its
+            child in a link, and a link wrapping nothing is an invisible tab stop.
+          */}
+          {skill.tokenEstimate !== null ? (
+            <Explain anchor="cost">
+              <ActivationCostBadge tokens={skill.tokenEstimate} />
+            </Explain>
+          ) : null}
+          {/* Same guard, same reason: Explain wraps a link, and a link around nothing is an
+              invisible tab stop. */}
+          {skill.lifecycle !== null ? (
+            <Explain anchor="lifecycle">
+              <LifecycleBadge state={skill.lifecycle} />
+            </Explain>
+          ) : null}
         </div>
 
         {skill.categories.length > 0 ? (
@@ -136,6 +159,18 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
           </p>
         ) : null}
       </header>
+
+      {/*
+        Above the download and above the consistency card, because when a skill has been
+        superseded the most useful thing this page can do is send the reader to the
+        replacement — and that is only true if they see it before deciding.
+      */}
+      <LifecycleNotice
+        state={skill.lifecycle}
+        note={skill.lifecycleNote}
+        reviewBy={skill.reviewBy}
+        supersededBy={skill.supersededBy}
+      />
 
       <ConsistencyCard verdicts={skill.verdicts} />
 

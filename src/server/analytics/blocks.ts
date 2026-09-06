@@ -1,6 +1,7 @@
 import "server-only";
 
 import { BLOCK_TYPES, type BlockKind, type BlockType } from "@/lib/block-types";
+import { estimateTokens as estimateTokensFor } from "@/lib/tokens";
 
 import type { SectionRole } from "./structure";
 
@@ -768,10 +769,16 @@ function featuresOf(segment: Segment, bundlePaths: ReadonlySet<string>): BlockFe
   };
 }
 
-/** Prose runs ~4 chars per token, code ~3: identifiers and punctuation split more often. */
+/**
+ * Delegated to the leaf module so the skill page, the builder, the structural lint and the
+ * FAQ all read the same estimator (Doc 6 RW.9).
+ *
+ * The arithmetic is byte-for-byte what it was when it lived here, deliberately: changing it
+ * changes every stored `token_estimate`, which means an `EXTRACTOR_VERSION` bump and a full
+ * re-extract. Moving a function is not a reason to spend one.
+ */
 function estimateTokens(segment: Segment): number {
-  const divisor = segment.kind === "code" ? 3 : 4;
-  return Math.max(1, Math.ceil(segment.text.length / divisor));
+  return estimateTokensFor(segment.text, segment.kind === "code" ? "code" : "prose");
 }
 
 export type BlockExtractInput = {

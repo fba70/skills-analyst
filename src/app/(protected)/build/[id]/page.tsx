@@ -4,12 +4,14 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, ShieldOff } from "lucide-react";
 
 import { DraftActions } from "@/components/builder/draft-actions";
+import { ActivationCostBadge } from "@/components/registry/activation-cost";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getDraft } from "@/server/builder/drafts";
 import { getSkillsByIds } from "@/server/dal/skills";
 import { requireSession } from "@/server/dal/session";
+import { estimateTokens } from "@/lib/tokens";
 import { labelFor } from "@/server/taxonomy/vocabulary";
 
 export const metadata: Metadata = { title: "Draft" };
@@ -59,6 +61,16 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
           <Badge variant={draft.status === "ready" ? "secondary" : "outline"}>
             {draft.status}
           </Badge>
+          {/*
+            The author's own activation cost, computed from the draft body with the same
+            estimator the registry uses on a published skill (Doc 6 RW.9). Sharing the
+            component is the point: an author asking "is mine bigger than the ones I copied
+            from?" has to be reading one number computed one way.
+
+            Estimated live rather than stored, because a draft has no structural fingerprint
+            — that only exists once it is published and the extractor has run over it.
+          */}
+          {draft.body ? <ActivationCostBadge tokens={estimateTokens(draft.body)} /> : null}
           {draft.qualityScore !== null ? (
             <Badge variant="outline" className="tabular-nums">
               {draft.qualityScore}/100

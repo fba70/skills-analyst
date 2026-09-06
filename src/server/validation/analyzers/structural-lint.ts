@@ -1,5 +1,7 @@
 import "server-only";
 
+import { DISCLOSURE_HINT_BYTES, MAX_BODY_BYTES } from "@/lib/tokens";
+
 import type { Analyzer, Finding } from "../types";
 
 /**
@@ -10,8 +12,12 @@ import type { Analyzer, Finding } from "../types";
  * cannot be listed or matched, and serving it would be serving nothing.
  */
 
-const MAX_BODY_BYTES = 40_000;
-const DISCLOSURE_HINT_BYTES = 15_000;
+/**
+ * The two size budgets moved to `@/lib/tokens` with their values unchanged, so the cost
+ * display on a skill page is banded against the same numbers this analyzer enforces. Values
+ * identical means no behaviour change and therefore no analyzer version bump — the same
+ * reasoning that let `SEVERITY_WEIGHTS` move into `quality.ts`.
+ */
 const MIN_DESCRIPTION = 40;
 const MAX_DESCRIPTION = 1024;
 

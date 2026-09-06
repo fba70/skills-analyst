@@ -1,5 +1,6 @@
 import { createMcpHandler } from "mcp-handler";
 
+import { hasEntitlement } from "@/server/dal/entitlements";
 import { consume } from "@/server/mcp/rate-limit";
 import { resolveToken, touchToken } from "@/server/mcp/tokens";
 import { registerFreeTools } from "@/server/mcp/tools";
@@ -148,8 +149,22 @@ async function guarded(request: Request): Promise<Response> {
     );
   }
 
-  // Everyone resolves to the free scope until RC.1 exists to say otherwise.
-  const decision = await consume(request, "mcpFree", principal.rateKey);
+  /**
+   * The scope now follows the workspace's plan (RC.1).
+   *
+   * `rate-limits.ts` was written anticipating this and said so: the tier-selecting path was
+   * built and tested while always answering `free`, "so when entitlements land the limiter
+   * needs no new branch". It did not — this is the whole change, and the paid numbers that
+   * were stored and unreachable are now reachable.
+   *
+   * `hasEntitlement` is used rather than `requireEntitlement`: a free caller is not doing
+   * anything wrong, they simply get the free window. Throwing here would turn the absence of
+   * a subscription into a failed request.
+   */
+  const scope = (await hasEntitlement(principal.organizationId, "mcp-elevated-limits"))
+    ? "mcpPaid"
+    : "mcpFree";
+  const decision = await consume(request, scope, principal.rateKey);
   if (!decision.allowed) return tooManyRequests(decision);
 
   // After the limit, so a throttled caller does not keep its token looking busy — and not
