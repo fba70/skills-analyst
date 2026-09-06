@@ -4,6 +4,7 @@ import {
   index,
   integer,
   jsonb,
+  pgPolicy,
   pgTable,
   smallint,
   text,
@@ -97,6 +98,38 @@ export const skillStructures = pgTable(
     /** `{ startsWithVerb, hasUseWhen, hasTriggerCue, sentenceCount, ... }` (R2.8). */
     descriptionShape: jsonb("description_shape").notNull().default(sql`'{}'::jsonb`),
 
+    // ---- Blocks (Doc 6 RW.1) -----------------------------------------------
+    /**
+     * Which marker file the body and every block span index into.
+     *
+     * Stored rather than re-derived, because a block span is only meaningful against one
+     * exact string. The loader currently finds the marker with a regex over the bundle;
+     * pinning the answer here means a later change to that regex cannot silently
+     * re-point a million stored spans at a different file.
+     */
+    markerPath: text("marker_path"),
+    /**
+     * Distinct block types present, deduplicated — the indexable aggregation path.
+     *
+     * Sits here for exactly the reason `sectionRoles` does. Mining asks "does this
+     * structure carry a guardrail" across tens of thousands of rows, and answering that
+     * by unnesting `skill_blocks` on every query is the shape that made `/skills` take
+     * 2.3 seconds. `skill_blocks` holds the detail; this holds the answer.
+     */
+    blockTypes: text("block_types").array().notNull().default(sql`'{}'::text[]`),
+    /** `{ guardrail: 3, procedure: 1, unclassified: 4 }` — density, not just presence. */
+    blockCounts: jsonb("block_counts").notNull().default(sql`'{}'::jsonb`),
+    blockCount: integer("block_count").notNull().default(0),
+    /**
+     * Estimated context cost of the whole body, in tokens (Doc 6 RW.9, measurement half).
+     *
+     * An estimate and named as one: four characters to the token for prose, three for
+     * code. A real tokenizer is a dependency this project has not taken, so RW.9's
+     * headline claim ("this skill costs 4.2K tokens per activation") stays A3's problem
+     * and this stays the free approximation that makes the number visible at all.
+     */
+    tokenEstimate: integer("token_estimate").notNull().default(0),
+
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -106,5 +139,136 @@ export const skillStructures = pgTable(
     uniqueIndex("skill_structures_uq").on(t.skillVersionId, t.extractorVersion),
     index("skill_structures_skill_idx").on(t.skillId),
     index("skill_structures_roles_idx").using("gin", t.sectionRoles),
+    index("skill_structures_blocks_idx").using("gin", t.blockTypes),
+  ],
+);
+
+/**
+ * One typed span per functional unit of a skill body (Doc 6 RW.1 / RW.2).
+ *
+ * ## Why a table and not more jsonb on the row above
+ *
+ * `headings` is jsonb because nothing ever asks for *a heading* — only for the shape of a
+ * document. Blocks are asked for individually: the compose step wants "the three best
+ * guardrail blocks in this category, attributed", and conflict detection (RK.3) wants to
+ * compare one skill's guardrails against another's. Both are `select … where type = …
+ * order by quality` across the corpus, which is a table with an index, not an unnest of
+ * fifty thousand jsonb arrays.
+ *
+ * ## A row is a coordinate, never content
+ *
+ * `start_char`/`end_char` index into the marker body named by `skill_structures.marker_path`,
+ * whose bytes live under the content hash. That is the whole reason a block library can
+ * exist for a `metadata_only` skill: the row says *where* a guardrail is, and reading it
+ * requires the bundle, which is behind the licence gate (R1.6). A fragment therefore
+ * resolves live, exactly as an archetype exemplar does — and inherits the same property
+ * that a skill withdrawn since extraction stops being quotable the moment it is withdrawn,
+ * rather than living on in a stored copy.
+ *
+ * **This table may never grow a column holding body text.** It is the same
+ * safe-because-of-the-column-list argument the `builder_signals` read policy rests on, and
+ * `verify:blocks` asserts it against `information_schema` rather than against the current
+ * data, because data being clean today says nothing about the next migration.
+ *
+ * ## Derived, so replaced rather than versioned
+ *
+ * Re-extraction at the same extractor version deletes this version's rows and re-inserts
+ * them, because the block *count* changes and an upsert cannot express that. Unlike a
+ * verdict, a block carries no judgement worth keeping history of — the same reasoning that
+ * makes the fingerprint above an upsert. A new extractor version writes new rows and
+ * leaves the old ones, which is what makes an extractor bump comparable.
+ */
+export const skillBlocks = pgTable(
+  "skill_blocks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: text("org_id").references(() => organization.id, { onDelete: "cascade" }),
+
+    /** Denormalised from the version so the library can rank without a second join. */
+    skillId: uuid("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "cascade" }),
+    skillVersionId: uuid("skill_version_id")
+      .notNull()
+      .references(() => skillVersions.id, { onDelete: "cascade" }),
+
+    extractorVersion: text("extractor_version").notNull(),
+
+    /** Position in the document, 0-based, over every segment including unclassified ones. */
+    blockOrder: smallint("block_order").notNull(),
+    /**
+     * One of `BLOCK_TYPES`, or NULL when no rule recognised the passage.
+     *
+     * Nullable on purpose. Doc 6 §7 names over-structuring as this programme's risk, so an
+     * unrecognised passage stays valid content rather than being forced into the nearest
+     * type — the same posture the heading rules already take with genuinely topical
+     * headings. The unclassified share is the honest measure of whether this vocabulary is
+     * recognising or guessing, and it can only be measured if these rows exist.
+     */
+    type: text("type"),
+    /** Which detector rule fired, from a closed vocabulary — so a rejection leaves a trace. */
+    rule: text("rule"),
+
+    /** Role of the enclosing heading; NULL for the preamble above the first heading. */
+    parentRole: text("parent_role"),
+    /** Index into `skill_structures.headings`, so a block traces back to its section. */
+    parentHeadingOrder: smallint("parent_heading_order"),
+
+    startChar: integer("start_char").notNull(),
+    endChar: integer("end_char").notNull(),
+
+    /** Estimated context cost of this block alone. See the note on the column above. */
+    tokenEstimate: integer("token_estimate").notNull().default(0),
+    /** Segment shape: paragraph, list, code, table, quote. A column because it aggregates. */
+    kind: text("kind").notNull(),
+    /** A column because fragment ranking needs it — a four-word guardrail is not an exemplar. */
+    wordCount: integer("word_count").notNull().default(0),
+    /** `{ itemCount, ordered, codeLanguage, linkCount, hasModal, hasConditional, ... }`. */
+    features: jsonb("features").notNull().default(sql`'{}'::jsonb`),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("skill_blocks_uq").on(t.skillVersionId, t.extractorVersion, t.blockOrder),
+    /** The library's query: every block of one type at the current extractor version. */
+    index("skill_blocks_type_idx").on(t.extractorVersion, t.type),
+    index("skill_blocks_skill_idx").on(t.skillId),
+
+    /**
+     * Tenant isolation, declared here so **drizzle-kit generates it** (Doc 3 C4).
+     *
+     * Every org-scoped table before this one had its policy hand-written into the generated
+     * migration. That worked and it was a second source of truth: the schema said one thing,
+     * a `.sql` file said another, and nothing could compare them. Declaring the policy on
+     * the table means the ORM owns the whole object — columns, indexes *and* who may read a
+     * row — and a policy can no longer be forgotten in a migration or drift from the model.
+     *
+     * In the same migration as the table by construction, which is the property migration
+     * 0006 had to argue for in a comment: RLS defaults to deny, so a table whose policy
+     * lands later has a window where `app_runtime` reads zero rows and the feature looks
+     * broken rather than leaky.
+     *
+     * `org_id IS NULL` is the public corpus, which is every block the crawl produces today.
+     * The clause is what keeps a Team-tier private skill's blocks inside its own tenant when
+     * R1.9 lands, and it is RC.5 as well: a private skill's guardrails must never reach a
+     * public archetype, not even as one row in a prevalence count.
+     *
+     * `FOR ALL` includes DELETE on purpose. Re-extraction *replaces* a version's blocks
+     * rather than upserting them, because the row count changes when the rules change and
+     * there is no key an upsert could target. Unlike a verdict, a block carries no judgement
+     * worth keeping.
+     *
+     * No GRANT is needed and none is written: migration 0002 set
+     * `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON
+     * TABLES TO app_runtime`, so every table a migration creates is reachable. Migration
+     * 0006 created `skill_structures` with no grant and mining has read it ever since, which
+     * is the proof. The explicit grants in 0018–0020 are redundant belt-and-braces.
+     */
+    pgPolicy("org_scope", {
+      for: "all",
+      to: "app_runtime",
+      using: sql`org_id is null or org_id = current_setting('app.org_id', true)`,
+      withCheck: sql`org_id is null or org_id = current_setting('app.org_id', true)`,
+    }),
   ],
 );

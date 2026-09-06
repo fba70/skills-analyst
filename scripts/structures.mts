@@ -11,6 +11,9 @@ import { categoryEvidence, sourceDiversity, templateClusters } from "../src/serv
  *   pnpm structures --extract 500     # a bounded slice; run again to continue
  *   pnpm structures --extract 500 --force   # re-extract at the current extractor version
  *   pnpm structures --unresolved      # heading strings no rule recognised
+ *   pnpm structures --probe 250       # block detection, DRY: reads bundles, writes nothing
+ *   pnpm structures --probe 250 --samples guardrail   # read real matches of one type
+ *   pnpm structures --blocks          # stored block coverage (Doc 6 RW.1)
  *   pnpm structures --templates       # structural monoculture: the number that gates mining
  *
  * `--force` is the re-extract campaign: bump EXTRACTOR_VERSION first if the *rules*
@@ -63,7 +66,7 @@ if (args.includes("--extract")) {
     onProgress: (m) => console.info(m),
   });
   console.info(
-    `\nextracted ${report.extracted} · failed ${report.failed} · ` +
+    `\nextracted ${report.extracted} · ${report.blocks} blocks · failed ${report.failed} · ` +
       `remaining ${report.remaining} · ` +
       `${report.unresolvedHeadings.length} unrecognised heading string(s)`,
   );
@@ -107,6 +110,114 @@ if (args.includes("--templates")) {
           `${String(row.structures).padStart(4)} structures  ${row.sources} source(s)`,
       );
     }
+  }
+  console.info("");
+  process.exit(0);
+}
+
+if (args.includes("--blocks")) {
+  const { blockSummary } = await import("../src/server/analytics/blocks-run");
+  const { totals, blockTotals, byType } = await blockSummary();
+  const share =
+    blockTotals.blocks > 0 ? (blockTotals.classified / blockTotals.blocks) * 100 : 0;
+
+  const { structureSummary: sum } = await import("../src/server/analytics/structure-run");
+  const { eligible } = await sum();
+  const covered = eligible > 0 ? (totals.versions / eligible) * 100 : 0;
+
+  console.info(`\nBlocks (extractor ${EXTRACTOR_VERSION})`);
+  if (covered < 90) {
+    /**
+     * The shares below are over what has been extracted, not over the corpus, and the
+     * extraction order is not random — `extractStructures` selects without an ORDER BY, so
+     * a partial run is whatever physical order the planner returned. Measured divergence
+     * on the first 510: `anti-example` read 52% of skills here against 23% on a
+     * `order by random()` probe of 300. Same detector, different sample. Saying so is the
+     * difference between a partial number and a wrong one.
+     */
+    console.info(
+      `  PARTIAL: ${totals.versions} of ${eligible} extracted (${covered.toFixed(1)}%), and the` +
+        ` selection is not random — treat the shares below as a sample, not the corpus.`,
+    );
+  }
+  console.info(`  fingerprints          ${totals.versions}`);
+  console.info(`  with any block        ${totals.withBlocks}`);
+  console.info(`  with a classified one ${totals.withClassified}`);
+  console.info(`  blocks                ${blockTotals.blocks}`);
+  console.info(`  classified            ${blockTotals.classified} (${share.toFixed(1)}%)`);
+  console.info(`  avg blocks per skill  ${totals.avgBlocks}`);
+  console.info(`  avg token estimate    ${totals.avgTokens}`);
+
+  if (byType.length > 0) {
+    console.info("\nSkills carrying at least one block of each type");
+    for (const row of byType) {
+      const pctOf = totals.versions > 0 ? (row.skills / totals.versions) * 100 : 0;
+      console.info(
+        `  ${row.type.padEnd(18)} ${String(row.skills).padStart(6)}  ${pctOf.toFixed(1).padStart(5)}%  ${"█".repeat(Math.round(pctOf / 2.5))}`,
+      );
+    }
+  }
+  console.info("");
+  process.exit(0);
+}
+
+if (args.includes("--probe")) {
+  /**
+   * Block detection, dry — reads real bundles, writes nothing (Doc 6 RW.1).
+   *
+   * The workflow this exists for: change a cue in `blocks.ts`, probe a few hundred real
+   * skills, read the distribution, and only then spend a re-extract. `verify:blocks` proves
+   * each rule *can* fire on a fixture built to make it fire; only this can tell you that
+   * one rule swallows the corpus or that a type never fires on real text.
+   */
+  const { probeBlocks } = await import("../src/server/analytics/blocks-run");
+  const categoryIndex = args.indexOf("--category");
+  const sampleIndex = args.indexOf("--samples");
+  const report = await probeBlocks({
+    limit: value("probe") ?? 200,
+    category: categoryIndex >= 0 ? args[categoryIndex + 1] : undefined,
+    sampleCount: sampleIndex >= 0 ? 14 : 0,
+    // `--samples` alone samples the unclassified; `--samples guardrail` samples that type,
+    // which is the check a distribution cannot make for you.
+    sampleType:
+      sampleIndex >= 0 && args[sampleIndex + 1] && !args[sampleIndex + 1].startsWith("--")
+        ? args[sampleIndex + 1]
+        : "unclassified",
+  });
+
+  const share = report.blocks > 0 ? (report.classified / report.blocks) * 100 : 0;
+  console.info(`\nBlock detection, dry run over ${report.versions} bundles`);
+  console.info(`  blocks            ${report.blocks}  (${(report.blocks / Math.max(1, report.versions)).toFixed(1)} per skill)`);
+  console.info(`  classified        ${report.classified}  (${share.toFixed(1)}%)`);
+  console.info(`  failed to load    ${report.failed}`);
+
+  console.info("\nBy type  (blocks · share of blocks · skills carrying at least one)");
+  const rows = Object.entries(report.byType).sort((a, b) => b[1] - a[1]);
+  for (const [type, count] of rows) {
+    const pctOfBlocks = report.blocks > 0 ? (count / report.blocks) * 100 : 0;
+    const skillShare =
+      report.versions > 0 ? ((report.skillsWithType[type] ?? 0) / report.versions) * 100 : 0;
+    console.info(
+      `  ${type.padEnd(18)} ${String(count).padStart(5)}  ${pctOfBlocks.toFixed(1).padStart(5)}%  ` +
+        `${skillShare.toFixed(0).padStart(3)}% of skills  ${"█".repeat(Math.round(pctOfBlocks / 2))}`,
+    );
+  }
+
+  console.info("\nBy rule  (a rule that swallows the corpus is visible here by name)");
+  for (const [rule, count] of Object.entries(report.byRule).sort((a, b) => b[1] - a[1])) {
+    console.info(`  ${rule.padEnd(36)} ${String(count).padStart(5)}`);
+  }
+
+  if (report.unclassifiedShape.length > 0) {
+    console.info("\nWhere the unclassified mass sits  (parent role / segment shape)");
+    for (const row of report.unclassifiedShape) {
+      console.info(`  ${row.shape.padEnd(28)} ${String(row.count).padStart(5)}`);
+    }
+  }
+
+  if (report.samples.length > 0) {
+    console.info("\nSamples  (local diagnostic; never stored)");
+    for (const sample of report.samples) console.info(`  · ${sample}`);
   }
   console.info("");
   process.exit(0);

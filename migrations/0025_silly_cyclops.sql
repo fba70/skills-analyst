@@ -1,0 +1,2 @@
+ALTER TABLE "skill_blocks" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+CREATE POLICY "org_scope" ON "skill_blocks" AS PERMISSIVE FOR ALL TO "app_runtime" USING (org_id is null or org_id = current_setting('app.org_id', true)) WITH CHECK (org_id is null or org_id = current_setting('app.org_id', true));

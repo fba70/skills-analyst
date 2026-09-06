@@ -61,6 +61,36 @@ migrations/                   generated SQL, committed
 
 ## Rules
 
+### Hard rules — the agent proposes, Boris decides
+
+Set on 2026-09-06 and enforced by `.claude/hooks/ask-first.sh` on every Bash call. The
+hook blocks the command and tells the agent to prompt the user. **A blocked command is not
+a bug to route around** — not with another tool, another spelling, a script, or a subagent.
+
+1. **No commits, no pushes.** The agent stages nothing and commits nothing. It reports the
+   change set and a suggested message, and the user commits. Same for anything that writes
+   to GitHub: PRs, releases, repository settings, history rewrites, force-pushes.
+2. **No new tools without explicit authorisation.** No `brew install`, `pip install`,
+   global `npm`/`pnpm` installs, `npx` / `pnpm dlx`, `curl | sh`, and no adding, removing or
+   upgrading a project dependency. Bare `pnpm install` (restore the lockfile) is fine. Ask
+   first, naming the tool, its version and why.
+3. **No migrations applied by the agent.** Edit the schema, run `pnpm db:generate`, read
+   the SQL, then stop and ask the user to apply it. `db:role-password` and `drizzle-kit
+   push` are covered too (`push` is banned outright, see below). **There is no override**:
+   one was built and removed the same afternoon, because an escape hatch lets the agent
+   decide when the rule applies, which is the opposite of the point.
+4. **No file deletion.** No `rm`, `rmdir`, `find -delete`, `git rm`, `git clean`,
+   `git reset --hard`, `git checkout --`, `git restore`, `git stash drop`. Temp files and
+   build output included. Name the paths and ask.
+5. **No database calls from API routes.** Every query lives in `src/server/**` and is
+   called from a server component or server action. Route handlers under `src/app/api/**`
+   MUST NOT import `@/server/db`, `drizzle-orm` or `pg`; only `src/app/api/auth/**` is
+   exempt. Enforced by `.claude/hooks/no-db-in-api.sh` and ESLint — detail in the next
+   section.
+
+Authorisation is per action, not per session: "yes, install X" does not cover Y, and
+"yes, commit this" does not cover the next commit.
+
 ### Database access
 
 **No database access from API routes.** Everything under `src/app/api/**` is barred from
@@ -121,12 +151,44 @@ pnpm db:migrate      # applies on DATABASE_URL_UNPOOLED (direct endpoint)
 # 3. commit migrations/ together with the schema change
 ```
 
-Roles, grants and RLS policies are schema too: they go in a hand-written `.sql` file in
-`migrations/`, registered in `migrations/meta/_journal.json`. Never a live `GRANT`.
+**Drizzle owns the whole object, RLS included** *(set 2026-09-06)*. A migration file is
+`drizzle-kit` output and nothing else — no hand-written SQL appended to it. That includes
+row-level security: declare a policy with `pgPolicy(...)` in the table's own definition and
+`db:generate` emits the `ENABLE ROW LEVEL SECURITY` and `CREATE POLICY` for you. Verified
+on `skill_blocks` (migrations 0024 and 0025): drizzle produced exactly the two statements
+that had been written by hand, and nothing else — no `CREATE ROLE`, no drops.
+
+Why it matters beyond tidiness: a hand-appended policy is a **second source of truth**. The
+schema said one thing, a `.sql` file said another, and nothing could compare them, so a
+policy could be forgotten in a migration or drift from the model with no way to notice.
+Declaring it on the table also gets the property migration 0006 had to argue for in a
+comment — the policy lands in the same migration as the table, and RLS defaults to deny, so
+a policy that arrives later leaves a window where `app_runtime` reads zero rows.
+
+**No `GRANT` is needed and none should be written.** Migration 0002 set
+`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO
+app_runtime`, so every table a migration creates is already reachable. The proof is
+migration 0006: it created `skill_structures` with no grant at all and mining has read it
+ever since. The explicit grants in 0018–0020 are redundant belt-and-braces and are not the
+pattern to copy. Never a live `GRANT`.
+
+Migrations 0002–0020 keep their hand-written policy blocks — they are applied history and
+re-declaring them in the schema would make `drizzle-kit` propose creating policies that
+already exist. New tables go the Drizzle way.
+
+**The only scripts allowed to change the database are data scripts.** Backfills and
+dictionary population, written through the Drizzle query builder — `scripts/fix-slugs.mts`
+is the model: it imports `db` and the schema, and is idempotent so a re-run is a no-op.
+Audited on 2026-09-06: **no DDL, `GRANT` or `REVOKE` is executed from anywhere in `src/` or
+`scripts/`.** The one exception is `scripts/set-runtime-role-password.ts`, which issues a
+live `ALTER ROLE … PASSWORD` because a password cannot be committed to a migration, and it
+builds the statement server-side with `format(%I, %L)` since `ALTER ROLE` takes no bind
+parameters.
 
 `.claude/hooks/migrations-only.sh` blocks `drizzle-kit push` and hand-typed DDL
 (CREATE / ALTER / DROP / TRUNCATE / RENAME, GRANT / REVOKE, roles, RLS). Reads and
-`SELECT`s are not blocked.
+`SELECT`s are not blocked. `.claude/hooks/ask-first.sh` additionally stops the agent
+*applying* a migration — generate it, read the SQL, then hand it to Boris.
 
 **Two endpoints, on purpose.** `DATABASE_URL` is Neon's pooled endpoint and is what the
 app uses. `DATABASE_URL_UNPOOLED` is the same database on the direct endpoint (host
@@ -1789,6 +1851,177 @@ returning zero on one side looks like a filter bug.
 > scaffold an empty form. That distinction is the whole bug: the measurement was right and the
 > output was unusable, and only the first had anything checking it.
 
+### Blocks: the grain below the heading (Doc 6 RW.1 / RW.2)
+
+`src/lib/block-types.ts` · `src/server/analytics/blocks.ts` · migration 0024 · extractor **2.0.0**
+`pnpm verify:blocks` (34 checks, free) · `pnpm structures --probe N` · `pnpm archetypes --blocks`
+
+The section above is the reason this exists. Section *presence* stopped separating the bands
+at full coverage — everyone writes `steps` now — so the archetype's discriminating power had
+already moved once, from headings to bundle shape. Doc 6's bet is that it moved *inward* too:
+one `steps` section routinely holds a procedure, two guardrails and a tool contract, and an
+archetype that can only say "this category has a steps section" cannot tell an author which
+of those four the good skills in their category carry.
+
+So each section is now segmented into **typed spans**: eleven types — trigger, stance,
+procedure, decision rule, guardrail, example, anti-example, tool contract, output spec,
+glossary, reference pointer. Pure rules, no model, no network, free to re-run.
+
+**The vocabulary is canonical here, not mirrored.** `section-roles.ts` duplicates its keys
+from a `server-only` module and says so; that duplication is a standing hazard, so
+`block-types.ts` is a leaf module with no imports and the `server-only` detector imports
+*it*. One copy, and the direction of dependency makes a second one impossible.
+
+#### Structure beats lexicon, and it is load-bearing
+
+The rule table is ordered in four tiers: the passage's own syntax, then the section the
+author declared, then structure inside the passage, then wording. The third tier over the
+fourth is the whole reason it is a table and not a switch.
+
+> **Procedures are written in modal verbs.** "Run the dry run first, you must never skip it."
+> Put a lexical guardrail rule above the ordered-list rule and **every numbered procedure in
+> the corpus becomes a guardrail** — measured on the first pass, it did exactly that, and the
+> resulting archetype would have told authors that good skills in every category are made of
+> prohibitions. A run later the same trap caught `anti-example`, because a numbered procedure
+> containing "don't skip past errors" was typed as a failure mode. An ordered list is a
+> procedure; an unordered list of nevers is a guardrail; the shape decides and the words break
+> the tie. `verify:blocks` **proves the trap is still armed** — it asserts the guardrail cue
+> genuinely fires on the fixture — before asserting the fix, because a case that no longer
+> reproduces the bug is a case that passes for the wrong reason.
+
+Tier two sits *above* tier three deliberately: a passage under "When to use this" is a trigger
+because its author said so by writing that heading, and an author's own labelling beats our
+reading of the shape inside it.
+
+#### A row is a coordinate, never content
+
+`skill_blocks` stores `[start_char, end_char)` into the marker body and no text. That is what
+lets a block library exist for a `metadata_only` skill without mirroring a byte of it: the
+coordinate is meaningless without the bundle, and the bundle is behind the licence gate. A
+fragment resolves **live**, exactly as an archetype exemplar does, and inherits the same
+property — a skill withdrawn since extraction stops being quotable immediately rather than
+living on in a stored copy.
+
+**This table may never grow a column holding body text.** Same
+safe-because-of-the-column-list argument as the `builder_signals` read policy, and
+`verify:blocks` asserts it against `information_schema` rather than against today's data,
+because clean data says nothing about the next migration. A marker phrase in the fixture body
+proves the serialised blocks do not carry it.
+
+Character offsets, not bytes, and named `startChar`/`endChar` so the unit is not something
+anyone has to infer. `marker_path` is pinned on the fingerprint row so a later change to the
+marker-detection regex cannot silently re-point a million stored spans at a different file.
+
+#### Blocks are replaced, not upserted
+
+The row *count* changes when the rules change, so there is no key an upsert could target — a
+document that segmented into 30 blocks and now segments into 28 would keep two stale rows for
+ever, and those two are the ones a library query would rank highest one day and fail to
+resolve the next. Delete-then-insert, scoped to the extractor version, inside the same
+transaction as the fingerprint so `block_types` and the block rows cannot disagree.
+
+#### What the dry run found, and why it exists
+
+`pnpm structures --probe N` runs the real detector over real bundles and **writes nothing**.
+It is the reason three defects were fixed before a single row was written, and none of them
+were visible to the fixtures:
+
+- **Anti-example markers bled across whole sections.** The first version read the previous
+  paragraph and the heading, so one "Watch for these redirections" turned every block beneath
+  it into a failure mode, including "Used across every skill in this repo, defined only here."
+  Cues now test the passage's **own text**, and the tier-two heading rule
+  (`anti-example:mistakes-section`) carries the legitimate case — under "## Anti-patterns"
+  every passage really is one, because the author said so.
+- **`do not`, `never do` and `avoid` were in the anti-example label cue.** They are how a
+  *guardrail* is phrased, so every prohibition list came back as a failure mode. The label
+  convention is punctuation — "❌ Wrong:", "**Bad** —" — so that is what is required now.
+  Anti-example fell from 37% of skills to 23%, which is a believable number for the type Doc 6
+  calls the rarest.
+- **A horizontal rule was a block.** Under an "## Anti-patterns" heading a bare `---` was
+  duly typed as an anti-example. Punctuation is not content, and a library that offered `---`
+  as a fragment would be worse than one with a hole in it.
+
+> **A number that disagreed with what it claimed to measure, again.** The probe first reported
+> 2,360 unclassified blocks sitting in the **preamble** — above the first heading — which is
+> impossible, and sent me looking for an attribution bug that did not exist. `parentRole` is
+> null in *two* cases: above the first heading, and under a heading the role rules did not
+> recognise, which is most of the corpus's headings and the correct outcome there. The label
+> collapsed three states into two. Attribution was fine; the diagnostic was lying.
+
+#### The bare code fence stays unclassified, deliberately
+
+~570 fenced blocks per 300 skills carry no shell language, no CLI runner and no example cue.
+Typing them `example` would classify most of them and would be a lie with consequences: Doc 6
+sells an example block as "convertible straight into an eval case" (RW.6), and a YAML config
+fence is not an input/output pair. "We found 204 examples" is a claim RW.6 can stand on; "we
+found 700" collapses the first time somebody generates eval cases from them. Same lesson as
+the taxonomy's no-description rule — **a threshold tuned to clear the queue buys queue depth
+with correctness.**
+
+More generally, `type` is nullable and stays that way. Doc 6 §7 names over-structuring as this
+programme's risk, and a taxonomy that types every passage is not recognising, it is guessing.
+The unclassified share is reported rather than hidden, because it is the honest measure of
+whether this vocabulary earns its keep — and `verify:blocks` fails if it ever reaches zero.
+
+Measured over 300 real bundles: **36 blocks per skill, 41% classified**, no rule taking more
+than 6.8% of the mass, and every one of the eleven types present in between 7% and 69% of
+skills. The unclassified mass is where it should be — 3,014 paragraphs under *topical*
+headings, where only a lexical cue could ever fire.
+
+> **`verify:blocks` went green on an empty table, twice, in the same file.** The coverage
+> check read `blocks === 0 || (share > 20 && share < 100)` and reported **ok** against zero
+> rows; four vocabulary checks did the same, because `count(*) where value not in vocabulary`
+> is trivially zero with nothing to count. That is `verify:dedup` staying green through a
+> total ingestion outage, rebuilt from scratch. Schema assertions ("no free-text column", "a
+> policy exists") are true or false on an empty table and still run; every data assertion is
+> now gated on there being rows and prints **skip** with the command that would fix it.
+>
+> **And a third time, in the command that matters most.** `archetypes --blocks` filtered to
+> banded categories and printed its table regardless, so at 1% re-extraction it rendered
+> eleven rows of `0/0  0  0` — which reads as *blocks carry no signal* when the truth was
+> *nothing has been measured yet*. Same output, opposite conclusions, on the one command
+> whose job is to decide whether the rest of the Doc 6 programme gets built. It now refuses:
+> it prints coverage, the band sizes per category, which threshold is unmet, and the command
+> that fixes it. Same posture as `taxonomy --compare`, which exits non-zero rather than print
+> a confident wrong answer about a $130 decision.
+>
+> `structures --blocks` carries the milder version of the same warning, because extraction
+> has no `ORDER BY` and a partial run is not a random sample: on the first 510 skills
+> `anti-example` read **52%** against **23%** on a randomised probe of 300. Same detector,
+> different sample.
+>
+> The same run produced the other half of the lesson. The free-text check was a hand-written
+> allowlist of column names and it failed on `kind` — a closed enum nobody had listed.
+> Extending the list would have been the cheap fix and the wrong one, because the next column
+> needs a human to remember again. It now allows only identifiers and columns *declared* to
+> hold a closed vocabulary, and a second check proves each declaration against the data, with
+> the rule vocabulary derived from the rule table (`BLOCK_RULES = RULES.map(...)`) so it
+> cannot drift from what actually fires.
+
+#### Mining v1 measures; it does not publish
+
+`blocks-mine.ts` imports `representatives()` and the lift threshold from `archetype.ts` rather
+than reimplementing them. That is not tidiness: this codebase has twice produced a number that
+measured a gate with something that was not the gate, and the near-proxy replacement for the
+first one agreed to within a point and would have swapped a *visible* contradiction for an
+invisible one. Block lift and section lift are only comparable if the bands, the reduction to
+one representative per structure, and the significance rule are literally the same code.
+
+`pnpm archetypes --blocks` reports lift per block type per category, and `--category X` shows
+every type measured — kept or rejected, with the threshold it was judged against and why.
+Nothing reaches the published skeleton yet: the moment a block lift lands in `/build`, every
+draft in the product is scaffolded from it, and that deserves its own miner version and its own
+changelog rather than arriving as a side effect of extraction.
+
+> **The extractor bump makes every stored fingerprint stale, and that is not a UI problem
+> here.** `EXTRACTOR_VERSION` is the re-extract selector, so at 2.0.0 the corpus reads as zero
+> fingerprinted until `pnpm structures --extract` catches up — roughly 50k bundles. Checked
+> rather than assumed: `/archetypes`, `/build` and the skill pages read the stored
+> `archetypes` table and are unaffected, and `structureSummary` is CLI-only, so nothing
+> renders the blank screen that a bumped taxonomy version once produced. What *is* affected
+> until re-extraction finishes is a fresh mine, the diversity report and `--status`, all of
+> which report an explicit count rather than an empty state.
+
 ### Archetypes band on source trust, not on the quality score
 
 R3.2 is implemented in `analytics/archetype.ts`. The method is a **contrast**: every element
@@ -2524,7 +2757,10 @@ pnpm seed --status | --repos | --lists    # curated discovery (Doc 4 §4 steps 1
 pnpm promote --reapply --enrich 300 --decide  # judge discovery candidates; --reapply is NOT default
 pnpm submit <repo-url|owner/name> [--include workspaces/,packages/]
 pnpm validate --consistency --limit 10   # R2.3 audit — COSTS MONEY, capped at 100/run
-pnpm structures --extract 500        # structural fingerprints — free, no model
+pnpm structures --extract 500        # structural fingerprints + blocks — free, no model
+pnpm structures --probe 250          # block detection, DRY: reads bundles, writes nothing
+pnpm structures --blocks             # stored block coverage (Doc 6 RW.1)
+pnpm archetypes --blocks             # does the block grain discriminate? (RW.2) — free
 pnpm taxonomy --sample 20            # categories — COSTS MONEY, capped at 100/run
 pnpm taxonomy --status | --review | --resync
 pnpm verify:lists | verify:revocation | verify:export | verify:takedown | verify:publish
@@ -2533,6 +2769,7 @@ pnpm verify:otp | verify:db-retry        # both free, no network, no database
 pnpm verify:http-deadline | verify:rate-limit   # free; both reproduce the bug first
 pnpm verify:dedup                        # repo identity folds case; free, probes then rolls back
 pnpm verify:taxonomy | verify:archetypes # vocabulary and mined guidance; both free
+pnpm verify:blocks                       # block taxonomy and span invariants; free
 pnpm registry --status | --import        # skills.sh reconciliation via its sitemap; free
 pnpm verify:builder                      # COSTS MONEY — two model calls
 pnpm validate:verify | db:verify-rls

@@ -169,6 +169,20 @@
       "when": 1788453025383,
       "tag": "0023_personal_productivity_rename",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788684672641,
+      "tag": "0024_safe_absorbing_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788685562308,
+      "tag": "0025_silly_cyclops",
+      "breakpoints": true
     }
   ]
 }

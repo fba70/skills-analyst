@@ -5,7 +5,7 @@ import { mapWithConcurrency } from "@/server/lib/concurrency";
 import { and, eq, inArray, notExists, sql } from "drizzle-orm";
 
 import { db } from "@/server/db";
-import { events, skills, skillStructures, skillVersions } from "@/server/db/schema";
+import { events, skillBlocks, skills, skillStructures, skillVersions } from "@/server/db/schema";
 import { splitFrontmatter } from "@/server/skills/normalize";
 import { loadBundle, type VersionProvenance } from "@/server/validation/bundle-loader";
 
@@ -37,6 +37,8 @@ export type ExtractOptions = {
 export type ExtractReport = {
   extracted: number;
   failed: number;
+  /** Typed spans written (Doc 6 RW.1). Counted so a rule change is visible in the summary. */
+  blocks: number;
   /** Distinct heading strings no rule recognised — the LLM pass's whole input. */
   unresolvedHeadings: string[];
   remaining: number;
@@ -90,6 +92,7 @@ export async function extractStructures(
   const report: ExtractReport = {
     extracted: 0,
     failed: 0,
+    blocks: 0,
     unresolvedHeadings: [],
     remaining: 0,
   };
@@ -141,6 +144,11 @@ export async function extractStructures(
             skillId: row.skillId,
             skillVersionId: row.id,
             extractorVersion: fingerprint.extractorVersion,
+            markerPath: marker.path,
+            blockTypes: fingerprint.blockTypes,
+            blockCounts: fingerprint.blockCounts,
+            blockCount: fingerprint.blocks.length,
+            tokenEstimate: fingerprint.tokenEstimate,
             headings: fingerprint.headings,
             sectionRoles: fingerprint.sectionRoles,
             headingCount: fingerprint.headingCount,
@@ -171,6 +179,11 @@ export async function extractStructures(
           .onConflictDoUpdate({
             target: [skillStructures.skillVersionId, skillStructures.extractorVersion],
             set: {
+              markerPath: marker.path,
+              blockTypes: fingerprint.blockTypes,
+              blockCounts: fingerprint.blockCounts,
+              blockCount: fingerprint.blocks.length,
+              tokenEstimate: fingerprint.tokenEstimate,
               headings: fingerprint.headings,
               sectionRoles: fingerprint.sectionRoles,
               headingCount: fingerprint.headingCount,
@@ -198,8 +211,56 @@ export async function extractStructures(
               createdAt: new Date(),
             },
           });
+
+        /**
+         * Blocks: replace, do not upsert.
+         *
+         * The row *count* changes when the rules change, so there is no key an upsert could
+         * target — a document that segmented into 30 blocks and now segments into 28 would
+         * keep two stale rows for ever, and those two would be the ones a library query
+         * ranked highest one day and could not resolve the next. Unlike a verdict, a block
+         * carries no judgement worth keeping history of, which is the same argument that
+         * makes the fingerprint above an upsert.
+         *
+         * Scoped to this extractor version, so a bump leaves 1.1.0's rows alone and the two
+         * versions stay comparable — which is the whole point of pinning the version.
+         *
+         * Inside the transaction with the fingerprint, so `block_types` on that row and
+         * these rows can never disagree. `verify:blocks` asserts they do not.
+         */
+        await tx
+          .delete(skillBlocks)
+          .where(
+            and(
+              eq(skillBlocks.skillVersionId, row.id),
+              eq(skillBlocks.extractorVersion, fingerprint.extractorVersion),
+            ),
+          );
+
+        if (fingerprint.blocks.length > 0) {
+          await tx.insert(skillBlocks).values(
+            fingerprint.blocks.map((block) => ({
+              orgId: row.orgId,
+              skillId: row.skillId,
+              skillVersionId: row.id,
+              extractorVersion: fingerprint.extractorVersion,
+              blockOrder: block.order,
+              type: block.type,
+              rule: block.rule,
+              parentRole: block.parentRole,
+              parentHeadingOrder: block.parentHeadingOrder,
+              startChar: block.startChar,
+              endChar: block.endChar,
+              tokenEstimate: block.tokenEstimate,
+              kind: block.features.kind,
+              wordCount: block.features.wordCount,
+              features: block.features,
+            })),
+          );
+        }
       });
 
+      report.blocks += fingerprint.blocks.length;
       report.extracted += 1;
       if (report.extracted % 100 === 0) log(`fingerprinted ${report.extracted}`);
     } catch {
@@ -227,6 +288,7 @@ export async function extractStructures(
       payload: {
         extracted: report.extracted,
         failed: report.failed,
+        blocks: report.blocks,
         remaining: report.remaining,
         unresolvedHeadings: report.unresolvedHeadings.length,
       },

@@ -1,6 +1,9 @@
 import "server-only";
 
+import type { BlockType } from "@/lib/block-types";
 import type { BundleFile } from "@/server/storage";
+
+import { blockCountsOf, blockTypesOf, extractBlocks, type SkillBlock } from "./blocks";
 
 /**
  * Structural fingerprint extraction (Doc 2 R3.2).
@@ -21,7 +24,16 @@ import type { BundleFile } from "@/server/storage";
  * already cover most of the mass, so the model is a tail-filler and not a dependency.
  */
 
-export const EXTRACTOR_VERSION = "1.1.0";
+/**
+ * 1.1.0 — heading roles, body shape, resource layout, frontmatter conventions.
+ * 2.0.0 — **blocks** (Doc 6 RW.1). The heading tree stays exactly as it was and gains a
+ *   second grain underneath it: each section is segmented into typed spans, because at 97%
+ *   corpus coverage the presence of a heading stopped discriminating between the bands
+ *   (`steps` at 67% strong against 55% weak) while what goes *inside* a section had never
+ *   been measured. Major, not minor: the selector for a re-extract campaign is this string,
+ *   and every stored fingerprint needs the new columns filled.
+ */
+export const EXTRACTOR_VERSION = "2.0.0";
 
 /**
  * The closed set of section roles.
@@ -183,6 +195,14 @@ export type DescriptionShape = {
 export type StructureFingerprint = {
   extractorVersion: string;
   headings: HeadingNode[];
+  /** Typed spans inside the sections (Doc 6 RW.1). One row each in `skill_blocks`. */
+  blocks: SkillBlock[];
+  /** Distinct block types present — the indexable aggregation path, like `sectionRoles`. */
+  blockTypes: BlockType[];
+  /** `{ guardrail: 3, unclassified: 4 }` — density, not just presence. */
+  blockCounts: Record<string, number>;
+  /** Estimated context cost of the whole body, in tokens. An estimate; see `blocks.ts`. */
+  tokenEstimate: number;
   sectionRoles: SectionRole[];
   headingCount: number;
   maxHeadingDepth: number;
@@ -366,9 +386,25 @@ export function extractStructure(input: ExtractInput): StructureFingerprint {
   const description =
     typeof frontmatter.description === "string" ? frontmatter.description : "";
 
+  /**
+   * Blocks are extracted here rather than in a second pass, because they must index into
+   * exactly the `body` string this function was given and must attribute themselves to
+   * exactly the heading tree it just built. Two passes over two separately-derived heading
+   * lists is the shape that produces silent disagreement between two tables.
+   */
+  const blocks = extractBlocks({
+    body,
+    headings,
+    bundlePaths: new Set(files.map((f) => f.path.replace(/^\.\//, ""))),
+  });
+
   return {
     extractorVersion: EXTRACTOR_VERSION,
     headings,
+    blocks,
+    blockTypes: blockTypesOf(blocks),
+    blockCounts: blockCountsOf(blocks),
+    tokenEstimate: blocks.reduce((sum, b) => sum + b.tokenEstimate, 0),
     sectionRoles,
     headingCount: headings.length,
     maxHeadingDepth: headings.reduce((max, h) => Math.max(max, h.depth), 0),

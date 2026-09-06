@@ -2,6 +2,7 @@ import "server-only";
 
 import { sql } from "drizzle-orm";
 
+import type { BlockType } from "@/lib/block-types";
 import { db } from "@/server/db";
 import { EXTRACTOR_VERSION, type SectionRole } from "@/server/analytics/structure";
 import { SEED_REPOS } from "@/server/crawl/seeds";
@@ -110,7 +111,7 @@ export const MIN_SOURCES = 10;
  * noise does not become advice. Worth re-tuning against a bigger corpus — it is the one
  * number here that is a judgement rather than a measurement.
  */
-const MIN_LIFT = 8;
+export const MIN_LIFT = 8;
 
 /**
  * How many standard errors a lift must clear, on top of `MIN_LIFT`.
@@ -133,7 +134,7 @@ const MIN_LIFT = 8;
  * category it demands 20 or more, which is the behaviour the flat number was reaching for
  * and could not express.
  */
-const LIFT_SIGMA = 3;
+export const LIFT_SIGMA = 3;
 
 /**
  * Standard error of the difference between two prevalences, in percentage points.
@@ -141,7 +142,7 @@ const LIFT_SIGMA = 3;
  * Textbook two-proportion form. Guarded against a zero-size band so a category that fails
  * `MIN_BAND` cannot divide by zero on its way to being rejected anyway.
  */
-function liftStandardError(
+export function liftStandardError(
   strongPrevalence: number,
   strongN: number,
   weakPrevalence: number,
@@ -154,7 +155,7 @@ function liftStandardError(
 }
 
 /** An element has to exist somewhere before its lift means anything. */
-const MIN_STRONG_PREVALENCE = 25;
+export const MIN_STRONG_PREVALENCE = 25;
 
 /**
  * Members each band needs before a percentage over it is worth reading.
@@ -198,7 +199,7 @@ export type MeasuredRole = {
   rejectedFor: string | null;
 };
 
-type Representative = {
+export type Representative = {
   skillId: string;
   slug: string;
   name: string;
@@ -220,6 +221,10 @@ type Representative = {
   internalLinkCount: number;
   descriptionLength: number;
   descriptionShape: Record<string, unknown>;
+  /** Distinct block types in the body (Doc 6 RW.1). Read by `blocks-mine.ts`. */
+  blockTypes: BlockType[];
+  /** Per-type counts, so density can be contrasted and not only presence. */
+  blockCounts: Record<string, number>;
   redistribution: string;
   /** Published by a repository on the curated seed allow-list. The band selector. */
   curated: boolean;
@@ -248,7 +253,7 @@ type Representative = {
  * Postgres keeps the first row per signature, and ordering by score makes that the best
  * example of each shape rather than an arbitrary one.
  */
-async function representatives(category: string): Promise<Representative[]> {
+export async function representatives(category: string): Promise<Representative[]> {
   const result = await db.execute(sql`
     with labelled as (
       select
@@ -264,6 +269,7 @@ async function representatives(category: string): Promise<Representative[]> {
         st.has_scripts, st.has_references, st.has_assets, st.has_templates,
         st.file_count, st.word_count, st.code_block_count, st.table_count,
         st.internal_link_count, st.description_length, st.description_shape,
+        st.block_types, st.block_counts,
         (
           select coalesce(string_agg(h.role, '>' order by h.ord), '(none)')
           from jsonb_array_elements(st.headings) with ordinality as e(value, ord)
@@ -319,6 +325,8 @@ async function representatives(category: string): Promise<Representative[]> {
       internalLinkCount: (row.internal_link_count as number) ?? 0,
       descriptionLength: (row.description_length as number) ?? 0,
       descriptionShape: (row.description_shape ?? {}) as Record<string, unknown>,
+      blockTypes: ((row.block_types ?? []) as BlockType[]) ?? [],
+      blockCounts: (row.block_counts ?? {}) as Record<string, number>,
       redistribution: row.redistribution as string,
       curated: CURATED_SOURCES.has(String(row.source ?? "").toLowerCase()),
     };
