@@ -137,38 +137,47 @@ Better Auth's table shapes are not guesswork: re-derive them with `getAuthTables
 `better-auth/db` whenever a plugin is added or the version moves, then generate a
 migration. Do not hand-tune those columns.
 
-## Where things stand — audited 2026-09-01
+## Where things stand — audited 2026-09-05
 
 Snapshot for picking this up cold. Numbers move; the shape does not. Full requirement-level
 audit is **`specs/core/02-requirements-spec.md` §10b** — that table is the source of truth,
-this is the summary.
+this is the summary. Both were re-audited on 2026-09-05, and §10b now also carries Doc 6's
+RW.x / RK.x rows and the re-homed R8.x block (§7.8). The ordered plan is §10, dated 2026-09-06.
 
 | | |
 |---|---|
-| Corpus | 16,273 indexed · 15,061 canonical / 1,212 near-duplicate variants · 225 quarantined |
-| Sources | 431 synced of 903 enabled, 472 never synced — **ingestion is ~48% done by source** |
-| Discovery | 2,023 candidates awaiting a decision, mostly from the skills.sh reconciliation |
-| Taxonomy | 4,101 labelled · 1,105 held below the floor · **11,298 canonical skills unlabelled** |
-| Derived | 16,542 fingerprints · 16,247 signatures · 1,268 variant links — all keeping pace |
-| Archetypes | 12 of 13 function categories at v5 · miner 2.1.0 · public at `/archetypes` |
-| Builder | live at `/build` · 3 drafts, 1 published through the whole loop, 5 telemetry signals |
+| Corpus | 49,133 indexed · 47,854 canonical / 1,279 near-duplicate variants · 1,053 quarantined |
+| Sources | **888 synced of 895** — ingestion is done; the source table is deduplicated (migration 0021) |
+| Discovery | 1,998 candidates awaiting a decision |
+| Taxonomy | **46,489 labelled at vocabulary 1.7.0** · 1,279 held below the floor · ~1,300 unlabelled |
+| Derived | 51,222 fingerprints · 50,159 signatures · verdicts all current, 0 stale |
+| Archetypes | **13 of 13 function categories at v8** · miner 2.3.0 · public at `/archetypes` |
+| Builder | live at `/build` · scaffolds 2–4 sections plus traits and 8 exemplars per category |
 | MCP | live at `/api/mcp` · six tools, token-gated, admin-tunable rate limits |
-| Spend, cumulative | ~$12. The `llm_usage` ledger starts at RC.2 and shows $0.05; the rest predates metering. |
+| Spend, cumulative | **$31.57**, all metered. The whole 47k-skill classification cost $12.41. |
 
-**Ingestion runs from a local terminal** (`pnpm pipeline --loop 300`), not from the schedule —
-a 6,000-skill repository needs longer than any function ceiling, and locally there is none.
-Start it in **your own shell**: a loop started from inside an agent session gets killed with
+**Ingestion and classification both run from a local terminal**, not from the schedule — a
+6,000-skill repository needs longer than any function ceiling, and locally there is none.
+Start them in **your own shell**: a loop started from inside an agent session gets killed with
 the session, which cost two runs before anyone noticed.
 
-**The taxonomy is now the dominant gap and it is widening fast.** Fingerprints and signatures
-track the corpus; labels do not — **11,298 canonical skills carry no servable category**, up
-from 6,364 at the last audit, because sync keeps adding skills while classification costs
-money and is deliberately manual. Archetypes read only labelled, above-floor assignments, so
-they currently rest on **about a quarter** of the corpus. At ~$0.29 per 100 that is roughly
-**$33 to catch up**, and the number grows with every pass.
+**The taxonomy gap is closed.** It was the dominant gap in every previous audit — 11,298
+unlabelled at the last one, widening with every sync. The corpus is now 97% labelled, held
+sits at **0.30%**, and archetypes rest on the whole corpus rather than 8% of it.
 
-> **This spend is deliberately deferred until sync finishes.** Do not run
-> `pnpm taxonomy --sample` without being asked. Labelling a moving corpus means paying twice.
+> **What that cost, and why it is worth stating.** The classification itself was $12.41.
+> Getting there took four vocabulary versions and a model change, and almost none of that
+> effort went on classification — it went on measurements that looked right and were not. A
+> keyword probe that counted `carbon-lang` as an energy skill. A log filter that could not
+> match its own error string. Label *share* reported when labels-per-skill had moved
+> underneath it. `verify:dedup` green throughout a total ingestion outage. The work was
+> cheap; verifying it honestly was the expensive part, and that is the durable lesson from
+> this stretch.
+
+**What is left is no longer about the corpus.** Ingestion, deduplication, classification,
+fingerprinting and validation are all current and self-maintaining. Every remaining P0 is a
+*product* gap — outcome telemetry, community flagging, entitlements — and the builder gaps
+are superseded by the Doc 6 workbench programme rather than worth closing as specified.
 
 ### What changed on 2026-09-01
 
@@ -225,19 +234,55 @@ Everything else on the list is smaller than this.
 status table it is derived from. It is not duplicated here: a roadmap in two places is a
 roadmap that disagrees with itself, and the spec is the one people review.
 
-The one-line version, unchanged since the last audit: **ingestion and the taxonomy are the
-critical path**, and everything else is what to do while they run.
+The one-line version has changed for the first time in three audits. **Ingestion and the
+taxonomy are no longer the critical path — they are done.** What remains is product, and it
+splits cleanly in two.
+
+**The Doc 6 workbench programme** (`specs/core/06-workbench-and-km-extensions.md`, RW.x/RK.x)
+supersedes the builder and assistant gaps below. Do not close R4.2, R5.1, R5.3 or R5.4 as
+originally specified — Doc 6 argues the v1 builder is shallow at the *structure* level and
+proposes a block model underneath it. Building the old spec first would be work thrown away.
+
+**Everything outside the builder** is the honest remaining delta, and it is short. R6.3 is the
+one that matters: see below.
+
+### The remaining P0 gaps, outside the builder programme
+
+Verified against the code on 2026-09-05, not read off the table.
+
+- **R6.3 outcome telemetry** — **absent, and the largest single gap in the product.** No
+  post-publication signal is attributed to an archetype version, so "what good looks like"
+  is still a claim about what the corpus contains rather than about what worked. Everything
+  else in §7.6 is done, which makes this the half that turns a loop into a loop.
+- **R2.5 community flagging** — absent. There is no route from a reader to the quarantine
+  queue, so the only way a bad skill gets re-examined is an analyzer bump.
+- **RC.1 entitlements** — absent rather than enforced-in-the-DAL. Nothing is gated today, so
+  the free-tier guarantee holds by construction and none of the mechanism exists. Blocks
+  RM.3 and RC.4.
+- **R1.8 public submission** — partial. Admin submission and Settings → Add source work;
+  there is no public endpoint. `submitRepository` is already the shared path, so this is a
+  route and a rate limit rather than new logic.
+- **R1.1(d) ClawHub connector** — absent. skills.sh reconciliation exists and found 2,323 new
+  repositories; ClawHub has never been read.
+- **R3.6 similarity insight for authors** — absent. The dedup data exists and nothing surfaces
+  it, which is the cheapest of these to close.
+
+**R1.6 licence gating stays partial and should be left alone.** Steps 4–5 (ClearlyDefined,
+ScanCode) were measured rather than assumed: of the unresolved skills, 85 repositories
+holding 1,713 of them have **no licence at all**, and no scanner can invent a grant. The real
+gap was step 2 and it is fixed.
+
+**R7.4 performance is worth re-measuring now, and was not before.** The p95-at-500K target is
+still unproven, but search was last measured on a 16K corpus and the corpus is now 49K — three
+times the evidence, and the `tsvector`/GIN/trigram path has never been timed at this size.
 
 ### Smaller named gaps, from the §10b audit
 
-- **R1.1** — no ClawHub connector; registry reconciliation unbuilt.
-- **R2.5** — no community flagging into the quarantine queue.
 - **R2.8** — no collision-risk check against existing skills in the same category.
 - **R4.2 / R4.3** — no live editor; archetype deviations are not visibly marked.
+  *Superseded by Doc 6.*
 - **R5.1 / R5.3 / R5.4** — elicitation is a form not a conversation; no gap detection; no
-  per-suggestion accept/reject, so no structured feedback events.
-- **RC.1** — entitlements are absent rather than enforced-in-the-DAL. Nothing is gated today,
-  so the free-tier guarantee holds by construction and none of the mechanism exists.
+  per-suggestion accept/reject, so no structured feedback events. *Superseded by Doc 6.*
 - **RC.4** — no billing webhooks; there is nothing to sync entitlements from yet.
 
 ### Deliberately deferred
@@ -1682,6 +1727,68 @@ Cost and prompt-injection posture are the open questions: search results are unt
 in exactly the sense R7.3 means, and this would be a recurring spend rather than a one-off.
 Both are reasons to build it *after* the corpus is balanced, not before.
 
+### Section presence stopped discriminating, and the threshold had to learn to scale
+
+`pnpm verify:archetypes` (8 checks, free) · miner 2.3.0 · v8
+
+The first mine over the fully-labelled corpus produced **five archetypes with zero sections**
+and eight more with one or two. `--mine-all` printed thirteen ticks and a list of dropped
+sections; `/build` and `/archetypes` served the result. Nothing errored.
+
+**It was not a bug.** At 8% corpus coverage the weak band wrote `steps` in 47% of structures
+and `references` in 24%. At 97% those are **67% and 55%**. The strong band barely moved. Lift
+is strong minus weak, so it collapsed — `integrate-api`'s `references` went from 66/24 (lift
+42) to 66/58 (lift 8).
+
+The old numbers were the unrepresentative ones. v6 was mined from ~4,101 skills chosen by the
+`diverse` round-robin, which over-samples *small* sources, and small sources write terser
+documents. The full corpus does not.
+
+> **The obvious culprit was wrong, and testing it took four minutes.** Suspecting a generator
+> flooding the weak band — `kbarbel640-del` alone supplies 34% of `integrate-api`'s — a
+> per-source cap was implemented and measured at three strengths. Lifts got **worse** as the
+> cap tightened (references +10 → +6 → −3 at caps of 25/10/5), which rules concentration out
+> entirely. The cap was reverted. Distinct-structure dedup does not save you here either: it
+> collapses *identical* signatures, and a farm emitting 793 subtly-different shapes survives
+> as 793 data points.
+
+**What did need fixing was `MIN_LIFT`.** It was a flat 12, set when a band held ~90
+representatives and the standard error on a prevalence difference was ~7 points. Bands are now
+~300 strong against ~2,300 weak, where that error is ~2.8 — so 12 had silently become a
+4-sigma test. It is now **three standard errors plus an 8-point floor**: statistically real,
+*and* large enough to be worth telling an author about. The threshold scales itself with the
+evidence; on a thin category it now demands 20 or more, which is what the flat number was
+reaching for and could not express.
+
+Retuning recovered sections in seven categories and confirmed the finding anyway: **the best
+section lift across the three largest categories is +10, where traits reach +35.**
+
+**So the discriminator moved from headings to bundle structure.** Everyone writes `steps` now.
+Not everyone ships a real `references/` and links to it:
+
+| review v8 | strong / weak | lift |
+|---|---|---|
+| Links to its own bundled files | 44% / 21% | **+23** |
+| More than one file | 65% / 52% | +13 |
+| Offloads detail into `references/` | 45% / 33% | +12 |
+
+That is better guidance than a heading list, and it only became visible at full coverage.
+
+**Anti-patterns are zero across twelve of thirteen categories, and that is real.** Every
+measured trait is positive: curated skills are strictly more thorough, so nothing is *more*
+common in the weak band. Checked rather than assumed, because a symmetric measurement
+returning zero on one side looks like a filter bug.
+
+> **`stats.measured` now stores every role considered** — its bands, its lift, the threshold
+> it was judged against and why it was rejected. Previously `stats.sections` held only what
+> passed, so a section that missed by two points left no trace, and diagnosing this took four
+> throwaway scripts rebuilding numbers the miner had already computed and discarded.
+>
+> `verify:archetypes` asserts **"every archetype carries sections or traits"**, not "sections
+> exist". The corpus is allowed to have no structural consensus; what it may not do is
+> scaffold an empty form. That distinction is the whole bug: the measurement was right and the
+> output was unusable, and only the first had anything checking it.
+
 ### Archetypes band on source trust, not on the quality score
 
 R3.2 is implemented in `analytics/archetype.ts`. The method is a **contrast**: every element
@@ -2425,6 +2532,7 @@ pnpm verify:telemetry
 pnpm verify:otp | verify:db-retry        # both free, no network, no database
 pnpm verify:http-deadline | verify:rate-limit   # free; both reproduce the bug first
 pnpm verify:dedup                        # repo identity folds case; free, probes then rolls back
+pnpm verify:taxonomy | verify:archetypes # vocabulary and mined guidance; both free
 pnpm registry --status | --import        # skills.sh reconciliation via its sitemap; free
 pnpm verify:builder                      # COSTS MONEY — two model calls
 pnpm validate:verify | db:verify-rls
