@@ -232,7 +232,19 @@ export function registerFreeTools(server: McpServer) {
        * implementation of "may this content be served". A second one here would be the
        * place a takedown eventually fails to apply.
        */
-      const bundle = await exportSkill(slug);
+      /**
+       * `"mcp"` records the download as an outcome signal (R6.3), inside `exportSkill` so
+       * this surface and the web route cannot disagree about what counts as a download.
+       *
+       * The caller key is the forwarded address, not the MCP token id — which would be the
+       * better dedup identity, since it names an account rather than a network path. It is
+       * not threaded here because the principal is resolved in the route handler, before
+       * `mcp-handler` dispatches to a tool, and plumbing it through would mean widening the
+       * tool context for one field. Stated as a known limit: dedup is per address per day
+       * on this surface and per address per day on the web, so the two are at least
+       * consistent with each other.
+       */
+      const bundle = await exportSkill(slug, "mcp", callerKeyOf(ctx));
       const origin = originOf(ctx);
 
       if (!bundle.ok) {
@@ -365,6 +377,22 @@ export function registerFreeTools(server: McpServer) {
  * connection error and no reason for it. Falling back to the configured public URL keeps
  * this working when the header is absent.
  */
+/**
+ * Something stable about the caller, for outcome dedup only.
+ *
+ * Hashed with a daily-rotating salt before storage and never kept as an address — the same
+ * treatment the web download route gives it.
+ */
+function callerKeyOf(ctx: unknown): string | null {
+  const request = (ctx as { http?: { request?: Request } } | undefined)?.http?.request;
+  if (!request) return null;
+  return (
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    request.headers.get("x-real-ip") ??
+    null
+  );
+}
+
 function originOf(ctx: unknown): string {
   const request = (ctx as { http?: { request?: Request } } | undefined)?.http?.request;
   if (request) {

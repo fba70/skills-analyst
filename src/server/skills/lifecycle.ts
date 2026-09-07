@@ -7,6 +7,7 @@ import {
   type LifecycleDeclaration,
   type LifecycleState,
 } from "@/lib/lifecycle";
+import { ADVERSE_KINDS, BATTLE_TESTED, DOWNLOAD_KINDS } from "@/lib/outcomes";
 import { db } from "@/server/db";
 import { events, skills } from "@/server/db/schema";
 
@@ -38,20 +39,27 @@ import { events, skills } from "@/server/db/schema";
  *    because it carries intent that evidence cannot supply. Superseded first: it is the more
  *    useful of the two, since it comes with somewhere else to go.
  * 3. **`stale`** — detected, from an elapsed `review_by`.
- * 4. **`battle-tested`** — has no branch. See below.
+ * 4. **`battle-tested`** — earned from outcome evidence. Below `stale` on purpose: a skill
+ *    nobody has reviewed in two years should not be advertised as proven, however many times
+ *    it has been downloaded.
  * 5. **`validated`** — the floor.
  *
- * ## Battle-tested has no branch, deliberately
+ * ## Battle-tested is now earnable, and still cannot be granted
  *
- * RK.1 wants it earned from post-publication evidence: installs, eval deltas, age without
- * incident. None of that is collected yet — that is R6.3, plan step B1 — so there is nothing
- * to earn it with, and inventing a proxy from what *is* available (age, quality score) would
- * be exactly the mistake the archetype miner made when it banded on `quality_score` and
- * confidently reported that good review skills are single-file with no code examples.
+ * RK.1 wants it earned from post-publication evidence: installs, age without incident, eval
+ * deltas. Outcome telemetry (R6.3, plan step B1) supplies the first two, so the branch below
+ * exists — reading deduplicated downloads, a re-validation that still passed, an age floor,
+ * and zero adverse outcomes ever.
  *
- * So the tier is named in the vocabulary, absent from this expression, and
- * `verify:lifecycle` asserts no skill carries it. When B1 lands, one branch goes here and
- * nothing else changes.
+ * **It is still not declarable.** There is no column for it and the enum cannot express it,
+ * so the only way to obtain it is to satisfy the evidence. Nothing about that changed when
+ * the branch was added, which is the property that made the tier worth having: a
+ * static-scanning registry can fake a badge, and cannot fake a year of downloads without a
+ * quarantine.
+ *
+ * The third term, eval deltas, waits on the Eval Lab (plan step D). Its absence makes the
+ * bar *harder* rather than easier, so adding it later can only loosen a threshold that was
+ * set conservatively on purpose.
  */
 
 /**
@@ -61,12 +69,53 @@ import { events, skills } from "@/server/db/schema";
  * it in TypeScript.
  */
 export function lifecycleExpression(): SQL<LifecycleState | null> {
+  /**
+   * The `battle-tested` branch, added once outcome telemetry existed to earn it (R6.3, plan
+   * step B1). The A4 note above promised "one branch goes here and nothing else changes";
+   * this is that branch, and nothing else changed.
+   *
+   * One subquery, not four, because this expression is meant to be usable in a listing and
+   * four correlated counts per row is how a page starts taking 2.3 seconds. `count(*) filter`
+   * over a single scan gives all three conditions at once.
+   *
+   * Every threshold comes from `BATTLE_TESTED` in the leaf module rather than being written
+   * into the SQL. A trust tier whose advertised criteria and enforced criteria are two
+   * separate literals is a tier that will eventually mean something other than what the FAQ
+   * says it means.
+   *
+   * ## `in ${array}`, not `= any(${array})`
+   *
+   * Drizzle renders a JS array in a `sql` template as a **row constructor** — `($2, $3)` —
+   * which is exactly what `in` takes and is not an array, so `= any(($2, $3))` is a type
+   * error Postgres reports as *"op ANY/ALL (array) requires array on right side"*. The first
+   * version used `any` and shipped broken; `verify:lifecycle` is what caught it, by compiling
+   * this expression rather than holding a copy of it.
+   *
+   * Both lists are non-empty compile-time constants from our own closed vocabulary, so the
+   * empty-`in` case cannot arise. If either ever became dynamic that guard would be needed.
+   */
+  const earned = sql`
+    ${skills.firstSeenAt} < now() - (${BATTLE_TESTED.minAgeDays} || ' days')::interval
+    and exists (
+      select 1 from outcome_signals o
+      where o.skill_id = ${skills.id}
+      group by o.skill_id
+      having count(*) filter (where o.kind in ${DOWNLOAD_KINDS as unknown as string[]})
+               >= ${BATTLE_TESTED.minDownloads}
+         and count(*) filter (where o.kind = 'revalidated-pass')
+               >= ${BATTLE_TESTED.minRevalidations}
+         and count(*) filter (where o.kind in ${ADVERSE_KINDS as unknown as string[]})
+               <= ${BATTLE_TESTED.adverseAllowed}
+    )
+  `;
+
   return sql<LifecycleState | null>`
     case
       when ${skills.status} <> 'indexed' then null
       when ${skills.lifecycleDeclaration} = 'superseded' then 'superseded'
       when ${skills.lifecycleDeclaration} = 'deprecated' then 'deprecated'
       when ${skills.reviewBy} is not null and ${skills.reviewBy} < now() then 'stale'
+      when ${earned} then 'battle-tested'
       else 'validated'
     end
   `;
@@ -117,7 +166,13 @@ export async function declareLifecycle(input: DeclareInput): Promise<DeclareResu
   }
 
   const [target] = await db
-    .select({ id: skills.id, slug: skills.slug, orgId: skills.orgId, status: skills.status })
+    .select({
+      id: skills.id,
+      slug: skills.slug,
+      orgId: skills.orgId,
+      status: skills.status,
+      currentVersionId: skills.currentVersionId,
+    })
     .from(skills)
     .where(eq(skills.id, input.skillId))
     .limit(1);
@@ -186,6 +241,23 @@ export async function declareLifecycle(input: DeclareInput): Promise<DeclareResu
       },
     });
   });
+
+  /**
+   * The outcome signal (R6.3). A declaration is an outcome — somebody looked at a published
+   * skill and said stop, or said go there instead.
+   *
+   * Only a declaration, never a clearing: lifting a deprecation is a correction to our own
+   * record, not something that happened to the skill. Recording it would let a curator
+   * manufacture positive-looking churn by toggling a state.
+   */
+  if (input.declaration !== null && target.currentVersionId) {
+    const { recordOutcome } = await import("@/server/analytics/outcomes");
+    void recordOutcome({
+      skillId: input.skillId,
+      skillVersionId: target.currentVersionId,
+      kind: input.declaration,
+    });
+  }
 
   const [after] = await db
     .select({ state: lifecycleExpression() })

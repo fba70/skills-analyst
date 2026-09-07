@@ -1887,6 +1887,114 @@ returning zero on one side looks like a filter bug.
 > scaffold an empty form. That distinction is the whole bug: the measurement was right and the
 > output was unusable, and only the first had anything checking it.
 
+### Outcome telemetry: the other half of the loop (Doc 2 R6.3)
+
+`src/lib/outcomes.ts` · `src/server/analytics/outcomes.ts` · migration 0029
+`pnpm verify:outcomes` (28 checks, free — probes then rolls back) · Settings → **Loop**
+
+Creation telemetry (R6.2) records what happened *while* a skill was written. It had been
+running for months and it is only half a loop: everything the platform said about "what good
+looks like" was a statement about **what the corpus contains** — prevalence, lift, the shape
+of other people's documents — and never about what worked.
+
+These are the other half. A download is a consumer choosing the skill. A re-validation that
+still passes is the skill holding up against analyzers that did not exist when it was
+written. A quarantine on re-validation is the strongest negative signal the platform has,
+because nothing about it is an opinion.
+
+#### Recorded where it cannot be forgotten
+
+`exportSkill` takes a required `channel`, so the web route and the MCP tool cannot diverge on
+what counts as a download — the same argument R6.1 makes for publish-back calling the real
+validator rather than a lighter equivalent. `null` is an explicit third option for
+`verify:export` and internal "could this be served" checks, because counting those would make
+the corpus look busier than it is.
+
+Only a **successful** export counts. A refusal is not a download, and counting one would make
+licence-blocked skills the most popular things in the corpus.
+
+Only a **re**-validation counts. A first validation is the gate that decides whether a skill
+is in the registry at all, so counting it would hand every skill a free positive on the day it
+arrived. `VersionRow` gained a `priorStatus` field for exactly this and nothing else.
+
+#### The dedup identifies nobody
+
+A daily-rotating HMAC of the caller key, truncated. It exists so one reader taking one skill
+twice in a day counts once (R6.5's dedup-per-identity), and the **day is inside the HMAC
+key**, so yesterday's digests cannot be recomputed from today's salt — unlinkability is a
+property of the construction rather than a promise about how we query. No IP, user agent,
+session or token id is stored, and `verify:outcomes` checks the *schema* for those column
+names rather than trusting today's data.
+
+Counting rows **is** the deduplicated count: the unique index is
+`(skill_version_id, kind, day, caller_digest)`, so there is no counter to drift and no
+application logic a second call site could forget.
+
+> **With no salt configured it undercounts, and that is the chosen direction.** Every caller
+> collides, so a skill records at most one download a day. A signal that can move published
+> guidance must never fail towards counting *more*.
+
+#### The recorder is silent, so something else has to be loud
+
+`recordOutcome` swallows its own failures — a reader must not get a 500 because a telemetry
+insert hit a cold compute, the same posture the heartbeat took. That posture has already cost
+this project once: `recordUsage` swallowed an RLS refusal, builder spend was never metered,
+and the failure was a log line nobody read.
+
+> The defence is not to remove the swallow. `verify:outcomes` **writes through the real
+> recorder and reads the row back**, then repeats the same call and asserts the count did not
+> move. A hand-written insert would have proved the table works and nothing about whether the
+> function meant to fill it does, which is the entire failure mode of a swallow-everything
+> recorder.
+
+#### Battle-tested is now earnable, and still not grantable
+
+A4 shipped the tier with no branch and asserted nothing could hold it. That assertion was easy
+to satisfy and proved nothing about whether the tier would ever work. It now reads deduplicated
+downloads, a re-validation that passed, an age floor and zero adverse outcomes ever — every
+threshold from `BATTLE_TESTED` rather than written into the SQL, because a trust tier whose
+advertised and enforced criteria are two separate literals will eventually mean something other
+than what the FAQ says.
+
+`verify:outcomes` synthesises the evidence, asserts the derivation flips to `battle-tested`,
+adds one adverse signal and asserts it flips back — then rolls all of it back. It is still
+impossible to *declare*: the enum cannot express the value, so the only route is the evidence.
+
+One subquery with `count(*) filter`, not four correlated counts, because this expression is
+meant to be usable in a listing and four per row is how `/skills` came to take 2.3 seconds.
+
+> **The branch shipped broken for ten minutes, and the checker is what found it.** Drizzle
+> renders a JS array in a `sql` template as a **row constructor** — `($2, $3)` — which is what
+> `in` takes and is not an array, so `= any(($2, $3))` is a type error Postgres reports as
+> *"op ANY/ALL (array) requires array on right side"*. Every skill page would have 500'd.
+>
+> It was caught because `verify:lifecycle` **compiles** `lifecycleExpression()` rather than
+> holding a copy of it — the fix made an hour earlier for a different reason. A copied CASE
+> would have gone on testing the old three-branch rule and passing.
+
+#### What it honestly cannot do yet
+
+**Attribution has almost no data, and every surface says so.** Only skills published through
+the builder carry archetype lineage, so `archetype_category` is NULL for the entire ingested
+corpus. R6.3's *collection* half is useful immediately — it is what makes battle-tested
+earnable and RK.7 possible — but its *attribution* half waits on builder volume. The loop
+panel prints attributed-of-total beside the headline rather than the headline alone, because
+"the loop is closed" is otherwise a claim nobody checked.
+
+**Nothing feeds the miner.** Creation telemetry earned that right by accumulating enough
+signal to survive R6.5's trimming; this has not. Wiring a near-empty input into the thing that
+scaffolds every future draft is how a loop poisons itself with its own noise.
+
+`flagged` needs a reader route (R2.5, plan step B2) and `eval-delta` needs the Eval Lab
+(plan step D3). Both are named in the vocabulary so a dashboard can say "not collected"
+rather than having no concept of them.
+
+> **This step makes the schema a hard dependency of the running app.** `getSkillBySlug`
+> selects the lifecycle derivation, which now reads `outcome_signals` — so the skill page
+> errors until migration 0029 is applied. Migration-before-code is the normal order and this
+> is a loud failure rather than a silent wrong answer, which is the right way round, but it
+> is worth knowing before wondering why a page broke.
+
 ### pgvector, unparked — and it costs eight cents, not ten dollars
 
 `src/lib/llm-pricing.ts` · `src/server/analytics/embeddings.ts` · migration 0028
@@ -3128,6 +3236,7 @@ pnpm verify:tokens                       # activation cost, bands and honesty; f
 pnpm verify:lifecycle                    # lifecycle cannot be granted; free, rolls back
 pnpm verify:entitlements                 # trust surfaces cannot be paywalled; free
 pnpm verify:embeddings                   # embedding path priced and metered; free
+pnpm verify:outcomes                     # outcome signals arrive and dedup; free
 pnpm embeddings --status                  # vector coverage; free
 pnpm embeddings --backfill 5000           # COSTS MONEY (~$0.06 for the whole corpus)
 pnpm lifecycle --status                  # derived states and content governance; free

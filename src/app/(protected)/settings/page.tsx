@@ -33,6 +33,7 @@ import { pipelineBacklog, recentRuns, type PipelineBacklog } from "@/server/pipe
 import { readHeartbeat } from "@/server/pipeline/heartbeat";
 import { staleSlices } from "@/server/validation/rescan";
 import { planRoster as listPlanRoster } from "@/server/dal/entitlements";
+import { outcomeSummary } from "@/server/analytics/outcomes";
 import { isAdmin, listPlatformUsers, platformCounts } from "@/server/dal/admin";
 import {
   curationCounts,
@@ -123,7 +124,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, platformBudget, breakdown, metrics, activity, loopLog, schedule, rateLimits] =
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, platformBudget, breakdown, metrics, activity, loopLog, schedule, rateLimits] =
     await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
@@ -139,6 +140,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "archetypes" ? archetypeSummary() : null,
     tab === "takedowns" ? listTakedowns(query) : null,
     tab === "plans" ? listPlanRoster() : null,
+    tab === "loop" ? outcomeSummary() : null,
     tab === "spend" ? budgetState("corpus_taxonomy", null) : null,
     tab === "spend" ? spendBreakdown() : null,
     tab === "loop" ? loopMetrics() : null,
@@ -267,8 +269,16 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
         {/* R8.8's limit, as a setting. The panel says which scope is actually in effect. */}
         {tab === "limits" && rateLimits ? <RateLimitPanel limits={rateLimits} /> : null}
 
-        {tab === "loop" && metrics && activity && loopLog ? (
-          <LoopPanel metrics={metrics} activity={activity} events={loopLog} />
+        {tab === "loop" && metrics && activity && loopLog && outcomes ? (
+          <LoopPanel
+            metrics={metrics}
+            activity={activity}
+            events={loopLog}
+            outcomes={outcomes.byKind}
+            outcomeTotals={outcomes.totals}
+            outcomeEligible={outcomes.eligible}
+            unimplementedKinds={outcomes.unimplemented}
+          />
         ) : null}
 
         {tab === "spend" && platformBudget && breakdown ? (

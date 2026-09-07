@@ -179,8 +179,22 @@ if (connected) {
      */
     const { lifecycleExpression } = await import("../src/server/skills/lifecycle");
     const { PgDialect } = await import("drizzle-orm/pg-core");
+    /**
+     * The compiled expression now carries **parameters**, so they have to be passed.
+     *
+     * Adding the `battle-tested` branch put the `BATTLE_TESTED` thresholds and the kind
+     * arrays into the SQL as placeholders. This file embedded the compiled text and passed
+     * only its own skill id, which failed with `transformParamRef` the moment the branch
+     * landed — a good failure, and exactly why the expression is compiled rather than copied:
+     * a hand-written copy would have gone on testing the old three-branch rule in silence.
+     *
+     * The derivation's parameters go first and the probe's own bind is renumbered after them.
+     */
     const compiled = new PgDialect().sqlToQuery(lifecycleExpression());
     const DERIVE = compiled.sql.replace(/"skills"\./g, "s.");
+    const DP = compiled.params as unknown[];
+    /** `$n` for the probe's own bind, after the derivation's. */
+    const SKILL_BIND = `$${DP.length + 1}`;
     /**
      * Asserted on the *columns* it reads, not on a substring of the rendered text.
      *
@@ -205,6 +219,7 @@ if (connected) {
 
     const { rows: counts } = await c.query<{ state: string | null; n: string }>(
       `select ${DERIVE} as state, count(*)::text as n from skills s group by 1 order by 2 desc`,
+      DP,
     );
     for (const row of counts) {
       console.info(`  note  ${String(row.state ?? "(not indexed)").padEnd(16)} ${row.n}`);
@@ -231,6 +246,7 @@ if (connected) {
     const { rows: leaked } = await c.query<{ n: string }>(
       `select count(*)::text as n from skills s
        where s.status <> 'indexed' and (${DERIVE}) is not null`,
+      DP,
     );
     check("a declaration cannot outrank a non-indexed status", leaked[0].n === "0", `${leaked[0].n}`);
 
@@ -280,16 +296,16 @@ if (connected) {
           [id],
         );
         const { rows: before } = await c.query<{ state: string | null }>(
-          `select ${DERIVE} as state from skills s where s.id = $1`,
-          [id],
+          `select ${DERIVE} as state from skills s where s.id = ${SKILL_BIND}`,
+          [...DP, id],
         );
         check("a deprecation shows up in the derived state", before[0].state === "deprecated");
 
         // The move a sync makes.
         await c.query(`update skills set status = 'quarantined' where id = $1`, [id]);
         const { rows: mid } = await c.query<{ decl: string | null; state: string | null }>(
-          `select s.lifecycle_declaration as decl, ${DERIVE} as state from skills s where s.id = $1`,
-          [id],
+          `select s.lifecycle_declaration as decl, ${DERIVE} as state from skills s where s.id = ${SKILL_BIND}`,
+          [...DP, id],
         );
         check(
           "a status change does not erase the declaration",
@@ -305,8 +321,8 @@ if (connected) {
         // And it comes back when the skill is servable again.
         await c.query(`update skills set status = 'indexed' where id = $1`, [id]);
         const { rows: after } = await c.query<{ state: string | null }>(
-          `select ${DERIVE} as state from skills s where s.id = $1`,
-          [id],
+          `select ${DERIVE} as state from skills s where s.id = ${SKILL_BIND}`,
+          [...DP, id],
         );
         check(
           "the declaration is intact once the skill is servable again",
@@ -320,15 +336,15 @@ if (connected) {
           [id],
         );
         const { rows: staleRow } = await c.query<{ state: string | null }>(
-          `select ${DERIVE} as state from skills s where s.id = $1`,
-          [id],
+          `select ${DERIVE} as state from skills s where s.id = ${SKILL_BIND}`,
+          [...DP, id],
         );
         check("an elapsed review date derives stale", staleRow[0].state === "stale");
 
         await c.query(`update skills set review_by = now() + interval '1 year' where id = $1`, [id]);
         const { rows: fresh } = await c.query<{ state: string | null }>(
-          `select ${DERIVE} as state from skills s where s.id = $1`,
-          [id],
+          `select ${DERIVE} as state from skills s where s.id = ${SKILL_BIND}`,
+          [...DP, id],
         );
         check("a future review date does not", fresh[0].state === "validated");
 
@@ -338,8 +354,8 @@ if (connected) {
           [id],
         );
         const { rows: both } = await c.query<{ state: string | null }>(
-          `select ${DERIVE} as state from skills s where s.id = $1`,
-          [id],
+          `select ${DERIVE} as state from skills s where s.id = ${SKILL_BIND}`,
+          [...DP, id],
         );
         check("a declaration outranks an elapsed review date", both[0].state === "deprecated");
 

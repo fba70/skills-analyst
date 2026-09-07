@@ -150,6 +150,7 @@ export async function validatePending(
         id: skillVersions.id,
         orgId: skillVersions.orgId,
         skillId: skillVersions.skillId,
+        priorStatus: skillVersions.status,
         slug: skills.slug,
         dialect: skills.dialect,
         name: skills.name,
@@ -211,6 +212,14 @@ type VersionRow = {
   id: string;
   orgId: string | null;
   skillId: string;
+  /**
+   * The status *before* this run, which is how a re-validation is told from a first one.
+   *
+   * Needed for the R6.3 outcome signal and for nothing else: a first validation is the gate
+   * that decides whether a skill is in the registry at all, so counting it as an outcome
+   * would hand every skill in the corpus a free positive on the day it arrived.
+   */
+  priorStatus: string;
   slug: string;
   dialect: string;
   name: string;
@@ -404,6 +413,30 @@ async function validateOne(
       },
     });
   });
+
+  /**
+   * The outcome signal (R6.3), and only for a **re**-validation.
+   *
+   * A first validation is not an outcome — it is the gate that decides whether the skill
+   * exists in the registry at all, and counting it would give every skill in the corpus one
+   * free positive signal on the day it arrived. What carries information is a skill meeting
+   * analyzers that did not exist when it was published: `revalidated-pass` is RK.1's "age
+   * without incident", and `revalidated-fail` is the strongest negative signal the platform
+   * has, because nothing about it is an opinion.
+   *
+   * Outside the transaction on purpose. It is a derived observation about a decision that has
+   * already been committed, and `recordOutcome` swallows its own failures — pulling it inside
+   * would give telemetry a way to roll back a verdict.
+   */
+  const isRevalidation = row.priorStatus !== "pending" && row.priorStatus !== "validating";
+  if (isRevalidation) {
+    const { recordOutcome } = await import("@/server/analytics/outcomes");
+    void recordOutcome({
+      skillId: row.skillId,
+      skillVersionId: row.id,
+      kind: status === "indexed" ? "revalidated-pass" : "revalidated-fail",
+    });
+  }
 
   return {
     skillVersionId: row.id,

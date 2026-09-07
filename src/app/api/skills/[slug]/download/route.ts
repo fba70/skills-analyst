@@ -25,11 +25,25 @@ import { exportSkill } from "@/server/skills/export";
  * behind an account would gate exactly the artifacts the verdicts exist to vouch for.
  */
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ slug: string }> },
 ) {
   const { slug } = await context.params;
-  const result = await exportSkill(slug);
+  /**
+   * `"web"` records the download as an outcome signal (R6.3), inside `exportSkill` so the
+   * two delivery surfaces cannot diverge on whether a download counted.
+   *
+   * The caller key is a forwarded address, used only to deduplicate one reader taking one
+   * skill twice in a day. It is HMAC'd with a daily-rotating salt before it is stored and
+   * **the address itself never is** — see `src/server/analytics/outcomes.ts`. This route
+   * still touches no database: it hands a string to a `src/server` function, which is the
+   * same boundary the rest of the file respects.
+   */
+  const callerKey =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    request.headers.get("x-real-ip") ??
+    null;
+  const result = await exportSkill(slug, "web", callerKey);
 
   if (!result.ok) {
     // 451 is the status for content withheld for legal reasons, which covers both a licence

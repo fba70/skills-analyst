@@ -2,6 +2,7 @@ import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { OUTCOME_META, type OutcomeKind } from "@/lib/outcomes";
 import type {
   ArchetypeActivity,
   LoopEvent,
@@ -18,19 +19,41 @@ import { MIN_SESSIONS_FOR_TREND, STALL_SIGNAL_THRESHOLD } from "@/server/analyti
  *
  * The stall table is the part worth reading. Everything else here is a number going up.
  */
+export type OutcomeRow = { kind: string; n: number };
+export type OutcomeTotals = {
+  signals: number;
+  skills: number;
+  attributed: number;
+  days: number;
+};
+
 export function LoopPanel({
   metrics,
   activity,
   events,
+  outcomes,
+  outcomeTotals,
+  outcomeEligible,
+  unimplementedKinds,
 }: {
   metrics: LoopMetrics;
   activity: ArchetypeActivity[];
   events: LoopEvent[];
+  outcomes: OutcomeRow[];
+  outcomeTotals: OutcomeTotals;
+  outcomeEligible: number;
+  unimplementedKinds: readonly string[];
 }) {
   const stalled = activity.filter((row) => row.stalled);
 
   return (
     <div className="grid gap-4">
+      <OutcomeCard
+        rows={outcomes}
+        totals={outcomeTotals}
+        eligible={outcomeEligible}
+        unimplemented={unimplementedKinds}
+      />
       {stalled.length > 0 ? (
         <Card className="border-destructive/40">
           <CardHeader>
@@ -186,6 +209,88 @@ function Metric({
           {good ? <CheckCircle2 className="text-primary size-4" /> : null}
         </span>
         {detail ? <span className="text-muted-foreground text-xs">{detail}</span> : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The other half of the loop (R6.3).
+ *
+ * ## Two numbers, and the second is the honest caveat
+ *
+ * Signals collected, and how many carry **archetype lineage**. Only skills published through
+ * the builder were scaffolded from an archetype, so the second number is near zero and stays
+ * there until builder volume grows. Reporting the first without the second is how "the loop
+ * is closed" becomes a claim nobody checked: thousands of downloads attributing to nothing
+ * and changing no guidance.
+ *
+ * So the card leads with collection, states attribution beside it, and says plainly that the
+ * miner is not consuming any of it yet.
+ */
+function OutcomeCard({
+  rows,
+  totals,
+  eligible,
+  unimplemented,
+}: {
+  rows: OutcomeRow[];
+  totals: OutcomeTotals;
+  eligible: number;
+  unimplemented: readonly string[];
+}) {
+  const coverage = eligible > 0 ? (totals.skills / eligible) * 100 : 0;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Outcome telemetry (R6.3)</CardTitle>
+        <CardDescription>
+          What happened to skills after publication — downloads, whether they held up under
+          re-validation, whether anyone withdrew or deprecated them.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {totals.signals === 0 ? (
+          /*
+           * An empty state that says which kind of empty it is. The pipeline is wired and
+           * nothing has been downloaded or re-validated yet, which is a different thing from
+           * "collection is broken" — and a bare zero cannot tell those apart.
+           */
+          <p className="text-muted-foreground text-sm">
+            No signals yet. Collection is wired into the download route, the MCP download
+            tool, re-validation and lifecycle declarations — this fills in as those happen.
+          </p>
+        ) : (
+          <>
+            <div className="grid gap-1.5">
+              {rows.map((row) => (
+                <div key={row.kind} className="flex items-baseline justify-between gap-3 text-sm">
+                  <span>{OUTCOME_META[row.kind as OutcomeKind]?.label ?? row.kind}</span>
+                  <span className="text-muted-foreground tabular-nums">{row.n}</span>
+                </div>
+              ))}
+            </div>
+            <div className="text-muted-foreground grid gap-0.5 text-xs">
+              <span>
+                {totals.skills} of {eligible} skills have any signal ({coverage.toFixed(1)}%),
+                across {totals.days} day{totals.days === 1 ? "" : "s"}
+              </span>
+              <span>
+                <strong>{totals.attributed}</strong> of {totals.signals} carry archetype
+                lineage — only skills authored here have any, so R6.3&rsquo;s attribution half
+                stays thin until builder volume grows
+              </span>
+            </div>
+          </>
+        )}
+
+        <p className="text-muted-foreground/80 text-xs">
+          Not collected yet: {unimplemented.join(", ")}. Flagging needs a reader route (R2.5);
+          eval deltas need the Eval Lab. Nothing here feeds archetype mining yet — wiring a
+          near-empty input into the thing that scaffolds every future draft is how a loop
+          poisons itself with its own noise.
+        </p>
       </CardContent>
     </Card>
   );

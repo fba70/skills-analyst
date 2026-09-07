@@ -304,17 +304,38 @@ export async function buildBundle(
 }
 
 /**
+ * Where a download came from, for outcome telemetry (R6.3).
+ *
+ * **Required, and `null` is a real choice rather than a default.** Recording the signal
+ * inside this function is what makes it impossible for one of the two delivery surfaces to
+ * forget — the same argument R6.1 makes for publish-back calling the real validator instead
+ * of a lighter equivalent. But `exportSkill` is also called by `verify:export` and by
+ * anything internal that wants to know whether a skill *could* be served, and counting those
+ * as downloads would make the corpus look busier than it is. So every call site says which
+ * it is, and a reader of any of them can see the answer.
+ */
+export type DownloadChannel = "web" | "mcp" | null;
+
+/**
  * Looks a skill up and exports it. The DAL decides what is visible; `buildBundle` decides
  * what may be served.
+ *
+ * `channel` records the outcome (R6.3). Only a *successful* export counts: a refusal is not
+ * a download, and counting one would turn licence-blocked skills into the most popular
+ * things in the corpus.
  */
-export async function exportSkill(slug: string): Promise<ExportBundle | ExportRefusal> {
+export async function exportSkill(
+  slug: string,
+  channel: DownloadChannel = null,
+  callerKey: string | null = null,
+): Promise<ExportBundle | ExportRefusal> {
   // Imported lazily so this module stays loadable outside a request context — the DAL
   // pulls in `next/navigation`, which a CLI script cannot evaluate.
   const { getSkillBySlug } = await import("@/server/dal/skills");
   const skill = await getSkillBySlug(slug);
   if (!skill) return { ok: false, reason: "not-found", message: "No such skill." };
 
-  return buildBundle({
+  const bundle = await buildBundle({
     slug: skill.slug,
     name: skill.name,
     dialect: skill.dialect,
@@ -330,4 +351,23 @@ export async function exportSkill(slug: string): Promise<ExportBundle | ExportRe
     syncedAt: skill.syncedAt,
     verdicts: skill.verdicts,
   });
+
+  if (channel && bundle.ok) {
+    /**
+     * Not awaited into the response path, and never allowed to fail the download.
+     *
+     * `recordOutcome` swallows its own errors, so this cannot throw — the `void` is here to
+     * say that the caller is deliberately not waiting for it. Same posture as `touchToken`
+     * on the MCP route: bookkeeping must not delay or endanger the answer.
+     */
+    const { recordOutcome } = await import("@/server/analytics/outcomes");
+    void recordOutcome({
+      skillId: skill.id,
+      skillVersionId: skill.versionId,
+      kind: channel === "web" ? "download-web" : "download-mcp",
+      callerKey,
+    });
+  }
+
+  return bundle;
 }

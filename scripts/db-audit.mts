@@ -43,7 +43,7 @@ const TABLES = [
   "archetypes",
   "takedowns",
   "skill_drafts",
-  "builder_signals",
+  "builder_signals", "outcome_signals",
   "llm_usage",
   "platform_settings", "rate_limit_buckets", "org_entitlements",
   "pipeline_heartbeat",
@@ -77,6 +77,9 @@ const COLUMNS: Array<[string, string]> = [
   ["skill_blocks", "end_char"],
   ["skill_embeddings", "embedding"],
   ["org_entitlements", "plan"],
+  ["outcome_signals", "kind"],
+  ["outcome_signals", "caller_digest"],
+  ["outcome_signals", "archetype_category"],
 ];
 
 /** Extensions the schema depends on. Neither is expressible in Drizzle. */
