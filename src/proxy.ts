@@ -21,10 +21,13 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // `/skills`, `/archetypes` and `/faq` are deliberately absent: all three are public
-  // (R8.1, and Doc 1 licenses archetype snapshots CC BY-SA). Adding any of them back would
-  // redirect anonymous visitors away from the pages that exist to be read by anyone — and
-  // the FAQ is what makes the other two legible.
+  // `/skills`, `/archetypes`, `/faq` and `/submit` are deliberately absent: all four are
+  // public (R8.1, and Doc 1 licenses archetype snapshots CC BY-SA). Adding any of them back
+  // would redirect anonymous visitors away from the pages that exist to be read by anyone —
+  // and the FAQ is what makes the other two legible.
+  //
+  // `/submit` is R1.8's public half, so gating it would defeat the requirement outright: the
+  // people who know which repositories we have missed are mostly people without an account.
   matcher: [
     "/dashboard/:path*",
     "/account/:path*",

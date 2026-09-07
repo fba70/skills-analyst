@@ -211,6 +211,13 @@
       "when": 1788781757722,
       "tag": "0029_noisy_gladiator",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1788783173238,
+      "tag": "0030_needy_nighthawk",
+      "breakpoints": true
     }
   ]
 }

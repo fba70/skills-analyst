@@ -89,6 +89,38 @@ export async function setPlanAction(
   }
 }
 
+/**
+ * Decide a community flag (R2.5).
+ *
+ * `requireAdmin()` first, like every action here. Upholding records the R6.3 outcome signal
+ * and queues re-validation; rejecting keeps the row, because a refused report is still a
+ * report that was made and that record is the half of this that protects the platform.
+ */
+export async function decideFlagAction(
+  id: string,
+  uphold: boolean,
+  decision: string,
+): Promise<ActionResult> {
+  try {
+    const admin = await requireAdmin();
+    const { upholdFlag, rejectFlag } = await import("@/server/curation/flags");
+    const outcome = uphold
+      ? await upholdFlag(id, decision, admin.userId)
+      : await rejectFlag(id, decision, admin.userId);
+    if (!outcome.ok) return { ok: false, message: outcome.error };
+
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      message: uphold
+        ? "Upheld — the version is queued for re-validation and the outcome is recorded."
+        : "Rejected, and kept on the record.",
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
 export async function runCrawlAction(shards: number): Promise<ActionResult> {
   try {
     await requireAdmin();

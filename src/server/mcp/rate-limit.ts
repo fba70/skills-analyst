@@ -106,17 +106,52 @@ async function bump(key: string, scope: string, start: Date): Promise<number> {
  * up to the first failure would let a caller sitting on the minute limit never accumulate an
  * hourly count, so the patient-loop case the hour window exists for would never fire.
  */
+/**
+ * What to do when the limiter's own settings cannot be read.
+ *
+ * **The read scopes fail open; the write scope fails closed**, and that inversion is the
+ * whole reason this is a named function rather than two lines in a `catch`.
+ *
+ * A read limiter that fails closed takes the public registry dark because a counter table
+ * blinked, over data that is public and read-only. A *write* limiter that fails open lets an
+ * unbounded flood of flags and submissions into a queue a human has to work through, and the
+ * settings coming back does not undo it. One refused report is a retry; one buried queue is a
+ * curator who stops reading it.
+ *
+ * Extracted because the alternative was untestable. A check that broke `DATABASE_URL` and
+ * called `consume` proved nothing: the pool is a module singleton built on first import, so
+ * the assignment came too late and the limiter answered normally — the same ESM-ordering trap
+ * `verify:spend` fell into. A policy that cannot be tested where it is written should be
+ * moved somewhere it can.
+ */
+export function fallbackDecision(
+  scopeName: "mcpFree" | "mcpPaid" | "publicWrite",
+): RateDecision {
+  if (scopeName !== "publicWrite") return { allowed: true };
+  return {
+    allowed: false,
+    window: "minute",
+    limit: 0,
+    retryAfterSeconds: 60,
+    resetAt: new Date(Date.now() + 60_000),
+    message:
+      "The rate limiter is unavailable, so writes are refused rather than let through. " +
+      "Try again in a minute.",
+  };
+}
+
 export async function consume(
   request: Request,
-  scopeName: "mcpFree" | "mcpPaid" = "mcpFree",
+  scopeName: "mcpFree" | "mcpPaid" | "publicWrite" = "mcpFree",
   identity?: string,
 ): Promise<RateDecision> {
   let limits: ScopeLimits;
   try {
     limits = (await getRateLimits())[scopeName];
   } catch {
-    // Settings unreadable: see the fail-open note above.
-    return { allowed: true };
+    // Settings unreadable. The policy is `fallbackDecision`, extracted so it can be tested
+    // directly — see the note there.
+    return fallbackDecision(scopeName);
   }
   if (!limits.enabled) return { allowed: true };
 

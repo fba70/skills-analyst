@@ -6,6 +6,7 @@ import { ArrowLeft } from "lucide-react";
 import { ActivationCostBadge } from "@/components/registry/activation-cost";
 import { CapabilitySurface } from "@/components/registry/capability-surface";
 import { LifecycleBadge, LifecycleNotice } from "@/components/registry/lifecycle-notice";
+import { ReportForms } from "@/components/registry/report-forms";
 import { Explain, ExplainLink } from "@/components/registry/explain";
 import { ConsistencyCard } from "@/components/registry/consistency-card";
 import { DownloadCard } from "@/components/registry/download-card";
@@ -351,6 +352,15 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
         redistribution={skill.redistribution}
         syncedAt={skill.syncedAt}
       />
+      {/*
+        Last on the page, quietly. R2.5's route from a reader to the quarantine queue, and
+        R7.5's public notice form — the piece CLAUDE.md flagged as the obvious next step when
+        takedowns shipped admin-only.
+
+        A prominent button here would fill a curator's queue with idle clicks; a reader who
+        has actually found a credential in a skill will look for this.
+      */}
+      <ReportForms slug={skill.slug} canTakedown={skill.status !== "withdrawn"} />
     </div>
   );
 }

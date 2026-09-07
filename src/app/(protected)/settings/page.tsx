@@ -6,6 +6,7 @@ import { IngestionPanel } from "@/components/settings/ingestion-panel";
 import { ArchetypePanel } from "@/components/settings/archetype-panel";
 import { PipelinePanel } from "@/components/settings/pipeline-panel";
 import { ListControls, SettingsTabs } from "@/components/settings/list-controls";
+import { FlagsPanel } from "@/components/settings/flags-panel";
 import { PlansPanel, type PlanRow } from "@/components/settings/plans-panel";
 import { QuarantinePanel } from "@/components/settings/quarantine-panel";
 import { ReviewPanel } from "@/components/settings/review-panel";
@@ -34,6 +35,7 @@ import { readHeartbeat } from "@/server/pipeline/heartbeat";
 import { staleSlices } from "@/server/validation/rescan";
 import { planRoster as listPlanRoster } from "@/server/dal/entitlements";
 import { outcomeSummary } from "@/server/analytics/outcomes";
+import { flagQueue, flagSummary } from "@/server/curation/flags";
 import { isAdmin, listPlatformUsers, platformCounts } from "@/server/dal/admin";
 import {
   curationCounts,
@@ -80,6 +82,7 @@ const TABS = [
   "loop",
   "schedule",
   "limits",
+  "flags",
   "plans",
   "users",
 ] as const;
@@ -111,11 +114,17 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     : "ingestion";
   const query = { page: Number(single("page")) || 1, pageSize: Number(single("size")) || undefined };
 
-  const [counts, coverage, curation, takedowns] = await Promise.all([
+  /**
+   * Unconditional, because every tab *label* is rendered whichever tab is active, and two of
+   * them carry an open count. A count fetched only when its own tab is showing is a count
+   * nobody sees until they have already gone looking.
+   */
+  const [counts, coverage, curation, takedowns, flagCounts] = await Promise.all([
     platformCounts(),
     crawlCoverage(),
     curationCounts(),
     takedownCounts(),
+    flagSummary(),
   ]);
 
   const shardTotals = coverage.shards.reduce(
@@ -124,7 +133,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, platformBudget, breakdown, metrics, activity, loopLog, schedule, rateLimits] =
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, flags, platformBudget, breakdown, metrics, activity, loopLog, schedule, rateLimits] =
     await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
@@ -141,6 +150,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "takedowns" ? listTakedowns(query) : null,
     tab === "plans" ? listPlanRoster() : null,
     tab === "loop" ? outcomeSummary() : null,
+    tab === "flags" ? flagQueue("received") : null,
     tab === "spend" ? budgetState("corpus_taxonomy", null) : null,
     tab === "spend" ? spendBreakdown() : null,
     tab === "loop" ? loopMetrics() : null,
@@ -198,6 +208,12 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
           { value: "schedule", label: "Schedule" },
           { value: "limits", label: "Rate limits" },
           { value: "spend", label: "Spend" },
+          {
+            value: "flags",
+            // The open count is in the label for the same reason the takedown one is: a
+            // reader's report has a clock on it in a way a quarantined skill does not.
+            label: flagCounts.open > 0 ? `Flags (${flagCounts.open})` : "Flags",
+          },
           { value: "plans", label: "Plans" },
           {
             value: "takedowns",
@@ -341,6 +357,22 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
             total={sourceHealth.total}
             stale={sourceHealth.stale}
             disabled={sourceHealth.disabled}
+          />
+        ) : null}
+        {tab === "flags" && flags ? (
+          <FlagsPanel
+            rows={flags.map((row) => ({
+              id: row.id,
+              slug: row.slug,
+              name: row.name,
+              skillStatus: row.skillStatus,
+              reason: row.reason,
+              note: row.note,
+              contact: row.contact,
+              // Serialised at the boundary into a client component, as the plans panel does.
+              createdAt: row.createdAt.toISOString(),
+              stale: row.stale,
+            }))}
           />
         ) : null}
         {tab === "plans" && planRoster ? (

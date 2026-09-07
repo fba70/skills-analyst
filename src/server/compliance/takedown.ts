@@ -119,6 +119,95 @@ async function applyRecord(input: TakedownInput, actorId: string): Promise<strin
   });
 }
 
+export type PublicTakedownInput = {
+  slug: string;
+  requester: string;
+  requesterEmail: string;
+  grounds: string;
+  claim: string;
+};
+
+/**
+ * A notice filed by a member of the public (R7.5, and R1.8's plumbing put to a second use).
+ *
+ * Separate from `recordTakedown` for one reason: that one calls `requireAdmin()`, because a
+ * curator transcribing an email is a different act from a stranger submitting a form. Both
+ * land the same `received` row through `applyRecord`, so there is exactly one definition of
+ * what a recorded notice is — the same argument R6.1 makes for publish-back calling the real
+ * validator.
+ *
+ * It resolves the skill itself rather than trusting a supplied source URL and path. A form
+ * that let the submitter name the `(source_url, skill_path)` pair would let them file a
+ * notice against content they never looked at, and that pair is the key the block is
+ * enforced on.
+ *
+ * **`received` enforces nothing.** Doc 2 is explicit that enforcing on arrival means anyone
+ * who can send an email can un-list a competitor; a public form makes that cheaper still, so
+ * the separation matters more here than anywhere.
+ */
+export async function recordPublicTakedown(
+  input: PublicTakedownInput,
+): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  const grounds = ["copyright", "license_violation", "privacy", "trademark", "author_request", "other"];
+  if (!grounds.includes(input.grounds)) {
+    return { ok: false, error: "Choose one of the listed grounds." };
+  }
+  if (!input.requester.trim()) return { ok: false, error: "Give a name we can attribute this to." };
+  if (!input.claim.trim()) return { ok: false, error: "Describe the claim." };
+  /**
+   * A contact address is required here and optional for an admin-entered notice.
+   *
+   * A curator transcribing an email already has the sender. A form submission with no way to
+   * reply is a claim nobody can clarify, and the first thing a reviewer needs is usually a
+   * question — so requiring it is the difference between a notice that can be decided and
+   * one that can only be guessed at.
+   */
+  if (!input.requesterEmail.trim()) {
+    return { ok: false, error: "Give an address we can reply to." };
+  }
+
+  const [skill] = await db
+    .select({
+      id: skills.id,
+      versionId: skills.currentVersionId,
+      provenance: skillVersions.provenance,
+      sourceId: skillVersions.sourceId,
+      sourceUrl: sources.url,
+    })
+    .from(skills)
+    .innerJoin(skillVersions, eq(skillVersions.id, skills.currentVersionId))
+    .leftJoin(sources, eq(sources.id, skillVersions.sourceId))
+    .where(eq(skills.slug, input.slug))
+    .limit(1);
+
+  if (!skill || !skill.sourceUrl) return { ok: false, error: "No such skill." };
+
+  const provenance = (skill.provenance ?? {}) as { path?: unknown };
+  const skillPath = typeof provenance.path === "string" ? provenance.path : null;
+  if (!skillPath) {
+    return { ok: false, error: "This skill has no recorded upstream path, so it cannot be keyed." };
+  }
+
+  const id = await applyRecord(
+    {
+      scope: "skill",
+      sourceUrl: skill.sourceUrl,
+      skillPath,
+      skillId: skill.id,
+      sourceId: skill.sourceId,
+      requester: input.requester.trim().slice(0, 200),
+      requesterEmail: input.requesterEmail.trim().slice(0, 200),
+      grounds: input.grounds as TakedownInput["grounds"],
+      claim: input.claim.trim().slice(0, 4_000),
+    },
+    // No account behind it, and inventing one would make the audit log confidently wrong —
+    // the same reasoning the lifecycle CLI uses for `cli`.
+    "public",
+  );
+
+  return { ok: true, id };
+}
+
 export type UpholdResult = {
   affectedSkills: number;
   bundlesDeleted: number;

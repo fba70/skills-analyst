@@ -41,8 +41,18 @@ export type ScopeLimits = {
 export type RateLimitSettings = {
   /** Anonymous callers of the free MCP scope. Everyone, today. */
   mcpFree: ScopeLimits;
-  /** Authenticated, entitled callers. Stored; unreachable until RC.1. */
+  /** Authenticated, entitled callers. Reachable since RC.1 landed. */
   mcpPaid: ScopeLimits;
+  /**
+   * Anonymous **writes**: flagging a skill, submitting a repository, filing a notice
+   * (R2.5, R1.8, R7.5).
+   *
+   * A separate scope because it protects something different. The MCP scopes bound reads of
+   * public, read-only data; this one bounds rows entering a queue a human has to work
+   * through. Sharing a budget would let a burst of reads starve the write allowance, or
+   * worse, let a flood of writes look like ordinary traffic.
+   */
+  publicWrite: ScopeLimits;
 };
 
 /**
@@ -60,6 +70,15 @@ export type RateLimitSettings = {
 export const RATE_LIMIT_DEFAULTS: RateLimitSettings = {
   mcpFree: { enabled: true, perMinute: 60, perHour: 600 },
   mcpPaid: { enabled: true, perMinute: 600, perHour: 20_000 },
+  /**
+   * Deliberately tight, and tight in a different currency from the read scopes.
+   *
+   * A person reporting a problem files one flag, maybe three across a session; nobody
+   * legitimately submits twenty repositories a minute. The read limits are loose because a
+   * false refusal there teaches everyone to distrust the limiter; here a false refusal costs
+   * one retry and an unbounded write costs a curator their queue.
+   */
+  publicWrite: { enabled: true, perMinute: 5, perHour: 30 },
 };
 
 const KEY = "rate-limits";
@@ -78,6 +97,7 @@ export async function getRateLimits(): Promise<RateLimitSettings> {
   return {
     mcpFree: { ...RATE_LIMIT_DEFAULTS.mcpFree, ...(stored.mcpFree ?? {}) },
     mcpPaid: { ...RATE_LIMIT_DEFAULTS.mcpPaid, ...(stored.mcpPaid ?? {}) },
+    publicWrite: { ...RATE_LIMIT_DEFAULTS.publicWrite, ...(stored.publicWrite ?? {}) },
   };
 }
 
@@ -124,6 +144,7 @@ export async function setRateLimits(
   const sanitised: RateLimitSettings = {
     mcpFree: sanitiseScope(next.mcpFree),
     mcpPaid: sanitiseScope(next.mcpPaid),
+    publicWrite: sanitiseScope(next.publicWrite),
   };
 
   await db.transaction(async (tx) => {
@@ -151,7 +172,7 @@ export async function setRateLimits(
 
 function describeChange(before: RateLimitSettings, after: RateLimitSettings): string {
   const parts: string[] = [];
-  for (const scope of ["mcpFree", "mcpPaid"] as const) {
+  for (const scope of ["mcpFree", "mcpPaid", "publicWrite"] as const) {
     const label = scope === "mcpFree" ? "free" : "paid";
     if (before[scope].enabled !== after[scope].enabled) {
       parts.push(`${label} limit ${after[scope].enabled ? "enabled" : "disabled"}`);

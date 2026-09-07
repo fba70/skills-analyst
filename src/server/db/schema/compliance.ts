@@ -1,17 +1,26 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  date,
   index,
   integer,
+  pgPolicy,
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
 import { organization, user } from "./auth";
-import { skills, sources } from "./corpus";
-import { takedownGrounds, takedownScope, takedownStatus } from "./enums";
+import { skills, skillVersions, sources } from "./corpus";
+import {
+  flagReason,
+  flagStatus,
+  takedownGrounds,
+  takedownScope,
+  takedownStatus,
+} from "./enums";
 
 /**
  * Takedown requests and their effect (Doc 2 R7.5).
@@ -106,5 +115,122 @@ export const takedowns = pgTable(
     index("takedowns_block_idx").on(t.sourceUrl, t.skillPath, t.status),
     index("takedowns_status_idx").on(t.status, sql`${t.receivedAt} desc`),
     index("takedowns_skill_idx").on(t.skillId),
+  ],
+);
+
+/**
+ * A reader's report about a skill (Doc 2 R2.5).
+ *
+ * ## Its own table, not a takedown
+ *
+ * A takedown is a legal claim by a rights-holder and its consequence is withholding content.
+ * A flag is a quality or safety observation by a reader and its consequence is a curator
+ * looking again. They share a shape — recorded, then decided — and share nothing else:
+ * different vocabulary, different evidence, different outcome. Folding them together would
+ * mean either treating "the description is wrong" as a legal notice or treating a copyright
+ * claim as a quality nit.
+ *
+ * ## `received` enforces nothing
+ *
+ * A flag quarantines no skill and changes no score until a curator upholds it. Enforcing on
+ * arrival means anybody who can fill in a form can un-list a competitor, and the temptation
+ * is strongest exactly where the attacker would aim — a credible-sounding `malicious` report.
+ * The same rule governs the R6.3 outcome signal: only an **upheld** flag records one, because
+ * `flagged` is an adverse outcome and a received one would let an accusation alone bar a
+ * skill from `battle-tested`.
+ *
+ * ## No reporter identity
+ *
+ * `reporter_digest` is the same daily-rotating unlinkable HMAC the outcome signals use, and
+ * it is here for two jobs only: refusing a duplicate report of the same skill for the same
+ * reason on the same day, and giving the rate limiter something to count. An optional
+ * `contact` is stored **only when the reporter volunteers one** — a curator sometimes needs
+ * to ask a follow-up question, and a report nobody can clarify is often a report nobody can
+ * action.
+ *
+ * ## The note is untrusted input
+ *
+ * It is a reader's free text about content that may itself be adversarial, displayed to a
+ * curator and never rendered as markup, never interpolated into a prompt without the R7.3
+ * fence. Capped, so the field is not a channel for pasting a payload.
+ */
+export const skillFlags = pgTable(
+  "skill_flags",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** NULL for the public corpus, which is every flag today. */
+    orgId: text("org_id").references(() => organization.id, { onDelete: "cascade" }),
+
+    skillId: uuid("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "cascade" }),
+    /**
+     * The version the reader was looking at.
+     *
+     * Pinned, because "this is broken" is a statement about content, and a re-sync may have
+     * replaced it before a curator reads the flag. Without the version a curator cannot tell
+     * a stale report from a live one.
+     */
+    skillVersionId: uuid("skill_version_id")
+      .notNull()
+      .references(() => skillVersions.id, { onDelete: "cascade" }),
+
+    reason: flagReason("reason").notNull(),
+    /** The reader's own words. Untrusted; capped; never rendered as markup. */
+    note: text("note"),
+    /** Volunteered by the reporter, or NULL. Never derived from a request. */
+    contact: text("contact"),
+
+    status: flagStatus("status").notNull().default("received"),
+    /** Set when a curator decides. Their reasoning, not the reporter's. */
+    decision: text("decision"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    decidedBy: text("decided_by").references(() => user.id, { onDelete: "set null" }),
+
+    /** Daily-rotating, unlinkable. See the note above. */
+    reporterDigest: text("reporter_digest").notNull(),
+    day: date("day").notNull(),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /**
+     * One report per reader per skill per reason per day.
+     *
+     * Enforced in the index rather than in the action, so a second entry point cannot forget
+     * it. A reader who genuinely has two different problems with one skill files two
+     * reasons, which is the distinction worth preserving.
+     */
+    uniqueIndex("skill_flags_uq").on(t.skillVersionId, t.reason, t.day, t.reporterDigest),
+    /** The curator queue: everything still awaiting a decision. */
+    index("skill_flags_status_idx").on(t.status, t.createdAt),
+    index("skill_flags_skill_idx").on(t.skillId),
+
+    /**
+     * Reads are open; writes are org-scoped.
+     *
+     * A curator triaging the queue is reading across every organisation by definition, and
+     * the columns carry a reason from a closed vocabulary, a reader's note and an optional
+     * volunteered contact. That last one is the reason this policy deserves a second look if
+     * the table ever grows: it is the only column here that could identify a person, it is
+     * only ever present because somebody typed it, and it must never be exposed on a public
+     * surface.
+     */
+    pgPolicy("read_all", {
+      for: "select",
+      to: "app_runtime",
+      using: sql`true`,
+    }),
+    pgPolicy("org_write", {
+      for: "insert",
+      to: "app_runtime",
+      withCheck: sql`org_id is null or org_id = current_setting('app.org_id', true)`,
+    }),
+    pgPolicy("org_decide", {
+      for: "update",
+      to: "app_runtime",
+      using: sql`org_id is null or org_id = current_setting('app.org_id', true)`,
+      withCheck: sql`org_id is null or org_id = current_setting('app.org_id', true)`,
+    }),
   ],
 );

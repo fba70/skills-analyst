@@ -140,6 +140,34 @@ export const takedownStatus = pgEnum("takedown_status", [
   "reinstated",
 ]);
 
+/**
+ * Why a reader flagged a skill (Doc 2 R2.5).
+ *
+ * An enum because every value drives a decision — the security three are read first — and
+ * because a free-text reason field becomes a second, uncontrolled vocabulary within a week.
+ * The reader's own words go in `note`, which is capped and treated as untrusted input.
+ */
+export const flagReason = pgEnum("flag_reason", [
+  "malicious",
+  "prompt-injection",
+  "secret",
+  "misleading",
+  "broken",
+  "licence",
+  "duplicate",
+  "other",
+]);
+
+/**
+ * A flag's life. Mirrors `takedown_status` deliberately.
+ *
+ * `received` is logged and **enforces nothing**: enforcing on arrival would let anyone who
+ * can fill in a form un-list a competitor, which is the failure the takedown workflow already
+ * separates recording from deciding to avoid. There is no `reinstated` — a rejected flag can
+ * simply be flagged again, and nothing was withheld to restore.
+ */
+export const flagStatus = pgEnum("flag_status", ["received", "upheld", "rejected"]);
+
 /** One skill, or every skill from one repository. */
 export const takedownScope = pgEnum("takedown_scope", ["skill", "source"]);
 

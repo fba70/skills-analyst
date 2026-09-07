@@ -41,7 +41,7 @@ const TABLES = [
   "skill_structures", "skill_blocks",
   "skill_categories",
   "archetypes",
-  "takedowns",
+  "takedowns", "skill_flags",
   "skill_drafts",
   "builder_signals", "outcome_signals",
   "llm_usage",
@@ -57,6 +57,8 @@ const ENUMS: Record<string, string[]> = {
   skill_version_status: ["pending", "validating", "indexed", "quarantined", "revalidating", "tombstoned", "withdrawn"],
   lifecycle_declaration: ["deprecated", "superseded"],
   org_plan: ["free", "pro", "team"],
+  flag_reason: ["malicious", "prompt-injection", "secret", "misleading", "broken", "licence", "duplicate", "other"],
+  flag_status: ["received", "upheld", "rejected"],
   llm_purpose: ["builder", "validation", "corpus_taxonomy", "corpus_validation", "corpus_embedding"],
 };
 
@@ -80,6 +82,9 @@ const COLUMNS: Array<[string, string]> = [
   ["outcome_signals", "kind"],
   ["outcome_signals", "caller_digest"],
   ["outcome_signals", "archetype_category"],
+  ["skill_flags", "reason"],
+  ["skill_flags", "reporter_digest"],
+  ["skill_flags", "decision"],
 ];
 
 /** Extensions the schema depends on. Neither is expressible in Drizzle. */
@@ -206,6 +211,10 @@ const counts = await c.query<{ label: string; n: string }>(`
   union all select 'verdicts', count(*)::text from verdicts
   union all select 'categories assigned', count(*)::text from skill_categories
   union all select 'archetypes (all versions)', count(*)::text from archetypes
+  union all select 'flags open', count(*)::text from skill_flags where status = 'received'
+  union all select 'flags decided', count(*)::text from skill_flags where status <> 'received'
+  union all select 'outcome signals', count(*)::text from outcome_signals
+  union all select 'outcome signals attributed', count(*)::text from outcome_signals where archetype_category is not null
   union all select 'events', count(*)::text from events
 `);
 for (const row of counts.rows) {

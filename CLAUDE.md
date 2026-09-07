@@ -1887,6 +1887,81 @@ returning zero on one side looks like a filter bug.
 > scaffold an empty form. That distinction is the whole bug: the measurement was right and the
 > output was unusable, and only the first had anything checking it.
 
+### Public writes: recorded, never enforced (R2.5, R1.8, R7.5)
+
+`src/lib/flags.ts` · `src/server/curation/flags.ts` · `src/app/(public)/actions.ts` · migration 0030
+`pnpm verify:flags` (28 checks, free) · Settings → **Flags** · `/submit`
+
+Three things a person with no account may now do: report a problem with a skill, suggest a
+repository, file a takedown notice. All three were admin-only, which meant **the only route
+from a reader to the quarantine queue was an analyzer bump** — closing the oldest unclosed
+P0 in the validation half.
+
+#### Nothing enforces on arrival, and that is the whole design
+
+A flag lands `received`. A submission lands as an ordinary discovery candidate. A notice lands
+`received` and unenforced. None of them hides, re-scores or withholds anything until a named
+curator decides, with their reasoning on the row.
+
+> That is not caution. **Enforcing on arrival means anybody who can fill in a form can un-list
+> a competitor** — the failure every takedown regime is criticised for, and why `takedowns`
+> already separates recording from deciding. The temptation is strongest for the security
+> reasons: surely a credible exfiltration report should hide the skill immediately? That is
+> exactly the reason an attacker would file `malicious` first.
+
+**Only an upheld flag records an outcome signal.** `flagged` is adverse (R6.3) and adverse
+outcomes bar `battle-tested` — so a received flag that counted would let a two-line form
+defeat a month of clean downloads and a passing re-validation. `verify:flags` asserts a
+received flag produces no signal, leaves the skill's status alone, and does not queue the
+version.
+
+**Upholding queues re-validation rather than quarantining.** The analyzers decide. A curator
+forcing a `quarantined` status would produce a withheld skill with **no verdict row explaining
+why**, which is the gap R7.1 exists to close and which the reader of that page would see as an
+unexplained refusal.
+
+#### The write limiter fails closed, inverting the read scopes
+
+`publicWrite` is five a minute, thirty an hour — tight, because nobody legitimately files
+twenty reports a minute. And when the limiter's own settings cannot be read it **refuses**,
+where the MCP read scopes allow.
+
+> A read limiter that fails closed takes the public registry dark because a counter table
+> blinked, over data that is public and read-only. A write limiter that fails open lets an
+> unbounded flood into a queue a human works through, and the settings coming back does not
+> undo it.
+>
+> **That policy lives in `fallbackDecision` because the first version was untestable.** The
+> check broke `DATABASE_URL` and called `consume`, expecting the settings read to fail — it
+> did not, because the pool is a module singleton built on first import, so the assignment
+> arrived too late and the limiter answered normally. A check that passed for the wrong
+> reason, and the exact ESM-ordering trap `verify:spend` had already documented. A policy that
+> cannot be tested where it is written belongs somewhere it can.
+
+#### Smaller decisions worth keeping
+
+- **Server actions, not route handlers.** An action *is* a POST endpoint, so this is the other
+  side of the no-database-in-API-routes rule rather than a way round it: handlers are for wire
+  protocols and file downloads, and anything returning a value to our own bundle is an action.
+- **`autoPromote: false`** is the only difference from the admin submission path, and
+  `submit.ts` was written expecting it. The large-repository gate therefore still applies: an
+  admin typing a name is the human look it requires, a stranger pasting a URL is not.
+- **A duplicate report reads as success.** Saying "you already flagged this today" confirms an
+  earlier submission landed, which is a small oracle and a needless one.
+- **Native `<details>`, not a dialog.** No dialog primitive is vendored, and a `<details>`
+  needs no focus trap and degrades to a usable form with JavaScript still loading — which
+  matters when the reader has just found a credential in a skill.
+- **Both forms sit quietly at the bottom of the page.** A prominent Report button fills a
+  queue with idle clicks; somebody who has actually found something will look for it.
+- **A stale flag is labelled, not hidden.** "This is broken" is a claim about content, and a
+  re-sync may have replaced it — a curator who cannot tell a stale report from a live one will
+  eventually re-quarantine a fixed skill.
+- **The reporter's note is untrusted input**, rendered as text and never as markup, never fed
+  to a model without the R7.3 fence. It is free text from a stranger about content that may
+  itself be adversarial.
+- **A rejected flag is kept.** A refused report is still a report that was made, which is the
+  half of this that protects the platform — the same reasoning as a rejected takedown.
+
 ### Outcome telemetry: the other half of the loop (Doc 2 R6.3)
 
 `src/lib/outcomes.ts` · `src/server/analytics/outcomes.ts` · migration 0029
@@ -3237,6 +3312,7 @@ pnpm verify:lifecycle                    # lifecycle cannot be granted; free, ro
 pnpm verify:entitlements                 # trust surfaces cannot be paywalled; free
 pnpm verify:embeddings                   # embedding path priced and metered; free
 pnpm verify:outcomes                     # outcome signals arrive and dedup; free
+pnpm verify:flags                        # a flag records and never enforces; free
 pnpm embeddings --status                  # vector coverage; free
 pnpm embeddings --backfill 5000           # COSTS MONEY (~$0.06 for the whole corpus)
 pnpm lifecycle --status                  # derived states and content governance; free
