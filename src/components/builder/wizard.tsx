@@ -11,6 +11,7 @@ import {
 } from "@/app/(protected)/build/actions";
 import type { Scaffold } from "@/server/builder/scaffold";
 import { DOMAINS } from "@/server/taxonomy/vocabulary";
+import { SimilarSkills } from "@/components/builder/similar-skills";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -187,6 +188,19 @@ export function BuilderWizard({ categories }: { categories: Category[] }) {
                 </p>
               ) : null}
             </div>
+
+            {/*
+              R3.6, placed here rather than at the end.
+              
+              The point of telling an author what already exists is that they can still change
+              course. Shown after the sections step it would be a fact about work already
+              done; shown next to the purpose it is a decision they can act on — narrow the
+              scope, or stop.
+              
+              Fed the name and the purpose together, because a name alone is too short to
+              embed usefully and a purpose alone often omits the subject.
+            */}
+            <SimilarSkills text={`${name}\n${purpose}`} />
 
             {/*
               Domain sits here rather than in a step of its own.

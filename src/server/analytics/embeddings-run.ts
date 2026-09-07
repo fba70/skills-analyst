@@ -4,7 +4,12 @@ import { and, eq, gte, inArray, isNotNull, or, sql } from "drizzle-orm";
 
 import { db } from "@/server/db";
 import { skillCategories, skillEmbeddings, skills } from "@/server/db/schema";
-import { labelFor, REVIEW_FLOOR, type CategoryAxis } from "@/server/taxonomy/vocabulary";
+import {
+  isValidCategory,
+  labelFor,
+  REVIEW_FLOOR,
+  type CategoryAxis,
+} from "@/server/taxonomy/vocabulary";
 
 import {
   composeInput,
@@ -300,13 +305,68 @@ export async function embeddingSummary() {
   return { totals, eligible, model: EMBEDDING_MODEL, version: EMBEDDER_VERSION };
 }
 
+/**
+ * A bare category value to a human label, trying both axes.
+ *
+ * `labelFor` returns its input unchanged when the value is not in the axis it was given, so
+ * "did it resolve" has to be asked with `isValidCategory` rather than inferred from the
+ * answer looking different.
+ */
+function resolveCategoryLabel(value: string): string {
+  const axes: CategoryAxis[] = ["function", "domain"];
+  for (const axis of axes) {
+    if (isValidCategory(axis, value)) return labelFor(axis, value);
+  }
+  return value;
+}
+
 export type SimilarSkill = {
   slug: string;
   name: string;
   summary: string | null;
   /** Cosine similarity, 0–1. Higher is closer. */
   similarity: number;
+  /** So an author can see whether the near neighbour is any good. */
+  qualityScore: number | null;
+  /** Human category labels, which is most of "how yours differs" (R3.6). */
+  categories: string[];
 };
+
+export type SimilarityReport = {
+  hits: SimilarSkill[];
+  /**
+   * Embedded skills over eligible skills, as a percentage.
+   *
+   * Returned with every answer, because a similarity result is only as complete as the index
+   * behind it. During a backfill "no similar skills" and "nothing comparable has been
+   * embedded yet" look identical to an author, and only one of them means what it says —
+   * which is the same trap `archetypes --blocks` printed eleven rows of zeros into.
+   */
+  coveragePercent: number;
+  /** True once the index is complete enough that an empty result is informative. */
+  reliable: boolean;
+};
+
+/**
+ * Coverage below which an empty or thin result says more about the index than the corpus.
+ *
+ * 90% rather than 100: the last few per cent are skills arriving faster than the backfill,
+ * and waiting for a number that never quite settles would mean the feature is never on.
+ */
+export const RELIABLE_COVERAGE = 90;
+
+/**
+ * Shortest query worth embedding.
+ *
+ * Below this the vector is noise, and noise has *nearest neighbours* — the query returns six
+ * arbitrary skills with confident-looking cosine scores, which is worse than returning
+ * nothing because an author cannot tell the difference. It is also paid for.
+ *
+ * The guard lives here rather than only in the caller. It was in the builder action first,
+ * and `verify:embeddings` then showed `similarToText("x")` happily returning ten neighbours
+ * and billing for them — a guard one call site remembers is a guard the CLI does not have.
+ */
+export const MIN_QUERY_CHARS = 20;
 
 /**
  * The nearest skills to a piece of text (R3.6, and RW.8's collision check).
@@ -321,15 +381,31 @@ export type SimilarSkill = {
 export async function similarToText(
   text: string,
   options: { limit?: number; excludeSkillId?: string } = {},
-): Promise<SimilarSkill[]> {
+): Promise<SimilarityReport> {
   const limit = Math.max(1, Math.min(options.limit ?? 10, 50));
+
+  const { totals, eligible } = await embeddingSummary();
+  const coveragePercent = eligible > 0 ? Math.round((totals.embedded / eligible) * 100) : 0;
+  const report = { coveragePercent, reliable: coveragePercent >= RELIABLE_COVERAGE };
+
+  // Too short to mean anything, and refused before anything is charged for.
+  if (text.trim().length < MIN_QUERY_CHARS) return { ...report, hits: [] };
+
+  /**
+   * Nothing embedded means no answer, and **no charge**.
+   *
+   * Checked before `embedBatch` rather than after: embedding the author's text to compare it
+   * against an empty index would bill for a question that cannot be answered.
+   */
+  if (totals.embedded === 0) return { ...report, hits: [] };
+
   const { vectors } = await embedBatch([text]);
-  if (vectors.length === 0) return [];
+  if (vectors.length === 0) return { ...report, hits: [] };
 
   const literal = `[${vectors[0].join(",")}]`;
 
   const result = await db.execute(sql`
-    select s.slug, s.name, s.summary,
+    select s.slug, s.name, s.summary, s.quality_score, s.categories,
            1 - (e.embedding <=> ${literal}::vector) as similarity
     from ${skillEmbeddings} e
     join ${skills} s on s.id = e.skill_id
@@ -342,10 +418,28 @@ export async function similarToText(
     limit ${limit}
   `);
 
-  return (result.rows as Array<Record<string, unknown>>).map((row) => ({
+  const hits = (result.rows as Array<Record<string, unknown>>).map((row) => ({
     slug: row.slug as string,
     name: row.name as string,
     summary: (row.summary as string | null) ?? null,
     similarity: Math.round(Number(row.similarity) * 1000) / 1000,
+    qualityScore: (row.quality_score as number | null) ?? null,
+    /**
+     * `skills.categories` is the denormalised read path and holds only servable labels at the
+     * current taxonomy version — the same list the registry filters on. Resolved to human
+     * words, because `generate-document` in a UI is a slug leaking into a sentence.
+     *
+     * The entries are **bare values with no axis prefix**, so the axis has to be discovered
+     * rather than assumed. Defaulting to `function` looked right and shipped wrong: a first
+     * run rendered "Review & critique · software-engineering", the function label resolved
+     * and every domain one falling through `labelFor`'s pass-through as a raw slug. Both
+     * axes are tried, and an unrecognised value keeps its slug rather than disappearing —
+     * a missing category is harder to notice than an ugly one.
+     */
+    categories: (((row.categories ?? []) as string[]) ?? []).map((entry) =>
+      resolveCategoryLabel(entry),
+    ),
   }));
+
+  return { ...report, hits };
 }

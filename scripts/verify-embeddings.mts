@@ -238,5 +238,87 @@ if (connected) {
   await c.end();
 }
 
+// ---------------------------------------------------------------------------------------
+console.info("\nSimilarity for authors (R3.6)");
+// ---------------------------------------------------------------------------------------
+
+/**
+ * The property worth protecting here is **honesty about coverage**, not recall.
+ *
+ * During a backfill, "nothing similar exists" and "nothing comparable has been embedded yet"
+ * produce the same short list and support opposite conclusions — and the wrong one makes an
+ * author publish a duplicate. So the report carries its own coverage and a `reliable` flag,
+ * and this asserts the flag actually tracks the threshold rather than being decoration.
+ *
+ * The second property is that a question that cannot be answered is not charged for.
+ */
+{
+  const { RELIABLE_COVERAGE, similarToText } = await import(
+    "../src/server/analytics/embeddings-run"
+  );
+  const { embeddingSummary } = await import("../src/server/analytics/embeddings-run");
+
+  check(
+    "the reliability threshold is short of 100%",
+    RELIABLE_COVERAGE > 50 && RELIABLE_COVERAGE < 100,
+    `${RELIABLE_COVERAGE}% — the last few per cent are skills arriving faster than the backfill`,
+  );
+
+  const { totals, eligible } = await embeddingSummary();
+  const coverage = eligible > 0 ? Math.round((totals.embedded / eligible) * 100) : 0;
+
+  /**
+   * Short input is refused before anything is embedded.
+   *
+   * A three-word purpose embeds to noise and would return six arbitrary neighbours with
+   * confident-looking scores, which is worse than refusing — and it would be paid for.
+   */
+  const tokensBefore = totals.tokens;
+  const report = await similarToText("x");
+  /**
+   * Reproduce the failure, then assert the fix.
+   *
+   * The first version of this check was `hits.length === 0 || coveragePercent === coverage`,
+   * which is trivially true — and it passed while `similarToText("x")` returned **ten**
+   * arbitrary neighbours and billed for the embedding. The guard existed only in the builder
+   * action, so the CLI had none. A check whose condition cannot fail is not a check.
+   */
+  check(
+    "a query too short to mean anything returns nothing",
+    report.hits.length === 0,
+    `${report.hits.length} hits — noise has nearest neighbours, and they look confident`,
+  );
+  const afterShort = await embeddingSummary();
+  check(
+    "and is refused before it is paid for",
+    afterShort.totals.tokens === tokensBefore,
+    `${afterShort.totals.tokens - tokensBefore} tokens charged for an unanswerable query`,
+  );
+
+  check(
+    "the report states the coverage it was computed against",
+    report.coveragePercent === coverage,
+    `${report.coveragePercent}% vs ${coverage}% measured`,
+  );
+  check(
+    "reliability tracks the threshold rather than being hard-coded",
+    report.reliable === coverage >= RELIABLE_COVERAGE,
+    `coverage ${coverage}%, reliable=${report.reliable}`,
+  );
+
+  if (totals.embedded === 0) {
+    check(
+      "with an empty index no tokens are spent asking",
+      afterShort.totals.tokens === tokensBefore,
+      "embedding the question to compare against nothing would bill for an unanswerable query",
+    );
+  } else {
+    console.info(
+      `  note  ${coverage}% embedded, so a thin similarity result is` +
+        `${report.reliable ? " informative" : " a fact about the index, not the corpus"}`,
+    );
+  }
+}
+
 console.info(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail > 0 ? 1 : 0);

@@ -1887,6 +1887,59 @@ returning zero on one side looks like a filter bug.
 > scaffold an empty form. That distinction is the whole bug: the measurement was right and the
 > output was unusable, and only the first had anything checking it.
 
+### Similarity for authors: what already exists (Doc 2 R3.6)
+
+`similarToText` in `analytics/embeddings-run.ts` · `components/builder/similar-skills.tsx`
+`pnpm verify:embeddings` (26 checks) · `pnpm embeddings --similar "…"`
+
+The dedup data has existed for months and nothing showed it to the person about to add to the
+pile. An author who can see that four near-identical skills already exist will narrow their
+scope or stop, and both beat a fifth copy. It reads the A6 vectors, so it needed pgvector
+first.
+
+Working, measured: *"review a django project for slow ORM queries before release"* returns
+`django-perf-review` at **0.64** with quality 100, then `django-access-review` at 0.57. That
+is the requirement doing its job at 21% index coverage.
+
+#### Placed where the author can still act on it
+
+Next to the purpose field, not after the sections step. Shown at the end it is a fact about
+work already done; shown beside the purpose it is a decision — narrow the scope, or stop. Fed
+the name and purpose together, because a name alone is too short to embed usefully and a
+purpose alone often omits the subject.
+
+**On demand, not as you type.** Every check is one metered embedding call. A fraction of a
+cent is nothing; a fraction of a cent per keystroke is a bill nobody predicted, so it is a
+button — the same posture as `taxonomy --sample`.
+
+**It never tells the author to stop.** A high score is information, not a verdict: a Django
+review and a Rails review *should* look alike, and a builder refusing on a cosine score would
+be wrong often and unarguable when it was.
+
+#### Coverage travels with every answer
+
+`SimilarityReport` carries `coveragePercent` and a `reliable` flag, and the caveat is printed
+**above** the results. During the backfill, "nothing similar exists" and "nothing comparable
+has been embedded yet" are the same short list and opposite conclusions — and an author who
+reads the first when the second is true writes the duplicate this feature exists to prevent.
+`RELIABLE_COVERAGE` is 90 rather than 100, because the last few per cent are skills arriving
+faster than the backfill and a threshold that never settles means the feature is never on.
+
+> **Two checks that passed for the wrong reason, in one step.**
+>
+> The short-query guard was in the builder action only. `verify:embeddings` then showed
+> `similarToText("x")` returning **ten** arbitrary neighbours and billing for the embedding —
+> noise has nearest neighbours and they look confident. Worse, the check that should have
+> caught it read `hits.length === 0 || coveragePercent === coverage`, whose right-hand side is
+> trivially true. **A check whose condition cannot fail is not a check.** The guard moved into
+> `similarToText`, where the CLI gets it too, and the assertion now names the number.
+>
+> The category labels defaulted to the `function` axis, because `skills.categories` stores
+> bare values with no prefix. It looked right and rendered *"Review & critique ·
+> software-engineering"* — the function label resolved and every domain one fell through
+> `labelFor`'s pass-through as a raw slug. Both axes are tried now, with `isValidCategory`
+> asked rather than inferring resolution from the answer looking different.
+
 ### Public writes: recorded, never enforced (R2.5, R1.8, R7.5)
 
 `src/lib/flags.ts` · `src/server/curation/flags.ts` · `src/app/(public)/actions.ts` · migration 0030

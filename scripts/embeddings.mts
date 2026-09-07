@@ -88,15 +88,27 @@ if (args.includes("--status") || args.length === 0) {
 
 const similar = text("similar");
 if (similar) {
-  const hits = await similarToText(similar, { limit: value("limit") ?? 10 });
+  const report = await similarToText(similar, { limit: value("limit") ?? 10 });
   console.info(`\nNearest skills to: ${similar}\n`);
-  if (hits.length === 0) {
+  if (!report.reliable) {
+    // Said before the results, not after. A thin answer at partial coverage is a fact about
+    // the index, and reading it as a fact about the corpus is the whole trap.
+    console.info(
+      `  PARTIAL: ${report.coveragePercent}% of the corpus is embedded, so treat a short` +
+        ` list as incomplete rather than as "nothing similar exists".\n`,
+    );
+  }
+  if (report.hits.length === 0) {
     console.info("  nothing — has the backfill run? pnpm embeddings --status\n");
     process.exit(0);
   }
-  for (const hit of hits) {
-    console.info(`  ${hit.similarity.toFixed(3)}  ${hit.name}`);
+  for (const hit of report.hits) {
+    console.info(
+      `  ${hit.similarity.toFixed(3)}  ${hit.name}` +
+        (hit.qualityScore !== null ? `  (quality ${hit.qualityScore})` : ""),
+    );
     console.info(`         /skills/${hit.slug}`);
+    if (hit.categories.length > 0) console.info(`         ${hit.categories.join(" · ")}`);
     if (hit.summary) console.info(`         ${hit.summary.replace(/\s+/g, " ").slice(0, 96)}`);
   }
   console.info("");

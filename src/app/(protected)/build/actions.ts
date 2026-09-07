@@ -158,3 +158,51 @@ export async function publishDraftAction(
     return failure(error);
   }
 }
+
+/**
+ * "Twelve similar skills exist, here is how yours differs" (Doc 2 R3.6).
+ *
+ * ## Why this is worth an author's attention before they write
+ *
+ * The dedup data has existed for months and nothing surfaced it to the person about to add
+ * to the pile. An author who can see that four near-identical skills already exist will
+ * either narrow their scope or decide not to bother, and both are better outcomes than a
+ * fifth copy — which is R3.6's point and the half of R5.3 that does not need gap detection.
+ *
+ * ## It costs one embedding call, and says so upstream
+ *
+ * ~60 tokens at $0.02/MTok, metered against the platform budget through `embedBatch` like
+ * every other model call. Deliberately **not** wired to fire on every keystroke: the wizard
+ * asks for it once, on demand, because an autocomplete-shaped feature over a metered call is
+ * how a fraction of a cent becomes a bill nobody predicted.
+ *
+ * The coverage figure travels with the answer. During the backfill "nothing similar exists"
+ * and "nothing comparable has been embedded yet" are the same output and opposite
+ * conclusions, so the caller is given both and the UI states which it has.
+ */
+export async function findSimilarAction(text: string): Promise<
+  | { ok: true; report: Awaited<ReturnType<typeof import("@/server/analytics/embeddings-run").similarToText>> }
+  | { ok: false; message: string }
+> {
+  try {
+    // A session, not an entitlement: R3.6 is free-tier authoring help, and gating it would
+    // paywall the advice that stops someone publishing a duplicate.
+    await requireSession();
+
+    /**
+     * The friendlier message. The *guard* is in `similarToText`, which refuses a short query
+     * before charging for it — this only turns that into a sentence an author can act on,
+     * rather than an empty list they would read as "nothing similar exists".
+     */
+    const { MIN_QUERY_CHARS, similarToText } = await import("@/server/analytics/embeddings-run");
+    const trimmed = text.trim();
+    if (trimmed.length < MIN_QUERY_CHARS) {
+      return { ok: false, message: "Write a little more first — a line or two is enough." };
+    }
+
+    const report = await similarToText(trimmed, { limit: 6 });
+    return { ok: true, report };
+  } catch (error) {
+    return { ok: false, message: (error as Error).message.slice(0, 300) };
+  }
+}
