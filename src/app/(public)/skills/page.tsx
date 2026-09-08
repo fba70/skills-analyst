@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import Link from "next/link";
 import { Star } from "lucide-react";
 
@@ -55,6 +56,51 @@ export default async function RegistryPage(props: PageProps<"/skills">) {
   };
 
   const [result, options] = await Promise.all([listSkills(filters), getFilterOptions()]);
+
+  /**
+   * What the reader looked for, and whether the corpus had it (RK.5, plan step E3).
+   *
+   * ## Only page one, and only a real query
+   *
+   * Paging is the same search asked again, so counting page three would triple one person's
+   * demand — and the result count on page three is the same total anyway. `recordSearch`
+   * normalises and drops anything too short to be a query rather than a keystroke on the way to
+   * one.
+   *
+   * ## Awaited, not fired and forgotten
+   *
+   * A detached promise in a server component is a promise the runtime may tear down with the
+   * response — the same reason the interview route wraps its persistence in `after()`. The insert
+   * is a single indexed upsert and the recorder swallows its own failures, so awaiting it costs a
+   * millisecond and cannot fail the page.
+   *
+   * ## The caller key is the forwarding IP, and it is never stored
+   *
+   * The first version passed `null`, reasoning that under-counting distinct searchers is the safe
+   * direction for a privacy floor. It is not — `callerDigest(null)` returns one shared constant,
+   * so **every anonymous search would collapse to a single digest and the floor of five could
+   * never be reached**. The board would have been permanently empty on its main surface, for a
+   * reason that looked like caution.
+   *
+   * So it is the same identity the download route and the public write limiter already use: the
+   * forwarded address, hashed with a daily-rotating salt before anything is written, and the
+   * address itself never stored anywhere. Shared behind a NAT and rotated at will, which makes it
+   * a *weak* identity — and weak is right here, because the digest exists to stop one person
+   * being counted five times, not to know who anybody is.
+   */
+  if (result.page === 1) {
+    const { recordSearch } = await import("@/server/analytics/demand");
+    const requestHeaders = await headers();
+    await recordSearch({
+      query: filters.query,
+      resultCount: result.total,
+      channel: "web",
+      callerKey:
+        requestHeaders.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+        requestHeaders.get("x-real-ip") ??
+        null,
+    });
+  }
   const first = (result.page - 1) * result.pageSize + 1;
   const last = Math.min(result.page * result.pageSize, result.total);
 

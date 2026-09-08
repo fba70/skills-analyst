@@ -14,6 +14,7 @@ import type { Scaffold } from "@/server/builder/scaffold";
 import { DOMAINS } from "@/server/taxonomy/vocabulary";
 import { BlockLibrary } from "@/components/builder/block-library";
 import { SimilarSkills } from "@/components/builder/similar-skills";
+import { UnmetDemand } from "@/components/builder/unmet-demand";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -234,6 +235,13 @@ export function BuilderWizard({ categories }: { categories: Category[] }) {
               embed usefully and a purpose alone often omits the subject.
             */}
             <SimilarSkills text={`${name}\n${purpose}`} />
+
+            {/*
+              Directly under similarity, because the two answer the same question from opposite
+              sides: what already exists, and what people keep failing to find. Showing only the
+              first would make this step a discouragement machine.
+            */}
+            <UnmetDemand text={`${name} ${purpose}`} />
 
             {/*
               Domain sits here rather than in a step of its own.

@@ -98,7 +98,12 @@ export function registerFreeTools(server: McpServer) {
         page_size: z.number().int().optional().describe(`One of ${PAGE_SIZES.join(", ")}.`),
       }),
     },
-    async (args) => {
+    /*
+     * `ctx` is taken here where the other tools already take it: it carries the HTTP request the
+     * caller key is derived from, and without it every agent search would share one digest and the
+     * board's distinct-searcher floor could never be reached.
+     */
+    async (args, ctx) => {
       const categories = [
         args.function_category ? `function:${args.function_category}` : null,
         args.domain_category ? `domain:${args.domain_category}` : null,
@@ -115,6 +120,22 @@ export function registerFreeTools(server: McpServer) {
         pageSize: (PAGE_SIZES as readonly number[]).includes(args.page_size ?? 0)
           ? (args.page_size as never)
           : undefined,
+      });
+
+      /*
+       * Demand, recorded on the agent surface too (RK.5, plan step E3).
+       *
+       * Only page one, because paging is the same search asked again and counting page three
+       * would triple one caller's demand. An agent is the *more* interesting half of this signal:
+       * it searches with a structured schema and a specific intent, so a query it cannot satisfy
+       * is a gap somebody's automation actually hit rather than a person browsing.
+       */
+      const { recordSearch } = await import("@/server/analytics/demand");
+      await recordSearch({
+        query: args.query,
+        resultCount: page.total,
+        channel: "mcp",
+        callerKey: callerKeyOf(ctx),
       });
 
       return result(

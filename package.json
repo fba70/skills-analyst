@@ -65,6 +65,7 @@
     "verify:matrix": "tsx --conditions=react-server scripts/verify-matrix.mts",
     "verify:optimise": "tsx --conditions=react-server scripts/verify-optimise.mts",
     "links": "tsx --conditions=react-server scripts/links.mts",
+    "verify:demand": "tsx --conditions=react-server scripts/verify-demand.mts",
     "verify:freshness": "tsx --conditions=react-server scripts/verify-freshness.mts",
     "verify:impact": "tsx --conditions=react-server scripts/verify-impact.mts",
     "verify:tree": "tsx scripts/verify-tree.mts",

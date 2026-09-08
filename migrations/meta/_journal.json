@@ -267,6 +267,20 @@
       "when": 1788870784861,
       "tag": "0037_brief_lizard",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1788873405714,
+      "tag": "0038_productive_apocalypse",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1788873480681,
+      "tag": "0039_condemned_tusk",
+      "breakpoints": true
     }
   ]
 }

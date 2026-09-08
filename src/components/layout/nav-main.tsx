@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Library,
   Settings2,
+  Search,
   Shapes,
   Sparkles,
   type LucideIcon,
@@ -33,6 +34,10 @@ const items: NavItem[] = [
   // Public like the registry, and sits beside it on purpose: the registry is what the
   // corpus *contains*, archetypes are what it has been shown to *mean*.
   { title: "Archetypes", href: "/archetypes", icon: Shapes },
+  // Beside the two pages that describe what the corpus *has*, because it is the one that
+  // describes what it does not — and that is what makes it worth a menu entry rather than a
+  // footnote: it is the only surface here that says what to build next.
+  { title: "Most wanted", href: "/wanted", icon: Search },
   // Directly after the archetypes it builds from — the two are one idea, and the ordering
   // is the argument: read what works, then make one.
   { title: "Build a skill", href: "/build", icon: Sparkles },

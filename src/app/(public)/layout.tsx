@@ -95,6 +95,9 @@ function AnonymousShell({ children }: { children: React.ReactNode }) {
             <Link href="/archetypes">Archetypes</Link>
           </Button>
           <Button asChild variant="ghost" size="sm">
+            <Link href="/wanted">Most wanted</Link>
+          </Button>
+          <Button asChild variant="ghost" size="sm">
             <Link href="/faq">FAQ</Link>
           </Button>
         </nav>

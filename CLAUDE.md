@@ -242,7 +242,7 @@ where these numbers came from.
 | Entitlements | **new (A5)** — three plans; the trust surfaces cannot be gated at all |
 | Builder | live at `/build` · **a draft is typed blocks and the body is their render (C1)** · block editing, revisions and a no-model scaffold path (C1b, R4.6, R4.7) · **Interview mode, five techniques, typed candidates accepted or rejected (C2, RW.4, R5.1, R5.4)** · block-level archetype deviations (R4.3) |
 | MCP | live at `/api/mcp` · six tools, token-gated, rate-limit scope now follows the plan |
-| Schema | 39 migrations (0000–0037) · 44 tables · 39 RLS policies |
+| Schema | 41 migrations (0000–0039) · 45 tables · 40 RLS policies |
 | Spend, cumulative | **$31.70** — $31.52 taxonomy, $0.10 builder, $0.08 embeddings. All metered. |
 
 **Ingestion, classification and every backfill run from a local terminal**, not from the
@@ -2168,6 +2168,60 @@ would be enforcing an untested mean.
 > missing", because an archetype with no blocks would otherwise read as a fully conformant
 > draft.
 
+
+### Demand signals: the only surface that turns user text into a public page (RK.5, R5.3, step E3)
+
+`src/lib/demand.ts` · `src/server/analytics/demand.ts` · `/wanted` · migrations 0038–0039
+`pnpm verify:demand` (30 checks, free)
+
+Every other measurement here reads the corpus — archetypes describe what people wrote,
+similarity describes what exists, the trust surfaces describe what passed. Not one can see the
+thing a reader came for and left without, which is the only signal that says **build this**.
+
+So a search that returns nothing is logged, on the web and through MCP, and a query enough
+distinct people asked becomes a public most-wanted board. That closes **R5.3's second half**: B3
+tells an author twelve near-identical skills already exist, and this tells them nobody has written
+the one people keep asking for. Both sit beside the purpose field, because showing only the first
+makes the builder a discouragement machine.
+
+#### The floor is the whole safety property
+
+A search query is user-typed text and the board is public. `"review our acme corp msa for renewal
+terms"` is a demand signal and also somebody's Monday morning, and the distance between the two is
+one missing `HAVING` clause. The naive board — `group by query order by count(*) desc` — publishes
+something one person typed once, and that is not a subtle failure: it is the feature working as
+written. `verify:demand` reproduces it first.
+
+Two defences, neither optional:
+
+- **No identity is stored.** No org, no user, no address — a daily-rotating HMAC and nothing else,
+  so *"what did this customer search for"* is a question the schema **cannot** answer. Not "does
+  not today"; there is no column to join, and adding one is the change to refuse.
+- **Five distinct searchers** before anything is publishable. The floor is a `HAVING` clause in the
+  query *and* re-applied on the way out, because a future CLI or API that forgets is the one nobody
+  reviewed.
+
+> **The mirror-image bug, and it is the harder one to see.** The first version passed `callerKey:
+> null` for anonymous web searches, reasoning that under-counting distinct people is the safe
+> direction for a privacy floor. It is not: `callerDigest(null)` returns one shared constant, so
+> every anonymous search would have collapsed to a single digest and **the floor of five could
+> never be reached** — a permanently empty board, for a reason that looked like caution. It now
+> uses the same forwarded address the download route and the write limiter already use, hashed
+> daily and never stored.
+
+#### Smaller decisions
+
+- **Only the normalised query is stored.** `Terraform Review` and `terraform  review ` are one
+  signal; the raw text adds nothing to a count and everything to a disclosure.
+- **Median, not mean.** A query answered once out of forty has a mean of 0.27 and a median of 0.
+  The median is what a searcher experiences; one outlier moves the mean.
+- **Page one only.** Paging is the same search asked again, and counting page three would triple
+  one person's demand.
+- **A query the corpus answers leaves the board** however many asked. This is a gap board, not a
+  popularity board, and the suite asserts the difference.
+- **Trigram-indexed**, so R5.3's author-facing match is free and renders with the panel rather than
+  behind a button — the distinction `findSimilarAction` had to draw because its match is a metered
+  embedding and this one is not.
 
 ### Freshness: the mechanism had no way in, and one kind of decay nobody declares (RK.2, plan step E1)
 
@@ -4471,6 +4525,7 @@ pnpm verify:matrix                       # RW.7 with/without deltas, and eval-de
 pnpm verify:optimise                     # RW.9 compression, verified before offered; free
 pnpm verify:impact                       # RK.7 impact analytics, and honest zeros; free
 pnpm verify:freshness                    # RK.2 review dates and link rot; free
+pnpm verify:demand                       # RK.5 demand signals and the publish floor; free
 pnpm links --status | --check 200        # external link rot; free, bounded, polite
 pnpm verify:tree                         # would a fresh clone build this? free, offline
 pnpm db:audit                            # is the derived data current? one command, free

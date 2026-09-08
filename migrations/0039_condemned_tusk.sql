@@ -1,0 +1,1 @@
+CREATE INDEX "search_queries_trgm_idx" ON "search_queries" USING gin ("query" gin_trgm_ops);

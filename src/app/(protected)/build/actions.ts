@@ -849,3 +849,32 @@ export async function decideVariantAction(
     return failure(error);
   }
 }
+
+/**
+ * Unmet demand overlapping what an author is about to write (Doc 2 R5.3, Doc 6 RK.5).
+ *
+ * ## This is the half of R5.3 that B3 could not do
+ *
+ * Similarity tells an author twelve near-identical skills already exist, which is the argument for
+ * narrowing or stopping. This tells them nobody has written the thing people keep asking for,
+ * which is the argument for carrying on — and the two belong side by side, beside the purpose
+ * field, where the answer can still change what gets built.
+ *
+ * ## Free, so it needs no button
+ *
+ * `findSimilarAction` is a button because each press is a metered embedding. This is a trigram
+ * match over a table, using the `pg_trgm` index migration 0017 already installed, so it costs
+ * nothing and can render with the panel. The distinction is worth keeping: a control exists here
+ * only where there is a reason for one.
+ */
+export async function unmetDemandAction(
+  text: string,
+): Promise<ActionResult<{ rows: Awaited<ReturnType<typeof import("@/server/analytics/demand").unmetNear>> }>> {
+  try {
+    await requireSession();
+    const { unmetNear } = await import("@/server/analytics/demand");
+    return { ok: true, data: { rows: await unmetNear(text, 5) } };
+  } catch (error) {
+    return failure(error);
+  }
+}
