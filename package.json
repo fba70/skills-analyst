@@ -61,6 +61,7 @@
     "verify:stream": "tsx --conditions=react-server scripts/verify-stream.mts",
     "verify:interview": "tsx --conditions=react-server scripts/verify-interview.mts",
     "verify:evals": "tsx --conditions=react-server scripts/verify-evals.mts",
+    "verify:trigger": "tsx --conditions=react-server scripts/verify-trigger.mts",
     "verify:tokens": "tsx --conditions=react-server scripts/verify-tokens.mts",
     "verify:lifecycle": "tsx --conditions=react-server scripts/verify-lifecycle.mts",
     "verify:entitlements": "tsx --conditions=react-server scripts/verify-entitlements.mts",

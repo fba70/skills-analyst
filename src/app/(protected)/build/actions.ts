@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { isBlockType } from "@/lib/block-types";
 import { isDraftBlockForm, type DraftBlock, type DraftBlockInput } from "@/lib/draft-blocks";
 import { isEvalKind } from "@/lib/evals";
+import type { TriggerReport } from "@/lib/trigger";
 import { isCandidateDecision, isInterviewTechnique } from "@/lib/interview";
 import { libraryFragments, type LibraryResult } from "@/server/analytics/block-library";
 import { requireSession } from "@/server/dal/session";
@@ -291,7 +292,8 @@ export async function findSimilarAction(text: string): Promise<
   try {
     // A session, not an entitlement: R3.6 is free-tier authoring help, and gating it would
     // paywall the advice that stops someone publishing a duplicate.
-    await requireSession();
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
 
     /**
      * The friendlier message. The *guard* is in `similarToText`, which refuses a short query
@@ -304,7 +306,18 @@ export async function findSimilarAction(text: string): Promise<
       return { ok: false, message: "Write a little more first — a line or two is enough." };
     }
 
-    const report = await similarToText(trimmed, { limit: 6 });
+    /*
+     * Billed to the workspace, not to the platform (plan step D2).
+     *
+     * This shipped in B3 charging `corpus_embedding`, so every author pressing "check for
+     * similar" spent the corpus-analysis budget — which RC.2 separates precisely so that a busy
+     * month of authoring cannot halt the backfill. Free-tier still means free to *use*; it does
+     * not mean the cost lands on the wrong budget.
+     */
+    const report = await similarToText(trimmed, {
+      limit: 6,
+      scope: orgId ? { purpose: "builder", orgId } : undefined,
+    });
     return { ok: true, report };
   } catch (error) {
     return { ok: false, message: (error as Error).message.slice(0, 300) };
@@ -652,6 +665,56 @@ export async function runEvalsAction(
 
     revalidatePath(`/build/${draftId}`);
     return { ok: true, data: result };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * The trigger-precision lab (Doc 6 RW.8, Doc 2 R2.8, plan step D2).
+ *
+ * ## The free half really is free
+ *
+ * Precision and recall are arithmetic over run rows that already exist — no model, no vectors,
+ * no charge — so they render with the page and need no entitlement. The collision half embeds
+ * every probe, which is why it is opt-in *and* Pro: the plan's "quick check free, full lab Pro"
+ * follows what each half spends rather than a line drawn to sell the second one.
+ *
+ * `hasEntitlement`, not `requireEntitlement`: a free-tier author asking for collisions is not
+ * doing anything wrong, and the honest answer is the free half plus a sentence saying what the
+ * other half needs.
+ */
+export async function triggerReportAction(
+  draftId: string,
+  includeCollisions: boolean,
+): Promise<ActionResult<{ report: TriggerReport; collisionsGated: boolean }>> {
+  try {
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
+    if (!orgId) return { ok: false, message: "No active workspace." };
+
+    const { getDraft } = await import("@/server/builder/drafts");
+    const draft = await getDraft(draftId, orgId);
+    if (!draft) return { ok: false, message: "Draft not found." };
+
+    const { hasEntitlement } = await import("@/server/dal/entitlements");
+    const entitled = includeCollisions ? await hasEntitlement(orgId, "trigger-lab-full") : false;
+
+    const { triggerReport } = await import("@/server/evals/trigger");
+    const report = await triggerReport({
+      draftId,
+      orgId,
+      name: String(draft.frontmatter.name ?? draft.slug),
+      description: String(draft.frontmatter.description ?? draft.summary ?? ""),
+      body: draft.body ?? "",
+      includeCollisions: entitled,
+      excludeSkillId: draft.publishedSkillId ?? undefined,
+    });
+
+    return {
+      ok: true,
+      data: { report, collisionsGated: includeCollisions && !entitled },
+    };
   } catch (error) {
     return failure(error);
   }

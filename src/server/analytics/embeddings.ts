@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 
 import { embedMany } from "ai";
 
-import { assertWithinBudget, recordUsage } from "@/server/billing/spend";
+import { assertWithinBudget, recordUsage, type LlmPurpose } from "@/server/billing/spend";
 
 /**
  * Corpus embeddings (Doc 3 §Data model — pgvector, unparked).
@@ -91,6 +91,23 @@ export function inputHash(composed: string): string {
   return createHash("sha256").update(composed, "utf8").digest("hex");
 }
 
+/**
+ * Whose budget an embedding is charged to (plan step D2, fixing a B3 oversight).
+ *
+ * `embedBatch` billed `corpus_embedding` against the platform budget unconditionally, which is
+ * right for the backfill and **wrong for anything a customer sets off**. RC.2 separates the two
+ * budgets precisely so that "a busy month of authoring must not halt corpus analysis" — and the
+ * author similarity check (R3.6) has been charging the platform since B3, with the collision lab
+ * about to do the same at a probe per press.
+ *
+ * The default is the backfill, so every existing caller keeps its behaviour and the change is
+ * additive. A customer-initiated embedding names an org purpose and an organisation, and lands
+ * against that workspace's cap like every other call it makes.
+ */
+export type EmbedScope = { purpose: LlmPurpose; orgId: string | null };
+
+export const PLATFORM_EMBED_SCOPE: EmbedScope = { purpose: "corpus_embedding", orgId: null };
+
 export type EmbedBatchResult = {
   vectors: number[][];
   model: string;
@@ -112,10 +129,13 @@ export type EmbedBatchResult = {
  * either of which would leave the table holding vectors that are not comparable with each
  * other, which is worse than holding fewer.
  */
-export async function embedBatch(inputs: readonly string[]): Promise<EmbedBatchResult> {
+export async function embedBatch(
+  inputs: readonly string[],
+  scope: EmbedScope = PLATFORM_EMBED_SCOPE,
+): Promise<EmbedBatchResult> {
   if (inputs.length === 0) return { vectors: [], model: EMBEDDING_MODEL, inputTokens: 0 };
 
-  await assertWithinBudget("corpus_embedding", null);
+  await assertWithinBudget(scope.purpose, scope.orgId);
 
   const { embeddings, usage } = await embedMany({
     model: EMBEDDING_MODEL,
@@ -134,11 +154,11 @@ export async function embedBatch(inputs: readonly string[]): Promise<EmbedBatchR
   const inputTokens = usage?.tokens ?? 0;
 
   await recordUsage({
-    purpose: "corpus_embedding",
-    orgId: null,
+    purpose: scope.purpose,
+    orgId: scope.orgId,
     model: EMBEDDING_MODEL,
     usage: { inputTokens, outputTokens: 0 },
-    subjectType: "corpus",
+    subjectType: scope.orgId ? "embedding" : "corpus",
   });
 
   const wrong = embeddings.find((vector) => vector.length !== EMBEDDING_DIMENSIONS);

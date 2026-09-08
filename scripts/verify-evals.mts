@@ -287,6 +287,16 @@ try {
 }
 
 let draftId: string | null = null;
+/*
+ * Every case this run creates, remembered as it is created.
+ *
+ * The cleanup cannot look these up afterwards: one case is deliberately **deleted** mid-run to
+ * clear the publish gate, and `llm_usage.subject_id` is a plain text column with no foreign key,
+ * so its ledger rows are orphaned the moment the case goes. A subquery over `skill_evals` finds
+ * nothing and the charges stay on the workspace's month — which is precisely what happened, and
+ * was only visible by counting rows after a green run.
+ */
+const createdEvalIds: string[] = [];
 
 if (connected) {
   const tables = await owner.query<{ n: string }>(
@@ -413,6 +423,7 @@ if (connected) {
       });
       check("cases are created", caseA.ok && caseB.ok);
       if (!caseA.ok || !caseB.ok) throw new Error("could not create cases");
+      createdEvalIds.push(caseA.id, caseB.id);
 
       // ---- the runner, with mocks ----
 
@@ -594,14 +605,21 @@ if (connected) {
          * died on it *after* the assertions, leaving rows behind. A cleanup that only runs when
          * everything passed is not a cleanup.
          */
-        await owner.query(
-          `delete from llm_usage
-            where subject_type = 'skill_evals'
-              and subject_id in (
-                select id::text from skill_evals where draft_id = $1
-              )`,
-          [draftId],
-        );
+        /*
+         * Matched on the draft **or** the skill it became.
+         *
+         * The first version looked up eval ids by `draft_id` alone, and ran after a successful
+         * publish had re-pointed every case to `skill_id` — so the subquery found nothing and
+         * the ledger rows stayed, quietly adding to the workspace's monthly spend. A cleanup
+         * that only works on the failure path is half a cleanup, and this one only worked on
+         * the *success* path being absent.
+         */
+        if (createdEvalIds.length > 0) {
+          await owner.query(
+            `delete from llm_usage where subject_type = 'skill_evals' and subject_id = any($1)`,
+            [createdEvalIds],
+          );
+        }
         /*
          * Any skill this draft became, whether or not the publish assertion passed. Looked up
          * rather than remembered, because the failure mode being cleaned up after is precisely

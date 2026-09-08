@@ -17,6 +17,7 @@ import {
   EMBEDDER_VERSION,
   EMBEDDING_MODEL,
   inputHash,
+  type EmbedScope,
 } from "./embeddings";
 
 /**
@@ -380,7 +381,19 @@ export const MIN_QUERY_CHARS = 20;
  */
 export async function similarToText(
   text: string,
-  options: { limit?: number; excludeSkillId?: string } = {},
+  options: {
+    limit?: number;
+    excludeSkillId?: string;
+    /**
+     * Whose budget pays (plan step D2).
+     *
+     * Omitted, it is the platform's — right for the CLI and for corpus work. An
+     * author-initiated check must pass their organisation, or every similarity press bills the
+     * corpus-analysis budget and a busy month of authoring halts the backfill. That is the
+     * mixing RC.2 keeps two budgets to prevent, and this call site had it backwards since B3.
+     */
+    scope?: EmbedScope;
+  } = {},
 ): Promise<SimilarityReport> {
   const limit = Math.max(1, Math.min(options.limit ?? 10, 50));
 
@@ -399,10 +412,32 @@ export async function similarToText(
    */
   if (totals.embedded === 0) return { ...report, hits: [] };
 
-  const { vectors } = await embedBatch([text]);
+  const { vectors } = await embedBatch([text], options.scope);
   if (vectors.length === 0) return { ...report, hits: [] };
 
-  const literal = `[${vectors[0].join(",")}]`;
+  return { ...report, hits: await nearestToVector(vectors[0], limit, options.excludeSkillId) };
+}
+
+/**
+ * The nearest skills to a vector somebody else already paid for (plan step D2).
+ *
+ * RW.8's collision check needs the *same* probe vector twice: once to find the corpus
+ * neighbours, and once to measure how close the probe sits to the draft's own description.
+ * Going through `similarToText` would embed each probe a second time — a real charge for a
+ * vector already in memory, and worse, two vectors of the same text that could differ if the
+ * embedding model ever moved between the calls.
+ *
+ * So the query half lives here and `similarToText` is the text-taking wrapper around it. One
+ * definition of "what counts as a neighbour": public corpus, `indexed`, canonical only, at the
+ * current embedder version. A second copy of that `where` clause is how the collision lab and
+ * the author-facing similarity panel would come to disagree about which skills exist.
+ */
+export async function nearestToVector(
+  vector: number[],
+  limit: number,
+  excludeSkillId?: string,
+): Promise<SimilarSkill[]> {
+  const literal = `[${vector.join(",")}]`;
 
   const result = await db.execute(sql`
     select s.slug, s.name, s.summary, s.quality_score, s.categories,
@@ -413,12 +448,12 @@ export async function similarToText(
       and e.org_id is null
       and s.status = 'indexed'
       and s.canonical_skill_id is null
-      ${options.excludeSkillId ? sql`and s.id <> ${options.excludeSkillId}` : sql``}
+      ${excludeSkillId ? sql`and s.id <> ${excludeSkillId}` : sql``}
     order by e.embedding <=> ${literal}::vector
     limit ${limit}
   `);
 
-  const hits = (result.rows as Array<Record<string, unknown>>).map((row) => ({
+  return (result.rows as Array<Record<string, unknown>>).map((row) => ({
     slug: row.slug as string,
     name: row.name as string,
     summary: (row.summary as string | null) ?? null,
@@ -441,5 +476,4 @@ export async function similarToText(
     ),
   }));
 
-  return { ...report, hits };
 }

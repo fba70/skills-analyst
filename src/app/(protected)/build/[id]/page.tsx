@@ -6,6 +6,7 @@ import { ArrowLeft, ShieldOff } from "lucide-react";
 import { BlockEditor } from "@/components/builder/block-editor";
 import { EvalPanel } from "@/components/builder/eval-panel";
 import { Interview } from "@/components/builder/interview";
+import { TriggerLab } from "@/components/builder/trigger-lab";
 import { RevisionHistory } from "@/components/builder/revision-history";
 import { DraftActions } from "@/components/builder/draft-actions";
 import { ActivationCostBadge } from "@/components/registry/activation-cost";
@@ -253,6 +254,19 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         entitled={evalEntitled}
         canRun={Boolean(draft.body)}
       />
+
+      {/*
+        The trigger lab sits directly under the evals it reads, because it is the same probes
+        seen a level up — rates rather than individual verdicts. Its own panel rather than a
+        section inside that one, because the collision half asks a question about the corpus
+        rather than about this document, and folding the two together would suggest a single
+        verdict where there are deliberately two.
+      */}
+      {evalCases.some(
+        (c) => c.kind === "should-trigger" || c.kind === "should-not-trigger",
+      ) ? (
+        <TriggerLab draftId={draft.id} hasProbes />
+      ) : null}
 
       {/*
         The interview sits last of the working panels, below every verdict on the draft.

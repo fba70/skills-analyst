@@ -2169,6 +2169,76 @@ would be enforcing an untested mean.
 > draft.
 
 
+### The trigger lab, and a budget that was pointed at the wrong pocket (RW.8, R2.8, plan step D2)
+
+`src/lib/trigger.ts` · `src/server/evals/trigger.ts` · `pnpm verify:trigger` (31 checks, free)
+`pnpm verify:trigger --live` adds 4 more and **costs a fraction of a cent**
+
+**No new tables, and that was the point of building D1 first.** An earlier ordering had the
+trigger lab independent of Skill CI, which would have produced two probe tables — should-trigger
+cases and trigger probes are the same concept at different aggregation levels. Everything here
+reads `skill_evals` and `eval_runs`, so there is nothing to keep in step.
+
+#### Two proxies, never averaged
+
+- **Precision and recall** judge the *description as written*: would a reader of that sentence
+  reach for this skill. That is the thing an author can fix.
+- **Collision** is a *retrieval* signal over the A6 vectors: of everything in the corpus, does
+  this request land nearer to something else. It is the only half that can name **which other
+  skill would win**.
+
+They disagree usefully — a description can be perfectly clear and still lose every request to a
+better-known neighbour — and a single "trigger score" would hide which. That is the
+`quality_score` mistake in a new costume.
+
+Free and paid split on **what each half spends**, not on what is worth selling: precision and
+recall are arithmetic over rows that already exist and cost nothing; collision embeds every
+probe. The plan's "quick check free, full lab Pro" falls out of that.
+
+#### Every empty number says why it is empty
+
+`0/0` is `NaN`, and the obvious repair — `|| 0` — turns *nobody has measured this* into *this
+never fires*. The repair is the bug, and 0% is a perfectly plausible recall. Worse in the other
+direction: precision with nothing fired, defaulted to 1, gives a skill that never triggers a
+**perfect score on the axis it fails hardest**. Both return `null`, and `null` stays null all the
+way to the screen. `verify:trigger` reproduces both naive forms before asserting the real ones.
+
+A rate counts only runs stamped with the current document's hash; stale and never-run probes are
+reported beside it rather than folded in, and an `error` verdict is dropped from both columns —
+our outage must not move a number the author is being asked to act on.
+
+> **The collision path had a bug that only running it could find.** `nearestToVector` rounds
+> similarity to three places and this side did not, so a neighbour whose raw score sat a
+> ten-thousandth above the skill's was filtered in and then rendered at the *same* three-place
+> number — a panel reading `this skill 0.702 · nearer: X 0.702`. Both sides round before
+> comparing now, which also makes the tie rule mean what its comment says. That is why
+> `--live` exists at all: an index that has never answered a query is an index nobody knows is
+> wrong.
+
+#### A customer's embedding was billing the platform, and had been since B3
+
+`embedBatch` hard-coded `purpose: "corpus_embedding"` and a null org. Right for the backfill,
+**wrong for anything a person sets off** — and R3.6's author similarity check has been charging
+the corpus-analysis budget since B3, with the collision lab about to do the same once per probe.
+
+RC.2 keeps two budgets precisely so that *a busy month of authoring must not halt corpus
+analysis*, and this was the mixing it exists to prevent. `embedBatch` now takes an `EmbedScope`
+defaulting to the platform, so every existing caller is unchanged; the similarity check bills
+`builder` and the collision lab bills `eval`, both against the workspace that asked.
+
+The symptom is a row in the wrong column — everything works, the numbers are right, and the only
+sign is the platform budget draining faster than the backfill explains. So it is asserted against
+the source tree rather than trusted.
+
+> **Two cleanup bugs in the same afternoon, both found by counting rows after a *green* run.**
+> `verify:evals` deleted its ledger rows by looking eval ids up through `draft_id` — but a
+> successful publish re-points every case to `skill_id`, so the subquery found nothing. Widening
+> it to follow the re-point still missed two rows, because the test deliberately **deletes** one
+> case to clear the publish gate and `llm_usage.subject_id` is plain text with no foreign key, so
+> those rows are orphaned the instant the case goes. The ids are now remembered as they are
+> created. A suite that passes and leaves charges behind is a suite that inflates the number the
+> next cap decision is made on.
+
 ### Skill CI: the first surface that says a skill *works* (Doc 2 R2.11, Doc 6 RW.6, plan step D1)
 
 `src/lib/evals.ts` · `src/server/evals/` · migration 0034 · `pnpm verify:evals` (34 checks, free)
@@ -4075,6 +4145,8 @@ pnpm verify:blocks | verify:lifecycle | verify:outcomes | verify:flags   # all f
 pnpm verify:draft-blocks                 # a draft is blocks, the body is a render; free
 pnpm verify:stream | verify:interview    # conversation budget, and RW.4; both free
 pnpm verify:evals                        # Skill CI: regression gate, staleness, probes; free
+pnpm verify:trigger                      # RW.8 precision, recall, collisions; free
+pnpm verify:trigger --live               # adds the collision round trip — COSTS A LITTLE
 pnpm db:audit                            # is the derived data current? one command, free
 pnpm verify:blocks                       # block taxonomy and span invariants; free
 pnpm verify:tokens                       # activation cost, bands and honesty; free
