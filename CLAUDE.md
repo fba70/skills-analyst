@@ -2169,6 +2169,58 @@ would be enforcing an untested mean.
 > draft.
 
 
+### Impact analytics: two functions that had been written and never read (RK.7, plan step E4)
+
+`src/components/registry/impact-card.tsx` · `src/components/archetypes/outcome-card.tsx`
+`pnpm verify:impact` (17 checks, free) · no migration
+
+`outcomesForSkill` and `archetypeOutcomes` shipped with B1, fully typed, and had **zero call
+sites** for a milestone. Unreachable code is indistinguishable from absent code to everybody
+except the person who wrote it, so E4 is entirely a surfacing job — the smallest real win left in
+the programme, and the plan said so.
+
+#### A zero has to say which kind of zero it is
+
+Most of this corpus was indexed before the recorder existed. The live numbers make the point:
+collection began **2026-09-07**, and the first skill sampled was indexed **2026-09-01** — so its
+"0 downloads" means *nobody was counting*, not *nobody wanted it*. Same shape as
+`archetypes --blocks` printing eleven rows of zeros at 1% coverage, and the same fix: carry the
+window with the number.
+
+`outcomeCollectionStart()` derives it from `min(at)` rather than a configured date, because a
+constant would be a second source of truth for something the table already knows — and would be
+wrong the first time the table is backfilled or pruned. Null renders as *nothing has been
+recorded anywhere*, which is a different sentence from zero of anything.
+
+#### The impact card deliberately does not render a battle-tested badge
+
+`outcomesForSkill` computes one and `lifecycleExpression()` computes one in SQL — **with
+precedence**, so a deprecated or superseded skill keeps that state whatever its download count.
+Two badges from two computations would eventually contradict each other on the same page, and a
+reader would have no way to know which was right.
+
+So the card shows the **evidence** and what the tier is still waiting for: *18 of 25 downloads,
+no clean re-validation yet*. That is the more useful half anyway — "battle-tested" tells a reader
+nothing they can act on, and the gap does.
+
+#### The archetype half is honestly empty, and the panel is built to stay honest as it fills
+
+Only skills published through the builder carry archetype lineage, and there is essentially one.
+`usable` is false below `MIN_DISTINCT_SKILLS`, and below the floor the counts are **withheld
+rather than greyed out** — a muted number is still a number somebody will quote, and this one
+would describe one or two specific skills rather than the archetype. `verify:impact` writes a
+single-skill probe and asserts it appears and is not reportable, then rolls it back; asserting on
+whatever the table happens to hold would pass today by accident.
+
+> **Why the open read policy is safe, asserted rather than assumed.** `outcome_signals` is
+> `SELECT … USING (true)` on purpose: cross-organisation aggregation is the whole point of
+> `archetypeOutcomes`, and an org-scoped read would make it describe one tenant at a time. What
+> stops a private skill's counts leaking is that the *skill* lookup is org-scoped, so a signal is
+> only reachable through a skill the reader could already see. The suite checks the policy shape
+> and checks `information_schema` for any column that could hold tenant content — clean data says
+> nothing about the next migration, which is the line `verify:blocks` already holds for
+> `skill_blocks`.
+
 ### A commit that built locally and not on the deploy, and the check that can see it
 
 `scripts/verify-tree.mts` · `pnpm verify:tree` (5 checks, free, offline)
@@ -4314,6 +4366,7 @@ pnpm verify:trigger                      # RW.8 precision, recall, collisions; f
 pnpm verify:trigger --live               # adds the collision round trip — COSTS A LITTLE
 pnpm verify:matrix                       # RW.7 with/without deltas, and eval-delta; free
 pnpm verify:optimise                     # RW.9 compression, verified before offered; free
+pnpm verify:impact                       # RK.7 impact analytics, and honest zeros; free
 pnpm verify:tree                         # would a fresh clone build this? free, offline
 pnpm db:audit                            # is the derived data current? one command, free
 pnpm verify:blocks                       # block taxonomy and span invariants; free

@@ -7,11 +7,13 @@ import { AttributionCard } from "@/components/archetypes/attribution-card";
 import { BlocksCard } from "@/components/archetypes/blocks-card";
 import { EvidenceCard } from "@/components/archetypes/evidence-card";
 import { ExemplarsCard } from "@/components/archetypes/exemplars-card";
+import { ArchetypeOutcomeCard } from "@/components/archetypes/outcome-card";
 import { SkeletonCard } from "@/components/archetypes/skeleton-card";
 import { TraitsCard } from "@/components/archetypes/traits-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { archetypeDetail } from "@/server/analytics/archetype-read";
+import { archetypeOutcomes } from "@/server/analytics/outcomes";
 
 export async function generateMetadata(
   props: PageProps<"/archetypes/[category]">,
@@ -43,6 +45,13 @@ export default async function ArchetypePage(props: PageProps<"/archetypes/[categ
   const { category } = await props.params;
   const archetype = await archetypeDetail(category);
   if (!archetype) notFound();
+
+  /*
+   * Read unscoped, and that is what `outcome_signals`' open read policy is for: an archetype is a
+   * fact about the whole corpus, so aggregating one tenant at a time would be useless — the same
+   * argument `builder_signals` makes, and safe for the same reason, which is the column list.
+   */
+  const outcomes = await archetypeOutcomes();
 
   return (
     <div className="grid min-w-0 gap-6">
@@ -102,6 +111,13 @@ export default async function ArchetypePage(props: PageProps<"/archetypes/[categ
       />
 
       <EvidenceCard archetype={archetype} />
+
+      {/*
+        R6.3's attribution half (plan step E4), last because it is the emptiest and the most
+        forward-looking: everything above describes what the corpus contains, and this describes
+        what happened to the skills built from it.
+      */}
+      <ArchetypeOutcomeCard category={archetype.category} rows={outcomes} />
 
       <AttributionCard contributors={archetype.contributors} />
     </div>

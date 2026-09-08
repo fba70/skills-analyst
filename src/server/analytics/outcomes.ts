@@ -214,6 +214,27 @@ export async function outcomesForSkill(skillId: string): Promise<SkillOutcomes> 
   };
 }
 
+/**
+ * When outcome collection actually began (plan step E4).
+ *
+ * Without it every count on a skill page is a lie by omission. B1 shipped the recorder long
+ * after most of this corpus was indexed, so a skill first seen in August showing "0 downloads"
+ * reads as *nobody wanted it* when the truth is *nobody was counting*. That is the same shape as
+ * `archetypes --blocks` printing eleven rows of zeros at 1% coverage, and the same fix: carry the
+ * denominator with the number.
+ *
+ * The earliest signal rather than a configured date, because a constant would be a second source
+ * of truth for something the table already knows — and would be wrong the moment the table is
+ * ever backfilled or pruned. `null` when nothing has ever been recorded, which the panel renders
+ * as "not collecting yet" rather than as zero of anything.
+ */
+export async function outcomeCollectionStart(): Promise<Date | null> {
+  const [row] = await db
+    .select({ first: sql<Date | null>`min(${outcomeSignals.at})` })
+    .from(outcomeSignals);
+  return row?.first ? new Date(row.first) : null;
+}
+
 export type ArchetypeOutcomes = {
   category: string;
   version: number;

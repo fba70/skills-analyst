@@ -9,6 +9,7 @@ import { LifecycleBadge, LifecycleNotice } from "@/components/registry/lifecycle
 import { ReportForms } from "@/components/registry/report-forms";
 import { Explain, ExplainLink } from "@/components/registry/explain";
 import { ConsistencyCard } from "@/components/registry/consistency-card";
+import { ImpactCard } from "@/components/registry/impact-card";
 import { DownloadCard } from "@/components/registry/download-card";
 import { ProvenanceCard } from "@/components/registry/provenance-card";
 import {
@@ -21,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { WithdrawalNotice } from "@/components/registry/withdrawal-notice";
 import { minedCategories } from "@/server/analytics/archetype-read";
+import { outcomeCollectionStart, outcomesForSkill } from "@/server/analytics/outcomes";
 import { withdrawalNotice } from "@/server/compliance/takedown";
 import { getSkillBySlug } from "@/server/dal/skills";
 import { labelFor } from "@/server/taxonomy/vocabulary";
@@ -54,6 +56,20 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
    */
   const withdrawal =
     skill.status === "withdrawn" ? await withdrawalNotice(skill.id) : null;
+
+  /*
+   * RK.7's per-skill half (plan step E4).
+   *
+   * Reachability is already decided: `getSkillBySlug` is org-scoped, so a private skill's
+   * signals are only readable by somebody who could already see the skill. `outcome_signals` has
+   * an open read policy on purpose — cross-organisation aggregation is what `archetypeOutcomes`
+   * is for — and it is safe because of the column list: a kind, a value, a day and a digest, with
+   * no free text and no caller identity.
+   */
+  const [outcomes, collectionStart] = await Promise.all([
+    outcomesForSkill(skill.id),
+    outcomeCollectionStart(),
+  ]);
 
   const mined = await minedCategories();
   const archetypeCategory = skill.categories.find(
@@ -174,6 +190,13 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
       />
 
       <ConsistencyCard verdicts={skill.verdicts} />
+
+      {/*
+        After the verdicts, because those decide whether the skill is servable at all and this
+        only describes what happened to it afterwards. Before the download card, because a reader
+        deciding whether to take it wants the evidence first.
+      */}
+      <ImpactCard outcomes={outcomes} collectionStart={collectionStart} />
 
       {skill.status === "withdrawn" ? (
         /*
