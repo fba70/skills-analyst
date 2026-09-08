@@ -60,6 +60,7 @@
     "verify:draft-blocks": "tsx --conditions=react-server scripts/verify-draft-blocks.mts",
     "verify:stream": "tsx --conditions=react-server scripts/verify-stream.mts",
     "verify:interview": "tsx --conditions=react-server scripts/verify-interview.mts",
+    "verify:evals": "tsx --conditions=react-server scripts/verify-evals.mts",
     "verify:tokens": "tsx --conditions=react-server scripts/verify-tokens.mts",
     "verify:lifecycle": "tsx --conditions=react-server scripts/verify-lifecycle.mts",
     "verify:entitlements": "tsx --conditions=react-server scripts/verify-entitlements.mts",

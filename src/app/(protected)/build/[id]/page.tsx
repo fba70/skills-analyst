@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, ShieldOff } from "lucide-react";
 
 import { BlockEditor } from "@/components/builder/block-editor";
+import { EvalPanel } from "@/components/builder/eval-panel";
 import { Interview } from "@/components/builder/interview";
 import { RevisionHistory } from "@/components/builder/revision-history";
 import { DraftActions } from "@/components/builder/draft-actions";
@@ -12,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getDraftBlocks, listDraftRevisions } from "@/server/builder/blocks";
+import { contentHashOf, evalStates } from "@/server/evals/store";
 import { getSession, listSessions } from "@/server/interview/session";
 import { blockDeviations } from "@/server/builder/deviation";
 import { getDraft } from "@/server/builder/drafts";
@@ -66,13 +68,26 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
    * page nobody was asking to change anything on.
    */
   const orgId = session.session.activeOrganizationId;
-  const [blocks, revisions, sessions] = orgId
+  const [blocks, revisions, sessions, evalCases] = orgId
     ? await Promise.all([
         getDraftBlocks(draft.id, orgId),
         listDraftRevisions(draft.id, orgId),
         listSessions(draft.id, orgId),
+        evalStates({ draftId: draft.id }, orgId),
       ])
-    : [[], [], []];
+    : [[], [], [], []];
+
+  /*
+   * `hasEntitlement`, not `requireEntitlement`. A free-tier author is not doing anything wrong
+   * by opening their own draft, and throwing here would turn the absence of a subscription into
+   * a 500 on a page that is mostly free-tier surfaces. The panel says what the gate is instead.
+   */
+  const evalEntitled = orgId
+    ? await (async () => {
+        const { hasEntitlement } = await import("@/server/dal/entitlements");
+        return hasEntitlement(orgId, "eval-lab");
+      })()
+    : false;
 
   /*
    * The newest *active* interview, resumed in place (Doc 6 RW.4).
@@ -226,12 +241,26 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
       ) : null}
 
       {/*
-        The interview sits below the editor and above validation.
+        Evals below validation, because they answer the harder question and take longer to
+        read. Validation is a gate on form and is either clear or not; this is evidence about
+        behaviour, and putting it above the gate would suggest the gate depends on it. It does,
+        but only for a regression — which the panel says in its own words.
+      */}
+      <EvalPanel
+        draftId={draft.id}
+        cases={evalCases}
+        contentHash={contentHashOf(draft.body ?? "")}
+        entitled={evalEntitled}
+        canRun={Boolean(draft.body)}
+      />
 
-        Below the editor because the draft is the thing being built and the conversation is a
-        way of feeding it — an accepted block appears up there, which is the confirmation that
-        answering did something. Above validation because validation is a verdict on what
-        exists, and this is how more of it comes to exist.
+      {/*
+        The interview sits last of the working panels, below every verdict on the draft.
+
+        The three above it — validation, evals, and the archetype comparison inside the editor —
+        all describe what exists. This is how more of it comes to exist, and it is the only one
+        an author scrolls to deliberately rather than reads on the way past. An accepted block
+        appears back up in the editor, which is the confirmation that answering did something.
       */}
       <Interview
         draftId={draft.id}

@@ -28,7 +28,14 @@
  * control that cannot take effect is worse than no control — the same reason the rate-limit
  * panel states out loud that its paid row is stored and not in force.
  */
-export const MODEL_TASKS = ["taxonomy", "builder", "interview", "consistency"] as const;
+export const MODEL_TASKS = [
+  "taxonomy",
+  "builder",
+  "interview",
+  "evalAgent",
+  "evalJudge",
+  "consistency",
+] as const;
 
 export type ModelTask = (typeof MODEL_TASKS)[number];
 
@@ -54,6 +61,24 @@ export const MODEL_DEFAULTS: ModelSettings = {
    * it went badly — there is only knowledge that was never captured.
    */
   interview: "anthropic/claude-sonnet-5",
+  /**
+   * The agent under test in a golden task (Doc 6 RW.6).
+   *
+   * It is standing in for a real agent following the skill, so it has to be the class of model
+   * that would. A cheap one fails tasks because it is cheap, and the author reads that as the
+   * skill being wrong — an eval that measures the runner rather than the subject is worse than
+   * no eval, because it is confidently wrong.
+   */
+  evalAgent: "anthropic/claude-sonnet-5",
+  /**
+   * The judge (Doc 6 RW.6).
+   *
+   * Bounded judgement over text that is all supplied — did this output meet this expectation,
+   * should this request have fired this skill — which is the shape a small model does well and
+   * the classifier already proves. It must not be the same call as the producer: a model
+   * grading its own answer in one turn is not a judge.
+   */
+  evalJudge: "anthropic/claude-haiku-4.5",
   /** R2.3's documentation-versus-code audit, over the ~7% of bundles carrying code. */
   consistency: "anthropic/claude-haiku-4.5",
 };
@@ -73,6 +98,16 @@ export const MODEL_TASK_META: Record<ModelTask, { label: string; blurb: string }
     label: "Interview mode",
     blurb:
       "Asks the questions that elicit knowledge a form cannot. Many calls per skill, each carrying the transcript so far — the one task where the conversation cap matters more than the model choice.",
+  },
+  evalAgent: {
+    label: "Eval — the agent under test",
+    blurb:
+      "Follows the skill on a golden task, so the output can be judged. Stands in for a real consumer, so it should be the class of model one would be.",
+  },
+  evalJudge: {
+    label: "Eval — the judge",
+    blurb:
+      "Decides whether an output met its expectation, and whether a request should have fired the skill. Bounded judgement over supplied text.",
   },
   consistency: {
     label: "Description consistency (R2.3)",

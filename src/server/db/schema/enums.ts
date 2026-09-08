@@ -192,6 +192,14 @@ export const llmPurpose = pgEnum("llm_purpose", [
    * only granularity where the answer differs.
    */
   "interview",
+  /**
+   * Running an eval case (Doc 2 R2.11, Doc 6 RW.6). Org-scoped, against the same org cap.
+   *
+   * Its own value because it is the first purpose whose cost scales with something the author
+   * controls directly — how many cases they wrote — rather than with one document. An operator
+   * asking "what is the Eval Lab costing" needs that separable from authoring.
+   */
+  "eval",
   /** R2.3 description-consistency on an org's own skill. Org-scoped. */
   "validation",
   /** Taxonomy classification over the public corpus. Platform budget. */

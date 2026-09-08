@@ -15,6 +15,7 @@ export * from "./archetypes";
 export * from "./compliance";
 export * from "./drafts";
 export * from "./interview";
+export * from "./evals";
 export * from "./telemetry";
 export * from "./spend";
 export * from "./settings";

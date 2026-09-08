@@ -145,6 +145,44 @@ async function applyPublish(
     };
   }
 
+  /**
+   * A regression blocks publication (plan step D1, extending R4.5).
+   *
+   * **A regression, not any failure**, and the difference is the whole rule. An author who
+   * writes an aspirational case — the thing the skill does not do yet — must still be able to
+   * publish; that case has never passed and failing is its correct state. A case that *was*
+   * passing and now is not is a different claim: something the skill used to do, it no longer
+   * does, and shipping that silently is what CI exists to prevent.
+   *
+   * An `error` verdict is neither. A refused call or a provider outage says nothing about the
+   * skill, and treating it as a failure would let our own downtime block a customer's publish.
+   *
+   * Checked against runs stamped with **this** document's hash. A regression established
+   * against an older body is not a statement about what is being published — and the panel
+   * marks those results stale rather than letting them gate anything.
+   */
+  {
+    const { contentHashOf, evalStates } = await import("@/server/evals/store");
+    const { isRegression } = await import("@/lib/evals");
+    const hash = contentHashOf(draft.body);
+    const states = await evalStates({ draftId: draft.id }, orgId);
+    const regressed = states.filter(
+      (state) => isRegression(state) && state.latest?.contentHash === hash,
+    );
+    if (regressed.length > 0) {
+      return {
+        ok: false,
+        message:
+          `${regressed.length} eval case${regressed.length === 1 ? "" : "s"} that used to pass ` +
+          `now fail${regressed.length === 1 ? "s" : ""}: ` +
+          regressed
+            .map((state) => state.prompt.replace(/\s+/g, " ").slice(0, 60))
+            .join("; ") +
+          ". Fix the skill or delete the case before publishing.",
+      };
+    }
+  }
+
   const description = String(draft.frontmatter.description ?? draft.summary ?? "");
   const name = String(draft.frontmatter.name ?? draft.slug);
 
@@ -262,6 +300,21 @@ async function applyPublish(
         dialect: draft.dialect,
       },
     });
+
+    /*
+     * The draft's eval cases become the skill's, inside the same transaction (plan step D1).
+     *
+     * Re-pointed rather than copied: a copy would leave the run history on the draft while the
+     * skill started from nothing, and the history is the only thing that makes a regression
+     * detectable. Inside the transaction for the reason the audit row is — written after it
+     * with a plain handle it would be refused by RLS and swallowed, which is exactly how this
+     * function once created a skill with no record of who published it.
+     *
+     * The table's check constraint is what makes this safe: setting `skill_id` without clearing
+     * `draft_id` is refused by the database rather than producing a case in two places.
+     */
+    const { repointToSkill } = await import("@/server/evals/store");
+    await repointToSkill(draft.id, skill.id, tx);
 
     return { skillId: skill.id, slug: skill.slug, versionId: version.id };
   });

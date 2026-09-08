@@ -65,7 +65,7 @@ function readMicros(key: string, fallbackDollars: number): number {
  * switching surface. What it does get is its own *conversation* cap, one level down — see
  * `billing/conversation.ts`.
  */
-const ORG_PURPOSES = ["builder", "interview", "validation"] as const;
+const ORG_PURPOSES = ["builder", "interview", "eval", "validation"] as const;
 export type LlmPurpose =
   | (typeof ORG_PURPOSES)[number]
   | "corpus_taxonomy"

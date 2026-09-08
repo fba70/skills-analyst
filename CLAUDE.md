@@ -242,7 +242,7 @@ where these numbers came from.
 | Entitlements | **new (A5)** — three plans; the trust surfaces cannot be gated at all |
 | Builder | live at `/build` · **a draft is typed blocks and the body is their render (C1)** · block editing, revisions and a no-model scaffold path (C1b, R4.6, R4.7) · **Interview mode, five techniques, typed candidates accepted or rejected (C2, RW.4, R5.1, R5.4)** · block-level archetype deviations (R4.3) |
 | MCP | live at `/api/mcp` · six tools, token-gated, rate-limit scope now follows the plan |
-| Schema | 35 migrations (0000–0033) · 40 tables · 34 RLS policies |
+| Schema | 36 migrations (0000–0034) · 42 tables · 37 RLS policies |
 | Spend, cumulative | **$31.70** — $31.52 taxonomy, $0.10 builder, $0.08 embeddings. All metered. |
 
 **Ingestion, classification and every backfill run from a local terminal**, not from the
@@ -2169,6 +2169,135 @@ would be enforcing an untested mean.
 > draft.
 
 
+### Skill CI: the first surface that says a skill *works* (Doc 2 R2.11, Doc 6 RW.6, plan step D1)
+
+`src/lib/evals.ts` · `src/server/evals/` · migration 0034 · `pnpm verify:evals` (34 checks, free)
+
+Everything the platform said about quality until now was a statement about **form**: the
+analyzers say a document is well-formed, the archetype says its shape matches what the corpus
+rewards, the quality score adds those up. None of it says the skill works — which is the
+difference between a registry and a product, because a paid tier built on "our validator likes
+it" is a paid tier built on our opinion.
+
+**One probe model, not two.** `skill_evals` holds should-trigger probes, should-not-trigger
+probes and golden tasks in one vocabulary, because those first two and RW.8's trigger probes are
+the same concept at different aggregation levels. D2 reads these rows rather than a parallel set
+that could disagree with them about whether a skill fires.
+
+#### A regression blocks a publish. Any failure does not.
+
+The obvious rule is "a failing case blocks publication", and it is wrong. An **aspirational**
+case — written to say what the skill should eventually do — has never passed, and failing is its
+correct state. Under the naive rule the author cannot ship, learns that writing cases costs them
+the ability to ship, and stops writing them. The gate would then protect nothing.
+
+So the gate is: *this case passed against an earlier document and fails against this one.*
+Something the skill did, it no longer does. `verify:evals` reproduces the naive rule first and
+shows it blocking the aspirational case, then shows the real rule letting it through.
+
+Three more distinctions the panel and the gate keep rather than flattening:
+
+- **`error` is not `fail`.** A refused call or a provider outage is a fact about us. Counted as
+  a failure it would let our own downtime block a customer's publish and read as a quality
+  regression on their skill.
+- **Stale is not failing.** A verdict about an older document is not a weak claim about this
+  one, it is not a claim about this one at all. Stale results are marked and gate nothing.
+- **Two runs against the same document cannot be a regression**, or a non-deterministic judge
+  would block a publish nobody changed anything for.
+
+#### Nothing runs automatically, against the plan
+
+The plan says "every edit re-runs". Taken literally that bills a model call for every save in a
+block-editing session — the shape `findSimilarAction` already refused when it made similarity a
+button rather than an autocomplete.
+
+What that instruction is *for* is that a result must never describe an older document, and
+stamping every run with the document's `content_hash` delivers exactly that, for free and more
+honestly: a stale result is **visibly stale** rather than being replaced by a run the author did
+not ask for and did not budget for. The run button also skips any case already judged against
+these exact bytes, so pressing it twice costs nothing.
+
+#### The trigger probe never sees the body, and that is the whole point
+
+A probe is handed the skill's **name and description only**. That is what a consuming agent
+matches on in the Agent Skills standard, so a probe with the body would be testing something no
+agent reads at selection time — it would pass for skills whose description never fires, and
+report that as triggering precision. A confident wrong answer of exactly the `quality_score`
+banding kind. `verify:evals` reads the two functions and asserts the asymmetry.
+
+**A golden task is two calls and has to be.** One hands the whole skill to an agent-class model
+and lets it do the task; the other hands the output and the author's expectation to a judge. One
+call that produced and graded its own answer is not a judge — it is a model asked whether it did
+well, and it says yes. Two model settings (`evalAgent`, `evalJudge`) rather than one, so that
+stays structural.
+
+> Golden-task confidence is deliberately **null**. The task is met or not met, and a confidence
+> number beside a binary judgement invites somebody to rank on it — which is how the archetype
+> miner came to band on `quality_score`.
+
+#### Smaller decisions worth keeping
+
+- **Exactly one parent, enforced by the database.** `draft_id` and `skill_id` are both nullable
+  with a check constraint; `publishDraft` re-points a draft's cases onto the skill inside the
+  same transaction. Re-pointed, not copied — a copy would leave the run history behind on the
+  draft, and the history is the only thing that makes a regression detectable.
+- **`eval_runs` is append-only.** No UPDATE, no DELETE. The publish gate reads these rows, so an
+  application that could edit them could clear its own gate.
+- **Cases are org-owned even against a public skill.** A case is the workspace's claim about
+  what that skill should do, not a fact about the skill. RC.5 holds with no special case.
+- **Writing is free, running is Pro.** The entitlement sits in the action, not the runner, so a
+  CLI or a later re-scan reaches the runner without depending on a resolvable organisation. A
+  free-tier author keeps the notepad — which matters, because the interview fills it for them.
+
+#### The C2b gap is closed, and closing it needed a schema change
+
+RW.4 promises that a captured worked example becomes an eval case, and C2b could not deliver it
+because `skill_evals` did not exist. It does now — but the obvious wiring was wrong and worth
+recording.
+
+An `example` block holds an input and its output as **one passage**, which is right for a
+document and useless as a golden task: a case needs the request in one field and what makes the
+answer right in another. The first version passed the whole passage as both, which produces a
+case asking a model to reproduce its own expectation — a test that passes by construction, and
+worse than no test because it would count towards coverage.
+
+Splitting a stored passage afterwards would be a convention-parser that drifts; inferring the
+split with a second model call would put words in the author's mouth on the one surface whose
+value is that the words are theirs. So **the interview turn states both halves in the same
+call** — two nullable columns on `interview_candidates`, same content, structured, no extra
+cost. When the model declines to split, no case is created: an example that does not separate
+was not an input/output pair.
+
+Only an accepted `example` from a `worked-example` session becomes a case. Turning every
+accepted block into one would fill the lab with guardrails, the same restraint the block
+extractor shows by refusing to type a bare code fence as an `example`.
+
+> **The suite tested the wrong gate first, and only running it showed that.** Publishing checks
+> R4.5's validation before it checks evals, correctly — form before behaviour. The fixture's
+> draft had no frontmatter, so structural-lint raised `missing-description` at high severity,
+> `validation.blocked` went true, and **the publish was refused before the eval gate was ever
+> consulted**. Both gate assertions were red for a reason that had nothing to do with the thing
+> they name, and had the draft happened to validate they would have been green for a reason that
+> had nothing to do with it either.
+>
+> The fix is not just giving the fixture a description. It now **asserts its own precondition** —
+> that the draft clears validation — so a suite whose subject is the eval gate fails loudly when
+> it cannot reach it, rather than quietly reporting on a different gate. Same family as
+> `verify:blocks` going green on an empty table and `verify:embeddings` passing a condition that
+> could not fail.
+>
+> Its cleanup was wrong in the same run and in a way worth naming: `llm_usage.subject_id` is
+> `text` and `skill_evals.id` is `uuid`, so the `finally` died on `operator does not exist: text
+> = uuid` **after** the assertions — leaving a draft, its cases, its runs and six ledger rows
+> behind, quietly inflating the workspace's monthly spend. A cleanup that only runs when
+> everything passed is not a cleanup.
+
+> **This makes the schema a hard dependency of publish and of the interview.** `publishDraft`
+> reads `skill_evals` and `decideCandidate` selects the two new columns, so both fail loudly
+> until migration 0034 is applied — `verify:publish` and `verify:interview` go red with
+> `relation does not exist`. Migration-before-code is the normal order and a loud failure is the
+> right way round, but it is worth knowing before wondering why two green suites turned red.
+
 ### The platform can hold a conversation now, and a conversation needed its own budget (M2)
 
 `src/lib/conversation.ts` · `src/server/billing/conversation.ts` · `src/server/llm/stream.ts`
@@ -3945,6 +4074,7 @@ pnpm verify:search                       # index path and latency at corpus size
 pnpm verify:blocks | verify:lifecycle | verify:outcomes | verify:flags   # all free
 pnpm verify:draft-blocks                 # a draft is blocks, the body is a render; free
 pnpm verify:stream | verify:interview    # conversation budget, and RW.4; both free
+pnpm verify:evals                        # Skill CI: regression gate, staleness, probes; free
 pnpm db:audit                            # is the derived data current? one command, free
 pnpm verify:blocks                       # block taxonomy and span invariants; free
 pnpm verify:tokens                       # activation cost, bands and honesty; free

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { isBlockType } from "@/lib/block-types";
 import { isDraftBlockForm, type DraftBlock, type DraftBlockInput } from "@/lib/draft-blocks";
+import { isEvalKind } from "@/lib/evals";
 import { isCandidateDecision, isInterviewTechnique } from "@/lib/interview";
 import { libraryFragments, type LibraryResult } from "@/server/analytics/block-library";
 import { requireSession } from "@/server/dal/session";
@@ -542,6 +543,115 @@ export async function endInterviewAction(sessionId: string): Promise<ActionResul
     await endSession(sessionId, orgId, "author");
     revalidatePath("/build");
     return { ok: true, data: undefined };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// Skill CI (Doc 2 R2.11, Doc 6 RW.6, plan step D1)
+// ---------------------------------------------------------------------------------------
+
+/**
+ * Write an eval case against a draft.
+ *
+ * Free to write, Pro to run. Writing costs nothing and a case an author cannot yet run is still
+ * worth having — it is the specification of what the skill is for, and the interview writes them
+ * automatically. Gating the notepad as well as the engine would mean a free-tier author whose
+ * worked example produced a case could not even see it.
+ */
+export async function createEvalAction(
+  draftId: string,
+  kind: string,
+  prompt: string,
+  expectation?: string,
+): Promise<ActionResult<{ id: string }>> {
+  try {
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
+    if (!orgId) return { ok: false, message: "No active workspace." };
+    if (!isEvalKind(kind)) return { ok: false, message: "Unknown case kind." };
+
+    const { createEval } = await import("@/server/evals/store");
+    const result = await createEval({
+      draftId,
+      orgId,
+      userId: session.user.id,
+      kind,
+      prompt,
+      expectation,
+    });
+    if (!result.ok) return { ok: false, message: result.message };
+
+    revalidatePath(`/build/${draftId}`);
+    return { ok: true, data: { id: result.id } };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function deleteEvalAction(
+  draftId: string,
+  evalId: string,
+): Promise<ActionResult> {
+  try {
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
+    if (!orgId) return { ok: false, message: "No active workspace." };
+
+    const { deleteEval } = await import("@/server/evals/store");
+    await deleteEval(evalId, orgId);
+    revalidatePath(`/build/${draftId}`);
+    return { ok: true, data: undefined };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Run the draft's stale cases.
+ *
+ * ## Gated here, not in the runner
+ *
+ * `requireEntitlement` sits in the action because the runner is also how a CLI or a later
+ * re-scan campaign would execute cases, and a gate inside it would make those paths depend on
+ * whichever organisation happened to be resolvable. Same placement as every other action-level
+ * check in this file: the boundary is where the caller is known.
+ *
+ * ## On demand, never on save
+ *
+ * The plan says every edit re-runs. That would bill a call per save in a block-editing session,
+ * so what re-runs is the *staleness*: a run is stamped with the document's hash and a result
+ * that no longer describes the draft is shown as stale rather than silently refreshed. See
+ * `run.ts` — the departure is deliberate and the property the plan wanted is preserved.
+ */
+export async function runEvalsAction(
+  draftId: string,
+): Promise<ActionResult<{ ran: number; passed: number; failed: number; errored: number; costMicros: number }>> {
+  try {
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
+    if (!orgId) return { ok: false, message: "No active workspace." };
+
+    const { requireEntitlement } = await import("@/server/dal/entitlements");
+    await requireEntitlement(orgId, "eval-lab");
+
+    const { getDraft } = await import("@/server/builder/drafts");
+    const draft = await getDraft(draftId, orgId);
+    if (!draft) return { ok: false, message: "Draft not found." };
+    if (!draft.body) return { ok: false, message: "Write the draft before running its evals." };
+
+    const { runEvals } = await import("@/server/evals/run");
+    const result = await runEvals({
+      draftId,
+      orgId,
+      name: String(draft.frontmatter.name ?? draft.slug),
+      description: String(draft.frontmatter.description ?? draft.summary ?? ""),
+      body: draft.body,
+    });
+
+    revalidatePath(`/build/${draftId}`);
+    return { ok: true, data: result };
   } catch (error) {
     return failure(error);
   }

@@ -85,7 +85,7 @@ function mockModel() {
           { type: "text-delta", id: "0", delta: "Tell me about " },
           { type: "text-delta", id: "0", delta: "the last time this went wrong." },
           { type: "text-end", id: "0" },
-          { type: "finish", finishReason: "stop", usage: MOCK_USAGE },
+          { type: "finish", finishReason: { unified: "stop" }, usage: MOCK_USAGE },
         ] as never,
         chunkDelayInMs: 1,
       }),
@@ -213,7 +213,7 @@ console.info("\nWhat the SDK actually does with a stream nobody reads");
         { type: "text-start", id: "0" },
         { type: "text-delta", id: "0", delta: "a" },
         { type: "text-end", id: "0" },
-        { type: "finish", finishReason: "stop", usage: MOCK_USAGE },
+        { type: "finish", finishReason: { unified: "stop" }, usage: MOCK_USAGE },
       ];
       let i = 0;
       return {

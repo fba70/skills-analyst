@@ -56,6 +56,8 @@ export async function decideCandidate(input: {
         sessionId: interviewCandidates.sessionId,
         type: interviewCandidates.type,
         text: interviewCandidates.text,
+        evalPrompt: interviewCandidates.evalPrompt,
+        evalExpectation: interviewCandidates.evalExpectation,
         decision: interviewCandidates.decision,
         draftId: interviewSessions.draftId,
         technique: interviewSessions.technique,
@@ -161,6 +163,57 @@ export async function decideCandidate(input: {
       },
     });
   });
+
+  /**
+   * A captured worked example becomes an eval case (Doc 6 RW.4 → RW.6, plan steps C2b → D1).
+   *
+   * RW.4 promises this and C2b could not deliver it, because `skill_evals` did not exist yet.
+   * It does now, and the wiring is deliberately narrow: only an accepted `example` block from a
+   * `worked-example` session. Turning every accepted block into a case would fill the lab with
+   * guardrails and procedures, which are not input/output pairs — the same restraint the block
+   * extractor shows by refusing to type a bare code fence as an `example`, and for the same
+   * reason. "We found 204 examples" is a claim RW.6 can stand on; "we found 700" collapses the
+   * first time somebody runs them.
+   *
+   * **No case without both halves.** The interview turn states the input and the expectation
+   * separately when the example genuinely splits, and returns null when it does not. Falling
+   * back to using the whole passage as both would produce a case asking a model to reproduce
+   * its own expectation — a test that passes by construction, which is worse than no test
+   * because it would count towards coverage.
+   *
+   * There is no model call here and there must not be: inferring what makes an answer right
+   * would put words in the author's mouth on the one surface whose value is that the words are
+   * theirs.
+   *
+   * Best-effort. An example that did not become a case is a smaller loss than a decision that
+   * failed because a downstream table refused a row — the accept has already happened and the
+   * block is already on the draft.
+   */
+  if (
+    keeping &&
+    loaded.type === "example" &&
+    loaded.technique === "worked-example" &&
+    loaded.evalPrompt &&
+    loaded.evalExpectation
+  ) {
+    try {
+      const { createEval } = await import("@/server/evals/store");
+      await createEval({
+        draftId: loaded.draftId,
+        orgId: input.orgId,
+        userId: input.userId,
+        kind: "golden-task",
+        prompt: loaded.evalPrompt,
+        expectation: loaded.evalExpectation,
+        source: "interview",
+        sourceCandidateId: input.candidateId,
+      });
+    } catch (error) {
+      console.warn(
+        `[interview] worked example not turned into an eval case: ${(error as Error).message}`,
+      );
+    }
+  }
 
   return { ok: true, decision: input.decision, draftBlockId };
 }

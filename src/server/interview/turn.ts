@@ -53,6 +53,29 @@ const turnSchema = z.object({
             "The passage as it would appear in the document. Self-contained — it will sit " +
               "beside blocks from other turns and cannot refer to the conversation.",
           ),
+        /*
+         * Only for an `example`, and only when the two halves genuinely separate. An eval case
+         * needs the request in one field and what makes the answer right in the other; the
+         * block text holds both together, which is right for a document and unusable as a
+         * test. Stating them here costs nothing — the model has both in mind as it writes the
+         * example — and omitting them is a real answer: an example that cannot be split was
+         * not an input/output pair.
+         */
+        evalPrompt: z
+          .string()
+          .nullable()
+          .describe(
+            "For an `example` only: the request or input on its own, as somebody would " +
+              "actually phrase it. Null for every other block type, and null when this " +
+              "example does not separate into an input and an output.",
+          ),
+        evalExpectation: z
+          .string()
+          .nullable()
+          .describe(
+            "For an `example` only: what makes the right answer right, stated tightly enough " +
+              "to check. Null otherwise.",
+          ),
       }),
     )
     .max(MAX_CANDIDATES_PER_TURN)
@@ -229,6 +252,17 @@ export async function takeTurn(input: TakeTurnInput): Promise<{
                   turnId: turn.id,
                   type: candidate.type,
                   text: candidate.text.trim(),
+                  /*
+                   * Kept only where they mean something. A model that fills these in for a
+                   * guardrail has misread the instruction, and storing that would make a
+                   * guardrail eligible to become a golden task.
+                   */
+                  evalPrompt:
+                    candidate.type === "example" ? (candidate.evalPrompt?.trim() || null) : null,
+                  evalExpectation:
+                    candidate.type === "example"
+                      ? (candidate.evalExpectation?.trim() || null)
+                      : null,
                 })),
               )
               .returning({

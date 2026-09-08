@@ -162,6 +162,23 @@ export const interviewCandidates = pgTable(
     editedText: text("edited_text"),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
 
+    /**
+     * A worked example, split into the two halves an eval case needs (RW.4 → RW.6).
+     *
+     * An `example` block holds an input and its output as one passage, which is right for a
+     * document and useless as a golden task — a case needs the request in one field and what
+     * makes the answer right in another. Splitting a stored passage afterwards would be a
+     * convention-parser that drifts, and inferring it with a second model call would put words
+     * in the author's mouth on the one surface whose value is that the words are theirs.
+     *
+     * So the turn that writes the example states both halves in the same call. Same content,
+     * structured; no extra cost and nothing invented. Null for every other block type, and
+     * null when the model declined to split — an example it could not separate is one that was
+     * not really an input/output pair, and `decide.ts` correctly makes no case from it.
+     */
+    evalPrompt: text("eval_prompt"),
+    evalExpectation: text("eval_expectation"),
+
     /** The draft block this became, when accepted. Null while pending or rejected. */
     draftBlockId: uuid("draft_block_id").references(() => draftBlocks.id, {
       onDelete: "set null",
