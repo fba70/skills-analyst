@@ -6,7 +6,10 @@ Platform that ingests agent skills, validates them, mines structural archetypes 
 the corpus, and feeds that back into a builder and an assistant. **The loop is the
 product.**
 
-Specs are the source of truth, in this order:
+**What to build next is in `specs/plan.md`** — six milestones, twenty-three steps. Start
+there. It is local only, like everything under `specs/`.
+
+Specs are the source of truth for requirements, in this order (local only, gitignored):
 
 - `specs/core/01-business-concept.md` — vision, tiers, licensing
 - `specs/core/02-requirements-spec.md` — functional requirements (R1.x … R7.x, RC.x)
@@ -90,6 +93,23 @@ a bug to route around** — not with another tool, another spelling, a script, o
 
 Authorisation is per action, not per session: "yes, install X" does not cover Y, and
 "yes, commit this" does not cover the next commit.
+
+### Hand-offs are a numbered list at the end, never prose
+
+Every hard rule above ends the same way: the agent stops and Boris runs something. So every
+response that needs him to act **must close with one block** — the last thing in the message —
+holding the commands in the order they have to run, one per line, copy-pasteable, with a
+one-line reason each. Migrations, backfills, installs, commits, drops, ledger fixes: all of it,
+in one place.
+
+Not scattered through the explanation. A hand-off spread across four paragraphs is a hand-off
+where step two gets missed, and the failure is not theoretical: `draft_blocks` was applied and
+then its migration files deleted, because the tidy-up and the apply were two commands in two
+different paragraphs and the tidy-up was read as replacing the apply. That left the database
+holding two tables no migration on disk could create — caught only because `pnpm db:audit`
+counts applied against on-disk.
+
+The reasoning still belongs in the body. The **commands** belong at the end, once, in order.
 
 ### Database access
 
@@ -220,9 +240,9 @@ where these numbers came from.
 | Embeddings | 47,854 of 47,855 canonical skills · pgvector 0.8.6, HNSW cosine, 1,536 dimensions · $0.08 |
 | Lifecycle | **new (A4)** — derived second axis; battle-tested unreachable by construction |
 | Entitlements | **new (A5)** — three plans; the trust surfaces cannot be gated at all |
-| Builder | live at `/build` · scaffolds sections, **the block grammar with real fragments**, traits and exemplars · draft pages mark block-level archetype deviations (R4.3) |
+| Builder | live at `/build` · **a draft is typed blocks and the body is their render (C1)** · block editing, revisions and a no-model scaffold path (C1b, R4.6, R4.7) · block-level archetype deviations (R4.3) |
 | MCP | live at `/api/mcp` · six tools, token-gated, rate-limit scope now follows the plan |
-| Schema | 31 migrations (0000–0030) · 35 tables · 28 RLS policies |
+| Schema | 33 migrations (0000–0032) · 37 tables · 31 RLS policies |
 | Spend, cumulative | **$31.70** — $31.52 taxonomy, $0.10 builder, $0.08 embeddings. All metered. |
 
 **Ingestion, classification and every backfill run from a local terminal**, not from the
@@ -433,10 +453,18 @@ Everything else on the list is smaller than this.
 
 ### What to build next
 
-**The ordered plan lives in `specs/core/02-requirements-spec.md` §10**, next to the §10b
-status table it is derived from. It is not duplicated here: a roadmap in two places is a
-roadmap that disagrees with itself, and the spec is the one people review. The surviving P0
-gaps are listed once, under *Phase A is done* above.
+**The ordered plan lives in `specs/plan.md`** — six milestones, twenty-three steps, with
+sizes, dependencies and the critical path. `specs/core/02-requirements-spec.md` §10 carries
+the same steps at requirement granularity and §10b the per-requirement status. Where the two
+disagree, `specs/plan.md` is newer.
+
+Both are **gitignored**, along with the rest of `specs/`. That is the deliberate consequence
+of removing the specs from the remote repository: the roadmap is local to a working copy, so
+this file is the only thing a fresh clone gets. If you are reading this without a
+`specs/` directory, ask for the plan rather than reconstructing one.
+
+Not duplicated here, because a roadmap in three places is a roadmap that disagrees with
+itself twice.
 
 **The Doc 6 workbench programme** (`specs/core/06-workbench-and-km-extensions.md`, RW.x/RK.x)
 supersedes the builder and assistant gaps. Do not close R4.2, R5.1, R5.3 or R5.4 as
@@ -2141,6 +2169,94 @@ would be enforcing an untested mean.
 > draft.
 
 
+### A draft is typed blocks now, and the body is a render (plan step C1 / C1b)
+
+`src/lib/draft-blocks.ts` · `src/server/builder/blocks.ts` · migrations 0031–0032
+`pnpm verify:draft-blocks` (49 checks, free) · `/build` and `/build/[id]`
+
+M1's keystone. Interview mode, Distill, shared blocks, agent-side creation and
+improve-an-existing-skill all operate on the *parts* of a document, and each is coherent over
+a list of typed spans and incoherent over a body string — a "revision" to a string is a
+character diff nobody reads as a decision, and "accept this suggestion" is a
+search-and-replace. Building any of them first would have meant rewriting it here.
+
+`draft_blocks` holds type, order and the author's text, with `null` type staying valid content
+exactly as it does in the corpus. `skill_drafts.body` **stays a plain string and becomes a
+render**, written by exactly one code path.
+
+> **Publish-back and export must not learn about blocks, and they have not.** They take a
+> body, hand it to the real validator (R6.1) and the real archive builder (R4.4), and that is
+> precisely what makes those two requirements true — a block-aware export would be a second
+> definition of "servable", on the axis where drift is a legal problem rather than a bug.
+> `verify:draft-blocks` asserts both files import nothing from the block layer.
+
+#### The extractor's spans do not cover the document, and that is the bug this step nearly shipped
+
+The plan says importing a body needs no new detector, because `blockDeviations` already runs
+`extractStructure` over a draft body and types it. True about the *typing* and incomplete
+about the reassembly: the extractor treats a **heading as a boundary, not a block** — right,
+since the heading is already the fingerprint's own unit and emitting it twice would
+double-count every section — and it skips horizontal rules as punctuation.
+
+So concatenating its spans returns a document with **every heading gone**. Nothing errors. The
+author opens their draft and it is no longer theirs.
+
+`tileDraftBody` merges the typed spans with `headingSpans` and reads the gaps between them
+straight out of the body. `headingSpans` is collected by **the same segmenter**, in the same
+walk, so fence handling — the `#` inside a code block — has one implementation rather than
+two. The corpus output is byte-identical: `verify:blocks` still passes 55/55, including its
+check that a stored span matches what the extractor produces today.
+
+The suite **reproduces the loss before asserting the fix**, so the fixture is proven able to
+fail. Then: every non-blank line survives in order, re-importing the render is a no-op, and
+the render re-types to what was stored — that last one matters because the archetype panel on
+the same page re-extracts the rendered body, and a render that segmented differently would
+describe a document the author is not reading.
+
+#### One writer, asserted against the source tree
+
+"Blocks are the source and the body is derived" is only true while one code path writes the
+column. Clean data cannot demonstrate that — a second writer produces a body that renders
+differently from the blocks beside it and nothing fails, exactly as `verify:dedup` stayed green
+through a total ingestion outage by asserting the data was tidy instead of attempting the
+insert that caused the bug. So the check walks `src/` and `scripts/` for a `.set({ … body: … })`
+on `skillDrafts` and allows one file, **and then asserts that file was found**, because a
+whitelist matching nothing would pass for the wrong reason.
+
+#### Ids survive a replace, and that is what makes R4.7 possible
+
+Rows are replaced rather than upserted — `block_order` is unique per draft, so renumbering in
+place collides with itself mid-statement; the same delete-and-reinsert `skill_blocks` uses for
+a different reason. **The caller's ids are carried through**, which looked like a courtesy for
+a later feature and turned out to be the whole of R4.7: a revision diff matches on id, so a
+block that only moved is recognisably the same block.
+
+R4.7 had been open since the builder shipped and the blocker was never storage. Over a body
+string a revision is a character diff, and `moved` has no expression in one at all — it shows
+up as a deletion and an unrelated insertion far away. The suite reproduces that too: comparing
+rendered text calls a single reorder a three-line rewrite when nothing was written.
+
+`draft_revisions` is a jsonb snapshot rather than a second table shaped like the first, because
+it is read whole and never queried by block. **No body is stored beside the blocks** — that
+would reintroduce inside the history the exact drift the live table exists to prevent. SELECT
+and INSERT policies and **no UPDATE or DELETE**: history the application can rewrite is not
+history, same posture as `llm_usage`. Restoring goes *forward*, appending a revision rather
+than truncating to the one restored from, because a history that deletes itself when used is
+one nobody dares click.
+
+#### `ready` means the document says something
+
+R4.6's simplified path — "scaffold it, I will write it" — creates a draft from the archetype's
+block grammar as **empty typed blocks**, no model call, so it works in a workspace that has
+spent its cap. Nothing is pre-filled, which is the same refusal the block library and C1b's
+"add one here" both make: most of this corpus is `attribution_required`, and seeding a draft
+with a stranger's prose would launder an attribution obligation into a document carrying none.
+
+That created a gap worth naming. An empty scaffold renders to a list of headings, which *is* a
+body — so `if (!draft.body)` would have let somebody publish an outline. `ready` is therefore
+set on **content**: at least one non-heading block with something in it. Publishing checks the
+status server-side, not only in the UI, because a server action is a POST endpoint.
+
 ### Similarity for authors: what already exists (Doc 2 R3.6)
 
 `similarToText` in `analytics/embeddings-run.ts` · `components/builder/similar-skills.tsx`
@@ -3692,6 +3808,7 @@ pnpm verify:taxonomy | verify:archetypes # vocabulary and mined guidance; both f
 pnpm verify:models                       # a model id is a setting, priced and audited; free
 pnpm verify:search                       # index path and latency at corpus size; free
 pnpm verify:blocks | verify:lifecycle | verify:outcomes | verify:flags   # all free
+pnpm verify:draft-blocks                 # a draft is blocks, the body is a render; free
 pnpm db:audit                            # is the derived data current? one command, free
 pnpm verify:blocks                       # block taxonomy and span invariants; free
 pnpm verify:tokens                       # activation cost, bands and honesty; free

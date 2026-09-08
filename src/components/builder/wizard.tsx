@@ -2,11 +2,12 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { ArrowLeft, ArrowRight, Loader2, Sparkles } from "lucide-react";
+import { ArrowLeft, ArrowRight, Loader2, PencilLine, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 import {
   loadScaffoldAction,
+  startBlankDraftAction,
   submitDraftAction,
 } from "@/app/(protected)/build/actions";
 import type { Scaffold } from "@/server/builder/scaffold";
@@ -75,6 +76,37 @@ export function BuilderWizard({ categories }: { categories: Category[] }) {
       setCategory(next);
       setScaffold(result.data);
       setStep(1);
+    });
+  }
+
+  /**
+   * R4.6's simplified path: take the shape, skip the model.
+   *
+   * The same inputs, the same archetype, and no generation — the draft arrives as the
+   * category's block grammar with nothing written in it. For an author who knows what they
+   * want to say, a generated first draft is something to delete before starting, and this is
+   * the button that says so. It is free, so it also works in a workspace that has spent its
+   * cap.
+   */
+  function startBlank() {
+    if (!category) return;
+    startTransition(async () => {
+      const result = await startBlankDraftAction({
+        name,
+        purpose,
+        context,
+        category: category.id,
+        domain,
+        dialect,
+        sectionInputs,
+        scaffoldSections: scaffold?.sections.map((section) => section.role) ?? [],
+      });
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+      toast.success("Draft scaffolded. Nothing is written yet — that part is yours.");
+      router.push(`/build/${result.data.draftId}`);
     });
   }
 
@@ -432,11 +464,17 @@ export function BuilderWizard({ categories }: { categories: Category[] }) {
               )}
               Write the draft
             </Button>
-            <span className="text-muted-foreground text-xs">
-              One model call. Your inputs are saved first, so a failure costs the draft and
-              not your typing.
-            </span>
+            <Button variant="outline" onClick={startBlank} disabled={isPending}>
+              <PencilLine className="size-4" />
+              Scaffold it, I will write it
+            </Button>
           </div>
+          <p className="text-muted-foreground text-xs">
+            Writing it costs one model call, and your inputs are saved first so a failure
+            costs the draft and not your typing. Scaffolding costs nothing: you get this
+            category&rsquo;s headings and one empty block of each type it recommends, and you
+            fill them in.
+          </p>
         </div>
       ) : null}
     </div>

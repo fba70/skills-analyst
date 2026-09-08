@@ -3,10 +3,12 @@ import {
   index,
   integer,
   jsonb,
+  pgPolicy,
   pgTable,
   smallint,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -141,5 +143,231 @@ export const skillDrafts = pgTable(
   (t) => [
     index("skill_drafts_org_idx").on(t.orgId, sql`${t.updatedAt} desc`),
     index("skill_drafts_status_idx").on(t.status),
+  ],
+);
+
+/**
+ * A draft's typed blocks — the source the body is rendered from (Doc 6 RW.3, plan step C1).
+ *
+ * ## Why the draft stops being one string
+ *
+ * Interview mode, Distill, shared blocks, improve-an-existing-skill and agent-side creation
+ * all operate on the *parts* of a document. Each is coherent over a list of typed spans and
+ * incoherent over a body string, and building any of them against a string means rewriting
+ * it later — which is why this step is the keystone of the plan rather than a refactor.
+ *
+ * The corpus has thought this way since A2: `skill_blocks` holds 1.6 million typed spans and
+ * an archetype is a **block grammar**, not a heading list. A draft that cannot be compared
+ * to that grammar at the same grain can only be advised about vaguely.
+ *
+ * ## `skill_drafts.body` stays, and is derived
+ *
+ * Publish-back (R6.1) and export (R4.4) take a body, hand it to the real validator and the
+ * real archive builder, and never learn that blocks exist — that is exactly what makes those
+ * two requirements true, and a block-aware export would be a second definition of
+ * "servable". So the column stays a plain string and becomes a **render**, written only by
+ * `setDraftBlocks` in the same transaction that writes these rows. Two writable
+ * representations of one document drift, and the drift is invisible until somebody publishes
+ * a document that is not the one they edited.
+ *
+ * ## Rows are replaced, never upserted
+ *
+ * Same reasoning as `skill_blocks`, arrived at from the other direction. There, the row
+ * *count* changes when the rules change, so no key an upsert could target exists. Here the
+ * count changes because the author inserted a block in the middle, and `block_order` is in a
+ * unique index — an in-place renumbering would collide with itself mid-statement. Deleting
+ * the draft's rows and re-inserting the whole list in one transaction is correct for both
+ * reasons and is trivially right, at the tens of rows a draft actually holds.
+ *
+ * Ids are **supplied by the caller** on a replace, so identity survives it. That is not
+ * tidiness: C2b attaches an accept/reject decision to a block and D1 attaches an eval case,
+ * and neither can hang off a row whose id changes every time the author reorders something.
+ *
+ * ## `text` holds the author's own words, and that is the difference from `skill_blocks`
+ *
+ * `skill_blocks` may never grow a column holding body text — it stores `[startChar, endChar)`
+ * into somebody else's document, and the licence gate applies at the moment of reading. This
+ * table is the opposite case: the content is the author's, in their own workspace, and there
+ * is no bundle to slice into because the document does not exist until these rows render it.
+ * Storing an offset here would be an offset into a string derived from the rows themselves.
+ */
+export const draftBlocks = pgTable(
+  "draft_blocks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    /**
+     * Denormalised from the draft, because RLS needs it on the row.
+     *
+     * A policy that had to join `skill_drafts` to find the organisation would be a policy
+     * evaluated per row against another table whose own policy is being evaluated. NOT NULL
+     * with no `IS NULL` escape hatch, matching the parent: there is no such thing as a
+     * public draft, so there is no such thing as a public draft block.
+     */
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+
+    draftId: uuid("draft_id")
+      .notNull()
+      .references(() => skillDrafts.id, { onDelete: "cascade" }),
+
+    /** Position in the document, 0-based and contiguous. */
+    blockOrder: smallint("block_order").notNull(),
+
+    /**
+     * `heading` or `content` — see `DRAFT_BLOCK_FORMS`.
+     *
+     * A heading is a block *here* and nowhere else. The corpus extractor treats it as a
+     * boundary, correctly, because it is already the fingerprint's own unit and emitting it
+     * twice would double-count every section. A draft reassembled from typed spans alone
+     * comes back with every heading gone, so the draft's list has to tile the document.
+     */
+    form: text("form").notNull(),
+
+    /** 1–6 for a heading; NULL for content. */
+    depth: smallint("depth"),
+
+    /**
+     * One of `BLOCK_TYPES`, or NULL when the author has not said and no rule recognised it.
+     *
+     * Nullable for the same reason the corpus column is: Doc 6 §7 names over-structuring as
+     * this programme's risk, and a workbench that would not hold a paragraph until somebody
+     * labelled it would be that risk arriving. 59% of the corpus's blocks are untyped.
+     */
+    type: text("type"),
+
+    /** The author's markdown. For a heading, the label alone, without its `#` marks. */
+    text: text("text").notNull(),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /*
+     * One index, not two. It is unique because `block_order` is contiguous within a draft,
+     * and it is also the ordered read path — a second plain btree on the same two columns in
+     * the same order is dead weight the planner would never choose.
+     */
+    uniqueIndex("draft_blocks_uq").on(t.draftId, t.blockOrder),
+
+    /**
+     * Tenant isolation, declared on the table so drizzle-kit generates it (Doc 3 C4).
+     *
+     * No `org_id IS NULL` clause, exactly as `skill_drafts` has none: the column is NOT NULL
+     * and there is no anonymous case to admit. An unauthenticated request sets no
+     * `app.org_id`, `current_setting` returns NULL, the comparison yields NULL rather than
+     * true, and no rows come back — which is the correct answer.
+     *
+     * `FOR ALL` includes DELETE, and it has to: a save replaces the draft's rows.
+     *
+     * No GRANT is written and none is needed — migration 0002's default privileges cover
+     * every table a later migration creates.
+     */
+    pgPolicy("org_scope", {
+      for: "all",
+      to: "app_runtime",
+      using: sql`org_id = current_setting('app.org_id', true)`,
+      withCheck: sql`org_id = current_setting('app.org_id', true)`,
+    }),
+  ],
+);
+
+/**
+ * Draft revisions (Doc 2 R4.7) — the history a block model makes worth keeping.
+ *
+ * ## Why this arrives with C1 and could not have arrived before it
+ *
+ * R4.7 has been open since the builder shipped, and the reason it stayed open is that a
+ * revision over a body string is a character diff. Nobody reads one of those as a decision:
+ * "3,412 characters changed" says nothing about whether a guardrail was removed. Over blocks
+ * it is a list an author can read — this block was added, that one was retyped from
+ * `procedure` to `guardrail`, this one moved above the examples — and each of those is a
+ * sentence about the document rather than about the text.
+ *
+ * That only works because `setDraftBlocks` carries block ids through a replace. A revision
+ * diff matches on id: without it every reorder would read as delete-everything-add-everything,
+ * which is the character diff again wearing a list's clothes.
+ *
+ * ## A snapshot, not rows
+ *
+ * `draft_blocks` is the working copy and is replaced on every save; this is immutable
+ * history, read whole and never queried by block. A second table shaped like the first would
+ * be a join for something nothing joins on. Same call `skill_drafts.validation` and
+ * `scaffold_sections` already make.
+ *
+ * The body is **not** stored beside it, deliberately. A revision is a set of blocks, and the
+ * body is what the renderer makes of them — storing both would reintroduce, inside the
+ * history, the exact drift the live table was designed to prevent.
+ *
+ * ## Append-only, and there is no DELETE policy
+ *
+ * History that the application can rewrite is not history. Same posture as `llm_usage` and
+ * `platform_settings`: the row is written and never removed, and maintenance — if a draft
+ * ever accumulates enough revisions to matter — goes through the owner connection that
+ * migrations already use. A cascade from `skill_drafts` still works: PostgreSQL runs a
+ * referential action as an internal operation and does not apply the policy to it, so
+ * deleting a draft still takes its history with it.
+ *
+ * No retention cap in this version, stated rather than left to be discovered. A draft is
+ * saved tens of times, not thousands, and a cap chosen before anybody has seen the real
+ * distribution is a number that will be wrong in one direction or the other.
+ */
+export const draftRevisions = pgTable(
+  "draft_revisions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    /** Denormalised for RLS, exactly as on `draft_blocks`. */
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+
+    draftId: uuid("draft_id")
+      .notNull()
+      .references(() => skillDrafts.id, { onDelete: "cascade" }),
+
+    /** 1-based and contiguous per draft, so a person can refer to "revision 4". */
+    revision: integer("revision").notNull(),
+
+    /**
+     * The block list as it stood, in order: `{ id, form, depth, type, text }`.
+     *
+     * Ids are part of the snapshot and are the whole reason the diff is readable — a block
+     * that only moved is recognisably the same block.
+     */
+    blocks: jsonb("blocks").notNull(),
+
+    /**
+     * What produced this revision, from a closed vocabulary — `generated`, `scaffolded`,
+     * `edited`, `restored`. A column rather than free text because it is the thing a history
+     * list groups and filters by, and because "the model wrote this one" and "a person wrote
+     * this one" is the distinction anyone reading the list is actually looking for.
+     */
+    reason: text("reason").notNull(),
+    /** Free detail beside the reason — which revision a restore came from, for instance. */
+    note: text("note"),
+
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("draft_revisions_uq").on(t.draftId, t.revision),
+
+    /**
+     * SELECT and INSERT, org-scoped. No UPDATE and no DELETE, and the absence is the point:
+     * a revision that could be edited is not a revision. No `IS NULL` escape hatch, matching
+     * the parent — there is no public draft, so there is no public draft history.
+     */
+    pgPolicy("org_read", {
+      for: "select",
+      to: "app_runtime",
+      using: sql`org_id = current_setting('app.org_id', true)`,
+    }),
+    pgPolicy("org_append", {
+      for: "insert",
+      to: "app_runtime",
+      withCheck: sql`org_id = current_setting('app.org_id', true)`,
+    }),
   ],
 );

@@ -57,6 +57,7 @@
     "verify:models": "tsx --conditions=react-server scripts/verify-models.mts",
     "verify:archetypes": "tsx --conditions=react-server scripts/verify-archetypes.mts",
     "verify:blocks": "tsx --conditions=react-server scripts/verify-blocks.mts",
+    "verify:draft-blocks": "tsx --conditions=react-server scripts/verify-draft-blocks.mts",
     "verify:tokens": "tsx --conditions=react-server scripts/verify-tokens.mts",
     "verify:lifecycle": "tsx --conditions=react-server scripts/verify-lifecycle.mts",
     "verify:entitlements": "tsx --conditions=react-server scripts/verify-entitlements.mts",

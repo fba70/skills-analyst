@@ -5,11 +5,12 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { events, skillDrafts } from "@/server/db/schema";
 import { db } from "@/server/db";
 import { withExplicitOrgScope, withOrgScope } from "@/server/dal/scope";
-import { SEVERITY_WEIGHTS, substanceFactor } from "@/lib/quality";
 import { labelFor } from "@/server/taxonomy/vocabulary";
 
+import { importDraftBody } from "./blocks";
 import { buildScaffold } from "./scaffold";
 import { generateDraft } from "./generate";
+import type { DraftValidation } from "./validate-body";
 
 /**
  * Draft persistence and the generate step (Doc 2 R4.1–R4.5).
@@ -50,11 +51,7 @@ export type DraftDetail = DraftSummary & {
   publishedAt: Date | null;
 };
 
-export type DraftValidation = {
-  qualityScore: number;
-  blocked: boolean;
-  findings: Array<{ analyzer: string; reason: string; severity: string; message: string }>;
-};
+export type { DraftValidation } from "./validate-body";
 
 export async function listDrafts(limit = 10): Promise<DraftSummary[]> {
   return withOrgScope(async (tx) =>
@@ -264,29 +261,44 @@ async function applyGenerate(draftId: string, orgId: string): Promise<GenerateRe
       return { ok: true, refused: true, draftId, reason: generated.refusal };
     }
 
-    const validation = await validateBody({
-      name: generated.frontmatterName,
-      description: generated.description,
-      body: generated.body,
-      dialect: draft.dialect,
-    });
-
+    /*
+     * Metadata first, blocks second, and the order is load-bearing.
+     *
+     * `importDraftBody` validates the document it renders, and validation needs the
+     * frontmatter this generation just produced — a name and a description. Importing before
+     * storing them would judge the new body against the previous generation's frontmatter,
+     * which on a first generation is no frontmatter at all: `missing-name` findings on a
+     * document that has a name.
+     *
+     * `body` is deliberately absent from this update. It is written by exactly one code path
+     * — see `blocks.ts` — because a body that is both stored and derived drifts from the
+     * blocks the author edits, and nothing errors when it does.
+     */
     await withExplicitOrgScope(orgId, async (tx) => {
       await tx
         .update(skillDrafts)
         .set({
-          status: "ready",
-          body: generated.body,
           summary: generated.description,
           frontmatter: { name: generated.frontmatterName, description: generated.description },
           model: generated.model,
           generatedAt: new Date(),
-          validation,
-          qualityScore: validation.qualityScore,
           archetypeVersion: scaffold.archetypeVersion,
           updatedAt: new Date(),
         })
         .where(eq(skillDrafts.id, draftId));
+    });
+
+    /*
+     * The generated string is segmented into typed blocks and the body becomes their render
+     * (plan step C1). The author now edits parts of a document rather than a wall of text,
+     * and the archetype's block grammar can be compared against what they actually wrote.
+     *
+     * No new detector: `extractStructure` does the typing, the same extractor behind every
+     * corpus block and behind `blockDeviations`.
+     */
+    const { validation } = await importDraftBody(draftId, orgId, generated.body, {
+      reason: "generated",
+      note: generated.model,
     });
 
     await db.insert(events).values({
@@ -335,56 +347,6 @@ async function applyGenerate(draftId: string, orgId: string): Promise<GenerateRe
     });
     return { ok: false, message };
   }
-}
-
-/**
- * Runs the free analyzers over the generated document (R4.5).
- *
- * The same analyzers the corpus is judged by, on a bundle that exists only in memory —
- * `AnalyzerInput` takes files rather than a storage key, so a draft can be validated
- * before it has ever been written anywhere. A builder that produced skills held to a lower
- * standard than the registry it publishes into would undermine both.
- *
- * The costly R2.3 consistency audit is not run here. It is opt-in for the corpus for the
- * same reason it should be opt-in here — and it compares documentation against *bundled
- * code*, which a text-only first draft does not have.
- */
-async function validateBody(input: {
-  name: string;
-  description: string;
-  body: string;
-  dialect: string;
-}): Promise<DraftValidation> {
-  const { runAnalyzersOnBundle } = await import("@/server/validation/run");
-
-  const markdown = `---\nname: ${input.name}\ndescription: ${JSON.stringify(input.description)}\n---\n\n${input.body}\n`;
-  const findings = await runAnalyzersOnBundle({
-    files: [{ path: "SKILL.md", content: Buffer.from(markdown, "utf8") }],
-    body: input.body,
-    frontmatter: { name: input.name, description: input.description },
-    markerPath: "SKILL.md",
-    dialect: input.dialect,
-    resolvedName: input.name,
-    resolvedSummary: input.description,
-    // We wrote the frontmatter ourselves from structured fields, so there is nothing to
-    // have failed to parse. Null is the honest value, not a placeholder.
-    parseError: null,
-  });
-
-  const penalty = findings.reduce(
-    (total, f) => total + (SEVERITY_WEIGHTS[f.severity as keyof typeof SEVERITY_WEIGHTS] ?? 0),
-    0,
-  );
-  const defectScore = Math.max(0, Math.min(100, 100 - penalty));
-  const qualityScore = Math.round(
-    defectScore * substanceFactor(Buffer.byteLength(input.body, "utf8")),
-  );
-
-  return {
-    qualityScore,
-    blocked: findings.some((f) => f.severity === "high" || f.severity === "critical"),
-    findings,
-  };
 }
 
 /** `Name of Thing` → `name-of-thing`, uniqueness left to the org scope. */

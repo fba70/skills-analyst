@@ -3,12 +3,14 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, ShieldOff } from "lucide-react";
 
-import { DeviationCard } from "@/components/builder/deviation-card";
+import { BlockEditor } from "@/components/builder/block-editor";
+import { RevisionHistory } from "@/components/builder/revision-history";
 import { DraftActions } from "@/components/builder/draft-actions";
 import { ActivationCostBadge } from "@/components/registry/activation-cost";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { getDraftBlocks, listDraftRevisions } from "@/server/builder/blocks";
 import { blockDeviations } from "@/server/builder/deviation";
 import { getDraft } from "@/server/builder/drafts";
 import { getSkillsByIds } from "@/server/dal/skills";
@@ -29,7 +31,7 @@ export const metadata: Metadata = { title: "Draft" };
  * an answer, not an error: the inputs are still on the draft and still editable.
  */
 export default async function DraftPage(props: PageProps<"/build/[id]">) {
-  await requireSession();
+  const session = await requireSession();
   const { id } = await props.params;
   // Org-scoped in the DAL: an id from another workspace resolves to nothing, so this is a
   // 404 rather than a permission error — which is also the right thing to leak.
@@ -51,6 +53,20 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
    * pure rules over a string already in memory.
    */
   const deviations = draft.body ? await blockDeviations(draft.body, draft.archetypeCategory) : null;
+
+  /*
+   * The blocks the body was rendered from (plan step C1).
+   *
+   * A draft written before this step has a body and no rows, so the list comes back empty
+   * and the editor says so rather than showing a document with nothing in it — the body is
+   * still displayed above, and re-generating imports it. Backfilling on read was the
+   * alternative and is worse: a GET that silently writes rows is a GET that can fail on a
+   * page nobody was asking to change anything on.
+   */
+  const orgId = session.session.activeOrganizationId;
+  const [blocks, revisions] = orgId
+    ? await Promise.all([getDraftBlocks(draft.id, orgId), listDraftRevisions(draft.id, orgId)])
+    : [[], []];
 
   return (
     <div className="grid min-w-0 gap-6">
@@ -116,32 +132,40 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         </Card>
       ) : null}
 
-      {draft.body ? (
+      {/*
+        The editor is the document (plan steps C1, C1b).
+
+        It used to be a `<pre>` holding the generated string — an honest way to show a body
+        and no way at all to change one. The blocks are the source now and the body is their
+        render, so this is both the view and the edit surface, and there is exactly one of
+        them. The archetype comparison lives inside it so its missing-block list can put a
+        block into the draft.
+      */}
+      {blocks.length > 0 || !draft.body ? (
+        <BlockEditor
+          draftId={draft.id}
+          blocks={blocks}
+          deviations={deviations}
+          disabled={draft.status === "generating"}
+        />
+      ) : (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">SKILL.md</CardTitle>
             <CardDescription>
-              Written by {draft.model ?? "the assistant"} from your inputs and the{" "}
-              {labelFor("function", draft.archetypeCategory).toLowerCase()} archetype.
+              Written by {draft.model ?? "the assistant"} before this draft was split into
+              blocks. Re-generate to edit it block by block.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {/* Rendered as source, not as markdown: this is the artifact the author will
-                ship, and showing it formatted would hide the headings and frontmatter that
-                decide whether it works. */}
+            {/* Source, not rendered markdown: this is the artifact the author ships, and
+                formatting it would hide the headings that decide whether it works. */}
             <pre className="bg-muted max-h-[32rem] overflow-auto rounded-md p-4 text-xs leading-relaxed whitespace-pre-wrap">
               {draft.body}
             </pre>
           </CardContent>
         </Card>
-      ) : null}
-
-      {/*
-        After the document, before validation, because that is the order of consequence.
-        Validation decides whether this can be published; the archetype comparison is advice
-        an author weighs, and putting advice above a blocking gate misreports which is which.
-      */}
-      {deviations ? <DeviationCard report={deviations} /> : null}
+      )}
 
       {draft.validation ? (
         <Card>
@@ -180,11 +204,21 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         </Card>
       ) : null}
 
+      {/*
+        History below validation, because that is the order of consequence again: validation
+        decides whether this can be published, and history is a thing an author reaches for
+        when they already know something is wrong.
+      */}
+      <RevisionHistory
+        draftId={draft.id}
+        revisions={revisions.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }))}
+      />
+
       <DraftActions
         draftId={draft.id}
         slug={draft.slug}
         busy={draft.status === "generating"}
-        canPublish={Boolean(draft.body)}
+        canPublish={draft.status === "ready"}
         blocked={draft.validation?.blocked ?? false}
         publishedSlug={publishedSlug}
       />

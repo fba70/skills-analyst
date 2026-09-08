@@ -1,7 +1,9 @@
 import { LiftChip } from "@/components/archetypes/lift-bar";
 import { ExplainLink } from "@/components/registry/explain";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import type { BlockType } from "@/lib/block-types";
 import type { DeviationReport } from "@/server/builder/deviation";
 
 /**
@@ -26,8 +28,27 @@ import type { DeviationReport } from "@/server/builder/deviation";
  * deliberately refuses to publish that as guidance, because the detector may be measuring
  * house style — so telling an author here that an unlisted block type is a problem would
  * smuggle in through the builder the exact claim `archetype.ts` declines to make.
+ *
+ * ## `onAdd` inserts an empty block, and never a fragment
+ *
+ * C1b makes the missing list actionable, and the action is deliberately the smallest one
+ * that helps: an empty block of that type, at the end of the draft, for the author to write
+ * into. It does not paste an example.
+ *
+ * That is the same refusal the block library makes and for the same two reasons. A copy
+ * button manufactures the homogenisation Doc 2's risk register names, and most of this
+ * corpus is `attribution_required` — pasting a stranger's paragraph into a draft would
+ * launder an attribution obligation into a document carrying none, on the exact axis the
+ * download route returns 451 to protect. The examples stay one panel away, to read.
  */
-export function DeviationCard({ report }: { report: DeviationReport }) {
+export function DeviationCard({
+  report,
+  onAdd,
+}: {
+  report: DeviationReport;
+  /** Omitted on a read-only surface; the buttons then do not render at all. */
+  onAdd?: (type: BlockType) => void;
+}) {
   if (report.notMeasured) {
     return (
       <Card className="border-dashed">
@@ -83,6 +104,19 @@ export function DeviationCard({ report }: { report: DeviationReport }) {
                     </span>
                   </div>
                   <p className="text-muted-foreground text-xs">{block.blurb}</p>
+                  {onAdd ? (
+                    <div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="mt-1 h-7 text-xs"
+                        onClick={() => onAdd(block.type)}
+                      >
+                        Add one here
+                      </Button>
+                    </div>
+                  ) : null}
                 </li>
               ))}
             </ul>

@@ -113,6 +113,19 @@ async function applyPublish(
   const draft = await getDraft(draftId, orgId);
   if (!draft) return { ok: false, message: "Draft not found." };
   if (!draft.body) return { ok: false, message: "Write the draft before publishing it." };
+  /*
+   * A scaffold is not a draft (plan step C1).
+   *
+   * R4.6's simplified path creates a document made of the archetype's headings and empty
+   * typed blocks, which is a body — so the check above passes on an outline nobody has
+   * written into. `ready` is set by the block writer only when at least one content block has
+   * something in it, which is exactly the distinction this gate wants and the reason the
+   * status means what it means. The UI hides the button too; this is the one that counts,
+   * because a server action is a POST endpoint.
+   */
+  if (draft.status !== "ready") {
+    return { ok: false, message: "There is nothing written in this draft yet." };
+  }
   if (draft.publishedSkillId) {
     return { ok: false, message: "This draft has already been published." };
   }

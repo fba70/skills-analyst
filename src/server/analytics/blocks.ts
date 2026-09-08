@@ -194,6 +194,17 @@ export type SegmentContext = {
   headings: ReadonlyArray<{ role: SectionRole | null; text: string; order: number }>;
 };
 
+/** A heading line and where it sits. See `headingSpans` for why the offsets are needed. */
+export type HeadingSpan = {
+  depth: number;
+  /** Trimmed label, without the `#` marks. Capped like the fingerprint's own. */
+  text: string;
+  startChar: number;
+  endChar: number;
+};
+
+type SegmentedBody = { segments: Segment[]; headings: HeadingSpan[] };
+
 /**
  * Split a body into segments, each tagged with the section it sits in.
  *
@@ -202,9 +213,10 @@ export type SegmentContext = {
  * to see the line after the blank. The version of this that tracked "am I in a list" in a
  * flag split every loose list into one segment per item.
  */
-function segmentBody(body: string, context: SegmentContext): Segment[] {
+function segmentBody(body: string, context: SegmentContext): SegmentedBody {
   const lines = lineIndex(body);
   const segments: Segment[] = [];
+  const headingSpans: HeadingSpan[] = [];
 
   let parentRole: SectionRole | null = null;
   let parentHeadingOrder: number | null = null;
@@ -279,6 +291,23 @@ function segmentBody(body: string, context: SegmentContext): Segment[] {
         parentRole = null;
         parentHeadingOrder = null;
       }
+      /*
+       * Recorded, not emitted.
+       *
+       * `segments` is unchanged and `extractBlocks` still never sees a heading, so the
+       * corpus output is byte-identical to what it was — the same rows, the same spans, the
+       * same `EXTRACTOR_VERSION`. This second list exists for the one caller that needs a
+       * *contiguous* cover of the document rather than a measurement of it: a draft, whose
+       * blocks are the stored artefact and must reassemble into the document they came from.
+       * Collected here rather than re-found by a second walk so that fence handling, the
+       * `#`-inside-a-code-block case included, has exactly one implementation.
+       */
+      headingSpans.push({
+        depth: heading[1].length,
+        text,
+        startChar: line.start,
+        endChar: line.end,
+      });
       i += 1;
       continue;
     }
@@ -363,7 +392,23 @@ function segmentBody(body: string, context: SegmentContext): Segment[] {
     i = j + 1;
   }
 
-  return segments;
+  return { segments, headings: headingSpans };
+}
+
+/**
+ * The heading lines of a body, with their character spans (plan step C1).
+ *
+ * `HeadingNode` on the fingerprint carries depth, text and role but no offsets, because
+ * nothing measuring a corpus needs to know *where* a heading is. Tiling a draft does: the
+ * blocks have to reassemble into the document, and the extractor deliberately drops
+ * headings on the floor.
+ *
+ * Runs the real segmenter with an empty heading context — role attribution is the only
+ * thing that needs, and the caller does not want roles, it wants positions. Cheap: one
+ * linear walk over a document that is already in memory.
+ */
+export function headingSpans(body: string): HeadingSpan[] {
+  return segmentBody(body, { headings: [] }).headings;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -791,7 +836,7 @@ export type BlockExtractInput = {
 };
 
 export function extractBlocks(input: BlockExtractInput): SkillBlock[] {
-  const segments = segmentBody(input.body, { headings: input.headings });
+  const { segments } = segmentBody(input.body, { headings: input.headings });
   const headingTextByOrder = new Map(input.headings.map((h) => [h.order, h.text]));
 
   return segments.map((segment, index) => {

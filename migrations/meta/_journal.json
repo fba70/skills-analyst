@@ -218,6 +218,13 @@
       "when": 1788783173238,
       "tag": "0030_needy_nighthawk",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1788862969268,
+      "tag": "0031_sudden_sleeper",
+      "breakpoints": true
     }
   ]
 }
