@@ -54,6 +54,7 @@
     "verify:http-deadline": "tsx --conditions=react-server scripts/verify-http-deadline.mts",
     "verify:dedup": "tsx --conditions=react-server scripts/verify-dedup.mts",
     "verify:taxonomy": "tsx --conditions=react-server scripts/verify-taxonomy.mts",
+    "verify:models": "tsx --conditions=react-server scripts/verify-models.mts",
     "verify:archetypes": "tsx --conditions=react-server scripts/verify-archetypes.mts",
     "verify:blocks": "tsx --conditions=react-server scripts/verify-blocks.mts",
     "verify:tokens": "tsx --conditions=react-server scripts/verify-tokens.mts",

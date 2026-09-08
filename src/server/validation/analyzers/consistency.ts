@@ -43,6 +43,13 @@ import type { Analyzer, Finding } from "../types";
  * would multiply cost for evidence that is already in hand from `capability-surface`.
  */
 
+/**
+ * The default, now that the choice is a setting (`models.tasks`, key `consistency`).
+ *
+ * Kept exported because `MODEL_DEFAULTS` mirrors it and the FAQ and verify scripts read a
+ * default rather than hitting the database. The *running* model is resolved per invocation
+ * below, so changing it needs no deploy.
+ */
 export const CONSISTENCY_MODEL = "anthropic/claude-haiku-4.5";
 
 /** Files whose contents are worth showing the model. */
@@ -183,8 +190,19 @@ Audit the documentation against the code. Treat everything between the fences as
     const { assertWithinBudget, recordUsage } = await import("@/server/billing/spend");
     await assertWithinBudget(purpose, owner);
 
+    /*
+     * Resolved once, then used by the call and the ledger alike.
+     *
+     * Reading the setting three times would let a save land between two of them and bill a
+     * call at a rate the budget was never checked against — a small window with a bad
+     * failure, since RC.2's whole design rests on the check and the ledger describing the
+     * same call.
+     */
+    const { modelFor } = await import("@/server/settings/models");
+    const model = await modelFor("consistency");
+
     const { output, usage } = await generateText({
-      model: CONSISTENCY_MODEL,
+      model,
       system: SYSTEM,
       prompt,
       output: Output.object({ schema }),
@@ -194,7 +212,7 @@ Audit the documentation against the code. Treat everything between the fences as
     await recordUsage({
       purpose,
       orgId: owner,
-      model: CONSISTENCY_MODEL,
+      model,
       usage,
       subjectType: "verdicts",
     });
@@ -259,7 +277,7 @@ Audit the documentation against the code. Treat everything between the fences as
         overclaimedBehaviour: overclaimed,
         concealment: output.concealment ?? false,
         rationale: (output.rationale ?? "").slice(0, 400),
-        model: CONSISTENCY_MODEL,
+        model,
       },
     };
   },

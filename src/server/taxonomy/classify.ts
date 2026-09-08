@@ -49,6 +49,15 @@ import {
  */
 export const MODEL = "google/gemini-2.5-flash-lite";
 
+/*
+ * The running model is a setting (`models.tasks`, key `taxonomy`); this is its default.
+ *
+ * **Changing it does not break R7.2**, and that is worth stating because a prompt change
+ * under a fixed `classifier_version` *would*: `skill_categories.model` records the gateway
+ * id per row, so labels from two models never wear one number even though they share a
+ * vocabulary version. That column is what makes this knob safe to turn.
+ */
+
 /**
  * Hard ceiling on one classification run.
  *
@@ -265,8 +274,12 @@ export async function classifySkill(input: ClassifyInput): Promise<ClassifyResul
   const { assertWithinBudget, recordUsage } = await import("@/server/billing/spend");
   await assertWithinBudget("corpus_taxonomy", null);
 
+  /* Resolved once, so the call, the ledger and the stored row all name the same model. */
+  const { modelFor } = await import("@/server/settings/models");
+  const model = await modelFor("taxonomy");
+
   const { output, usage } = await generateText({
-    model: MODEL,
+    model,
     /**
      * `instructions` is v7's name for `system`, and the whole cacheable prefix sits here.
      *
@@ -297,6 +310,7 @@ export async function classifySkill(input: ClassifyInput): Promise<ClassifyResul
        * default we did not choose, it is a multiplier on the one axis where this model is
        * least cheap.
        */
+      /* Inert for non-Google models; the gateway drops provider options it does not own. */
       google: { thinkingConfig: { thinkingBudget: 0 } },
     },
   });
@@ -306,7 +320,7 @@ export async function classifySkill(input: ClassifyInput): Promise<ClassifyResul
   await recordUsage({
     purpose: "corpus_taxonomy",
     orgId: null,
-    model: MODEL,
+    model,
     usage,
     subjectType: "skill_categories",
   });
@@ -315,7 +329,7 @@ export async function classifySkill(input: ClassifyInput): Promise<ClassifyResul
     // The schema constrains shape, not membership — an id outside the vocabulary is still
     // possible, and is dropped by the caller against `isValidCategory`.
     classification: enforceLimits(output),
-    model: MODEL,
+    model,
     classifierVersion: TAXONOMY_VERSION,
   };
 }

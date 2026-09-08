@@ -391,6 +391,45 @@ if (connected) {
     console.info(
       `  note  ${totals[0].n} signals across ${totals[0].skills} skill(s), ${totals[0].kinds} kind(s)`,
     );
+
+    /**
+     * The list of uncollected kinds, checked against the table rather than trusted.
+     *
+     * `UNIMPLEMENTED_KINDS` is a statement about the *code* — which kinds no path can
+     * produce — so it cannot be derived from data. It can be contradicted by data, and it
+     * was: `flagged` stayed on the list after `upholdFlag` started writing it, and
+     * Settings → Loop consequently told an operator *"Not collected yet: flagged. Flagging
+     * needs a reader route (R2.5)"* while recording through the route it asked for.
+     *
+     * Zero rows is the property. A kind the platform genuinely cannot write has none, so a
+     * single stored row proves the list is stale and names the kind to remove. This is the
+     * one mechanism that makes forgetting it loud instead of silent — the same reason
+     * `verify:archetypes` compiles the lifecycle expression rather than holding a copy.
+     */
+    const { rows: claimed } = await c.query<{ kind: string; n: string }>(
+      `select kind, count(*)::text as n from outcome_signals
+       where kind = any(string_to_array($1, ','))
+       group by kind`,
+      [UNIMPLEMENTED_KINDS.join(",")],
+    );
+    check(
+      "no kind listed as uncollected has actually been collected",
+      claimed.length === 0,
+      claimed.length > 0
+        ? `${claimed.map((r) => `${r.kind} has ${r.n} rows`).join(", ")} — remove it from UNIMPLEMENTED_KINDS`
+        : `${UNIMPLEMENTED_KINDS.join(", ") || "nothing"} still unwritten, as claimed`,
+    );
+
+    /*
+     * And the other direction: a kind that IS implemented must not be on the list.
+     * `flagged` is the one this file exists to pin, because it is the kind whose absence
+     * from the dashboard was visible to an operator for a day.
+     */
+    check(
+      "flagged is no longer claimed to be uncollected",
+      !(UNIMPLEMENTED_KINDS as readonly string[]).includes("flagged"),
+      "upholdFlag writes it; a reader route exists",
+    );
   }
   await c.end();
 }

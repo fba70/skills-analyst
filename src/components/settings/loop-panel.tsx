@@ -2,7 +2,7 @@ import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { OUTCOME_META, type OutcomeKind } from "@/lib/outcomes";
+import { OUTCOME_META, UNIMPLEMENTED_REASON, type OutcomeKind } from "@/lib/outcomes";
 import type {
   ArchetypeActivity,
   LoopEvent,
@@ -285,11 +285,25 @@ function OutcomeCard({
           </>
         )}
 
+        {/*
+          The uncollected list carries its own reasons, and vanishes when there are none.
+          Its previous form hard-coded "Flagging needs a reader route (R2.5)" in prose beside
+          a list held in another file, so when flagging shipped the list shrank and the
+          sentence did not — this panel told an operator a dependency was outstanding while
+          recording through it.
+        */}
+        {unimplemented.length > 0 ? (
+          <p className="text-muted-foreground/80 text-xs">
+            Not collected yet:{" "}
+            {unimplemented
+              .map((kind) => `${kind} (${UNIMPLEMENTED_REASON[kind] ?? "not wired yet"})`)
+              .join(", ")}
+            .
+          </p>
+        ) : null}
         <p className="text-muted-foreground/80 text-xs">
-          Not collected yet: {unimplemented.join(", ")}. Flagging needs a reader route (R2.5);
-          eval deltas need the Eval Lab. Nothing here feeds archetype mining yet — wiring a
-          near-empty input into the thing that scaffolds every future draft is how a loop
-          poisons itself with its own noise.
+          Nothing here feeds archetype mining yet — wiring a near-empty input into the thing
+          that scaffolds every future draft is how a loop poisons itself with its own noise.
         </p>
       </CardContent>
     </Card>

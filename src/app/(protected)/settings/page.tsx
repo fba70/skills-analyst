@@ -12,6 +12,8 @@ import { QuarantinePanel } from "@/components/settings/quarantine-panel";
 import { ReviewPanel } from "@/components/settings/review-panel";
 import { SourcesPanel } from "@/components/settings/sources-panel";
 import { LoopPanel } from "@/components/settings/loop-panel";
+import { rateFor } from "@/lib/llm-pricing";
+import { ModelsPanel } from "@/components/settings/models-panel";
 import { RateLimitPanel } from "@/components/settings/rate-limit-panel";
 import { SchedulePanel } from "@/components/settings/schedule-panel";
 import { SpendPanel } from "@/components/settings/spend-panel";
@@ -26,6 +28,8 @@ import { crawlCoverage } from "@/server/crawl/run";
 import { sourceDiversity } from "@/server/analytics/templates";
 import { archetypeSummary } from "@/server/analytics/archetype-run";
 import { archetypeActivity, loopEvents, loopMetrics } from "@/server/analytics/loop";
+import { MODEL_TASKS } from "@/lib/models";
+import { getModelSettings } from "@/server/settings/models";
 import { getRateLimits } from "@/server/settings/rate-limits";
 import { getSchedule, stageDue } from "@/server/settings/schedule";
 import { budgetState, spendBreakdown } from "@/server/billing/spend";
@@ -82,6 +86,7 @@ const TABS = [
   "loop",
   "schedule",
   "limits",
+  "models",
   "flags",
   "plans",
   "users",
@@ -133,7 +138,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, flags, platformBudget, breakdown, metrics, activity, loopLog, schedule, rateLimits] =
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, flags, platformBudget, breakdown, metrics, activity, loopLog, schedule, rateLimits, models] =
     await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
@@ -158,6 +163,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "loop" ? loopEvents() : null,
     tab === "schedule" ? getSchedule() : null,
     tab === "limits" ? getRateLimits() : null,
+    tab === "models" ? getModelSettings() : null,
   ]);
 
   // Every tab except Ingestion is a paginated list.
@@ -284,6 +290,19 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
 
         {/* R8.8's limit, as a setting. The panel says which scope is actually in effect. */}
         {tab === "limits" && rateLimits ? <RateLimitPanel limits={rateLimits} /> : null}
+        {/*
+          Rates are resolved here rather than in the panel: `llm-pricing` is the module
+          billing reads, and a client component asking it for a number would be a second
+          copy of the price table shipped to the browser.
+        */}
+        {tab === "models" && models ? (
+          <ModelsPanel
+            models={models}
+            rates={Object.fromEntries(
+              MODEL_TASKS.map((task) => [models[task], rateFor(models[task]).inputPerMTok]),
+            )}
+          />
+        ) : null}
 
         {tab === "loop" && metrics && activity && loopLog && outcomes ? (
           <LoopPanel

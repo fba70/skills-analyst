@@ -70,6 +70,12 @@ import type { Scaffold } from "./scaffold";
  */
 export const BUILDER_MODEL = "anthropic/claude-sonnet-5";
 
+/*
+ * The running model is a setting (`models.tasks`, key `builder`); this is its default.
+ * Exported still, because `MODEL_DEFAULTS` mirrors it and `verify:builder` asserts against a
+ * default rather than reading the database.
+ */
+
 /** One generation, so a runaway loop cannot bill an org for a novel. */
 export const MAX_BODY_CHARS = 24_000;
 
@@ -163,11 +169,27 @@ export async function generateDraft(input: GenerateInput): Promise<GeneratedDraf
   const { assertWithinBudget, recordUsage } = await import("@/server/billing/spend");
   await assertWithinBudget("builder", input.orgId);
 
+  /*
+   * Resolved once and used by the call, the ledger and the returned record alike, so all
+   * three name the same model. Reading the setting more than once would let a save land
+   * between two reads and bill a call at a rate the budget never checked.
+   */
+  const { modelFor } = await import("@/server/settings/models");
+  const model = await modelFor("builder");
+
   const { output, usage } = await generateText({
-    model: BUILDER_MODEL,
+    model,
     instructions: {
       role: "system",
       content: INSTRUCTIONS,
+      /*
+       * Anthropic's cache-control, which the gateway ignores for other providers.
+       *
+       * Left unconditional rather than switched on the resolved id: it is a hint, its
+       * absence costs money rather than correctness, and a provider test here would be a
+       * second place that has to know which ids are Anthropic. If a non-Anthropic model
+       * becomes the default for authoring, this is the line to revisit.
+       */
       providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
     },
     prompt: userPrompt(input),
@@ -187,7 +209,7 @@ export async function generateDraft(input: GenerateInput): Promise<GeneratedDraf
   await recordUsage({
     purpose: "builder",
     orgId: input.orgId,
-    model: BUILDER_MODEL,
+    model,
     usage,
     subjectType: "skill_drafts",
   });
@@ -197,7 +219,7 @@ export async function generateDraft(input: GenerateInput): Promise<GeneratedDraf
     frontmatterName: output.frontmatterName.trim(),
     description: output.description.trim(),
     body: output.body.slice(0, MAX_BODY_CHARS).trim(),
-    model: BUILDER_MODEL,
+    model,
   };
 }
 

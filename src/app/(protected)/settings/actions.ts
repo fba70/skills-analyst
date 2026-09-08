@@ -23,6 +23,11 @@ import { db } from "@/server/db";
 import { skills, skillVersions, sources } from "@/server/db/schema";
 import { requireAdmin, setUserBanned, setUserRole } from "@/server/dal/admin";
 import { setSchedule, type ScheduleSettings } from "@/server/settings/schedule";
+import {
+  getModelSettings,
+  setModelSettings,
+  type ModelSettings,
+} from "@/server/settings/models";
 import { setRateLimits, type RateLimitSettings } from "@/server/settings/rate-limits";
 import {
   approveRepo,
@@ -805,6 +810,34 @@ export async function saveRateLimitsAction(
       message: saved.mcpFree.enabled
         ? `Free scope: ${saved.mcpFree.perMinute}/min, ${saved.mcpFree.perHour}/hour`
         : "Free scope: unlimited (limiter off)",
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Which model each paid task calls (RC.2, and "policy becomes data").
+ *
+ * Same shape as `saveRateLimitsAction`, and admin-only for the same reason: an action is a
+ * POST endpoint, so the page guard protects the view and not the operation.
+ *
+ * The refusal is passed through rather than thrown. `setModelSettings` rejects an unpriced
+ * id, and that message names the id and the file to add a rate to — the most actionable
+ * thing this screen can say, and it would be lost if it came back as a generic failure.
+ */
+export async function saveModelSettingsAction(
+  next: Partial<ModelSettings>,
+): Promise<ActionResult> {
+  try {
+    const actor = await requireAdmin();
+    const saved = await setModelSettings(next, actor.userId);
+    if (!saved.ok) return { ok: false, message: saved.message };
+    revalidatePath("/settings");
+    const current = await getModelSettings();
+    return {
+      ok: true,
+      message: `Authoring on ${current.builder}, classification on ${current.taxonomy}`,
     };
   } catch (error) {
     return failure(error);

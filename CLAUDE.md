@@ -273,42 +273,114 @@ sits at 0.35%.
 > cheap; verifying it honestly was the expensive part, and that is the durable lesson from
 > this stretch.
 
-### Phase A is done; what is left is Phase B onwards
+### Doc 2 is finished. Everything left is Doc 6.
 
-Six steps, all shipped and all verified against the live database:
+Phases A and B are complete and step C3 with them. **No P0 that Doc 2 owns is open.**
 
 | | | |
 |---|---|---|
-| A1 | Spec bookkeeping | §10 plan rewritten, §10b re-audited, R8.x re-homed as §7.8 |
-| A2 | Block taxonomy + mining v1 | `verify:blocks` 43 checks |
-| A3 | Activation cost (RW.9 measurement) | `verify:tokens` 17 checks |
-| A4 | Lifecycle states (RK.1) | `verify:lifecycle` 32 checks |
-| A5 | Entitlements (RC.1) | `verify:entitlements` 25 checks |
-| A6 | pgvector unparked | `verify:embeddings` 21 checks |
+| A1–A6 | Foundations | blocks, activation cost, lifecycle, entitlements, pgvector |
+| B1 | Outcome telemetry (R6.3) | `verify:outcomes` 28 checks |
+| B2 | Public writes (R2.5, R1.8, takedowns) | `verify:flags` 24 checks |
+| B3 | Similarity for authors (R3.6) | `verify:embeddings` 26 checks |
+| B4 | Citable permalink (R8.4) + search re-measured | `verify:search` 11 checks |
+| C3 | Block grammar, library, deviation marks | `verify:blocks` 55, `verify:archetypes` 20 |
 
-**Every remaining P0 is a product gap, and the corpus half is self-maintaining.** The
-ordered plan is Doc 2 §10. Next is **B1, outcome telemetry (R6.3)** — the largest single gap
-in the product, and the half that turns a loop into a loop.
+The ordered plan for everything remaining is **Doc 2 §10, Phases C through G** — twenty-three
+steps, re-derived on 2026-09-08 against the code rather than against the previous audit.
+**Next is C1**, and C1 is the keystone: Interview mode, Distill, block editing, shared blocks,
+MCP creation and improve-an-existing-skill all operate on a draft made of typed blocks, and
+none of them can be built against a body string without being rewritten later.
 
-The gaps that survived Phase A:
+**Four steps are unblocked right now** and were not when the plan was first written, because
+A2, A4, A6 and B1 landed their dependencies: impact analytics is a surface over a query that
+already exists (`outcomesForSkill` has zero call sites), freshness is a surface over a
+mechanism that already runs, the demand board needs only query logging, and the knowledge
+graph has all three of its inputs.
 
-- **R6.3 outcome telemetry** — absent. No post-publication signal is attributed to an
-  archetype version, so "what good looks like" is still a claim about what the corpus
-  contains rather than about what worked. It is also what makes RK.1's `battle-tested`
-  reachable and RK.7's impact analytics possible.
-- **R2.5 community flagging** — absent. No route from a reader to the quarantine queue.
-- **R1.8 public submission** — partial. `submitRepository` is already the shared path, so
-  this is a route and a rate limit rather than new logic.
-- **R3.6 similarity insight for authors** — the vectors now exist (A6) and
-  `similarToText` answers the query; nothing surfaces it to an author yet. Cheapest of these.
-- **R1.1(d) ClawHub connector** — absent and parked. skills.sh reconciliation delivered
-  2,323 repositories from four sitemap fetches; the corpus is no longer short of volume.
-- **R8.4 per-version permalink** — absent, so a verdict still cannot be cited.
-- **R7.4 performance** — search was last measured on a 16K corpus and is now 49K. Worth
-  re-measuring; the p95-at-500K target remains unproven.
+> **What the 2026-09-08 re-audit found, and it is worth knowing the shape.** The §10b table
+> had drifted by two commits and was wrong in both directions. Four rows were **stale-done**
+> (R4.3, R8.4, the `flagged` half of R6.3, the similarity half of R5.3). Three were
+> **understated** — RK.2 and RK.6 are partial rather than absent, and RK.1's battle-tested
+> branch is live rather than unreachable. Two stated blockers were **already dead**: R3.5 was
+> waiting on embeddings that shipped in A6, RM.3 on an entitlement that shipped in A5.
+>
+> A status table read against a previous status table drifts silently. This one is now read
+> against the code, and `pnpm db:audit` supplies the numbers rather than a human copying them.
 
-**RC.1 has left this list**: entitlements exist as of A5, nothing served is gated, and the
-free-tier guarantee now holds by mechanism as well as by construction.
+### The Loop panel told an operator a dependency was outstanding while recording through it
+
+`src/lib/outcomes.ts` · `pnpm verify:outcomes` (28 checks, free)
+
+`UNIMPLEMENTED_KINDS` is the list of outcome kinds no code path can produce, so a dashboard
+can say *not collected* rather than *none*. `flagged` stayed on it after B2 shipped the reader
+route and `upholdFlag` began writing the row — so Settings → Loop reported **"Not collected
+yet: flagged. Flagging needs a reader route (R2.5)"** on a platform that had one.
+
+Two things were wrong and both are fixed. The list is corrected, and the *reasons* moved into
+`UNIMPLEMENTED_REASON` beside it: the panel used to carry them as prose, so the list could
+shrink in one file while its explanation lived in another. A reason now disappears exactly
+when its kind does, and the paragraph vanishes entirely when the list empties.
+
+> **The list cannot be derived, so it is checked instead.** "Implemented and nobody has done
+> it yet" and "no code path can produce this" both show as zero rows, and only the first
+> should read as *none so far* — so the list is a statement about the code and has to stay
+> hand-written. `verify:outcomes` therefore asserts **every kind named on it has zero stored
+> rows**. Write one and the suite goes red naming the kind to remove. Same discipline as
+> `verify:lifecycle` compiling the lifecycle expression instead of holding a copy of it.
+
+### A model id is a setting now, which the plan decided two days before it was true
+
+`src/lib/models.ts` · `src/server/settings/models.ts` · Settings → **Models**
+`pnpm verify:models` (20 checks, free)
+
+The plan's 2026-09-06 entry said every model call should hold its id **as a setting rather
+than a constant**. Half of it shipped — the classifier moved to Flash-Lite and the cost fell
+accordingly — and the other half did not: four ids stayed hard-coded in four modules. That is
+the fourth time this codebase has produced a decision recorded and then not applied, and it
+mattered more than it looked, because every remaining step in the plan is a *new* model call
+that would have arrived with its own constant.
+
+No migration was needed. `platform_settings` is a generic key/jsonb table, so this is the
+third instalment of "policy becomes data" in pure code, after the schedule and the rate
+limits.
+
+- **Resolved once per invocation**, then used by the model call, the budget check and the
+  ledger alike. Reading the setting three times would let a save land between two of them and
+  bill a call at a rate the budget was never checked against, and RC.2's whole design rests
+  on the check and the ledger describing the same call.
+- **An unpriced id is refused rather than stored.** `rateFor` falls back to the most
+  expensive rate known, which is right for a budget and wrong as the silent consequence of a
+  typo — and the person who made the typo is the only one who could have caught it
+  immediately. The refusal names the id and the file to add a rate to.
+- **Embeddings are deliberately not a task.** The vector width is fixed in the column type
+  and in `EMBEDDER_VERSION`, so changing that model is a migration and a full re-embed. A
+  control that cannot take effect is worse than no control.
+- **Changing the classifier does not break R7.2**, because `skill_categories.model` records
+  the gateway id per row. Labels from two models never wear one number even though they share
+  a vocabulary version. That column is what makes this knob safe to turn.
+- **The vocabulary lives in `src/lib/models.ts`**, a leaf module with no imports, because the
+  admin panel is a client component and the settings module is `server-only`. Fifth time that
+  split has been needed, after `dialects.ts`, `quality.ts`, `capabilities.ts` and
+  `section-roles.ts` — it is a convention now rather than a discovery.
+
+> **The verify script broke the platform once while being written, which is the best argument
+> for the shape it ended up in.** The write probe saved its test value and then crashed on the
+> *next* statement, an audit query naming a column that does not exist. The restore never ran
+> and the classifier was left pointed at `claude-haiku-4.5` instead of `gemini-2.5-flash-lite`
+> — **ten times the input rate, live, with nothing on any screen saying so.**
+>
+> That is exactly what `verify:schedule` documents about its own first version, which cleaned
+> up with a delete that RLS refused silently and left the live scheduler holding clamp-test
+> values. The restore is now in a `finally`, and the suite asserts the settings are left as
+> they were found.
+>
+> Two smaller lessons from the same script. Its swap target was a hard-coded model id that the
+> price table had never held, so the write probe **skipped** and reported green while three of
+> its most important assertions had not run — the skip was hiding a broken fixture, not a
+> passing path. And its actor was the string `"verify-script"`, which the `updated_by` foreign
+> key correctly refused: a settings change has to be attributable to somebody who exists.
+
 
 ### What changed on 2026-09-01
 
@@ -372,19 +444,31 @@ originally specified — Doc 6 argues the v1 builder is shallow at the *structur
 proposes a block model underneath it, and **that block model now exists** (A2). Building the
 old spec would be work thrown away.
 
-Phase A landed the foundations the rest of the programme is built against: blocks (A2),
-activation cost (A3), lifecycle (A4), entitlements (A5) and vectors (A6). Phase B closes the
-Doc 2 loop gaps, starting with outcome telemetry.
+Phase A landed the foundations the rest of the programme is built against — blocks (A2),
+activation cost (A3), lifecycle (A4), entitlements (A5), vectors (A6) — and Phase B closed
+every Doc 2 loop gap. §10's Phases C through G are the whole remaining programme.
 
-### Smaller named gaps, from the §10b audit
+### Smaller named gaps, and where they now close
 
-- **R2.8** — no collision-risk check against existing skills in the same category.
-- **R4.2 / R4.3** — no live editor; archetype deviations are not visibly marked.
-  *Superseded by Doc 6.*
-- **R5.1 / R5.3 / R5.4** — elicitation is a form not a conversation; no gap detection; no
-  per-suggestion accept/reject, so no structured feedback events. *Superseded by Doc 6.*
-- **RC.4** — no billing webhooks. No longer blocked: `setPlan` is the idempotent write a
-  webhook would call, and its upsert supplies the late-and-duplicate tolerance RC.4 asks for.
+Each of these used to be its own line item. All of them are now a consequence of a plan step
+rather than work to schedule separately, which is worth knowing before anyone opens one.
+
+- **R2.8 collision risk** — the same measurement as RW.8's trigger-collision check, pointed
+  at a new draft instead of a category. Closes with **D2**.
+- **R4.2 live editor / R4.3 deviations** — R4.3 is **done** at block granularity. The editor
+  is block editing, which is **C1b**.
+- **R5.1 / R5.4 elicitation and per-suggestion feedback** — one motion in Interview mode,
+  because every turn emits typed candidate blocks the author accepts or rejects. **C2b**.
+- **R5.3 scope refinement** — the similarity half is **done** (B3); the demand-signal half is
+  RK.5 and closes with **E3**.
+- **R4.7 revisions / R5.6 improve an existing skill** — both are cheap over typed blocks and
+  incoherent over a body string. **C1b** and **C6**.
+- **R4.8 / R5.7 eval visibility** — both are "the builder can see eval results", which needs
+  results. **D1**.
+- **RC.4 billing webhooks** — not blocked: `setPlan` is the idempotent write a webhook would
+  call and its upsert already tolerates late and duplicate delivery. **F2**.
+- **RC.3 metering** — narrower than it reads. Every *model* call is metered and MCP makes
+  none; what is missing is request-level accounting, and it needs a schema decision. **F1**.
 
 ### Deliberately deferred
 
@@ -3605,6 +3689,8 @@ pnpm verify:otp | verify:db-retry        # both free, no network, no database
 pnpm verify:http-deadline | verify:rate-limit   # free; both reproduce the bug first
 pnpm verify:dedup                        # repo identity folds case; free, probes then rolls back
 pnpm verify:taxonomy | verify:archetypes # vocabulary and mined guidance; both free
+pnpm verify:models                       # a model id is a setting, priced and audited; free
+pnpm verify:search                       # index path and latency at corpus size; free
 pnpm verify:blocks | verify:lifecycle | verify:outcomes | verify:flags   # all free
 pnpm db:audit                            # is the derived data current? one command, free
 pnpm verify:blocks                       # block taxonomy and span invariants; free

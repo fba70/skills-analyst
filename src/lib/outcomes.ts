@@ -60,10 +60,11 @@ export const OUTCOME_KINDS = [
   /** Replaced by a named skill (RK.1). Negative for this skill, neutral for its category. */
   "superseded",
   /**
-   * A reader reported a problem (R2.5). **Not written yet** — plan step B2 builds the route.
+   * A reader reported a problem and a curator upheld it (R2.5).
    *
-   * Named here because the aggregate has to be able to say "no flags" rather than have no
-   * concept of one, and because a flag is the signal most likely to matter per unit volume.
+   * Written by `upholdFlag`, never by `submitFlag`. That split is the whole design of the
+   * flagging surface: an accusation alone must not be able to strip a trust tier, because
+   * `flagged` is adverse and adverse outcomes bar `battle-tested`.
    */
   "flagged",
   /**
@@ -80,8 +81,38 @@ export function isOutcomeKind(value: unknown): value is OutcomeKind {
   return typeof value === "string" && (OUTCOME_KINDS as readonly string[]).includes(value);
 }
 
-/** Kinds nothing writes yet, so a dashboard can say "not collected" rather than "none". */
-export const UNIMPLEMENTED_KINDS: readonly OutcomeKind[] = ["flagged", "eval-delta"];
+/**
+ * Kinds nothing writes yet, so a dashboard can say "not collected" rather than "none".
+ *
+ * The distinction is worth a list rather than a query: "implemented and nobody has done it
+ * yet" and "no code path can produce this" are opposite facts that both show as zero rows,
+ * and only the first should read as *none so far*.
+ *
+ * **This list drifted once and shipped a wrong sentence to an operator.** `flagged` stayed
+ * on it after `upholdFlag` began writing the row, so Settings → Loop reported *"Not collected
+ * yet: flagged. Flagging needs a reader route (R2.5)"* on a platform that had one and was
+ * recording through it. The panel understated its own collection and repeated a dependency
+ * that no longer existed — the same shape as a status command measuring the gate with
+ * something that is not the gate.
+ *
+ * A hand-maintained list cannot be derived from the data, so it is **checked against the
+ * data instead**: `verify:outcomes` asserts every kind named here has zero stored rows. Write
+ * one and the suite goes red, naming the kind to remove. That is the only mechanism that
+ * makes forgetting this list loud rather than silent.
+ */
+export const UNIMPLEMENTED_KINDS: readonly OutcomeKind[] = ["eval-delta"];
+
+/**
+ * Why each uncollected kind is uncollected, so the sentence cannot outlive its reason.
+ *
+ * The panel used to carry the reasons as prose — *"Flagging needs a reader route (R2.5); eval
+ * deltas need the Eval Lab"* — which is how the stale claim survived: the list shrank in one
+ * file and the explanation lived in another. Keyed off the same kind, a reason disappears
+ * exactly when the kind does.
+ */
+export const UNIMPLEMENTED_REASON: Record<string, string> = {
+  "eval-delta": "needs the Eval Lab to exist",
+};
 
 export type Valence = "positive" | "negative" | "neutral";
 
