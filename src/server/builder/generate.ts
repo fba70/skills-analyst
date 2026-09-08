@@ -29,6 +29,27 @@ import type { Scaffold } from "./scaffold";
  * reason, the caller stores whichever came back, and the event is logged either way. A
  * refusal is a normal, cheap, first-class answer.
  *
+ * ## Corpus fragments never reach this prompt, and the type system is what stops them
+ *
+ * The block library (Doc 6 RW.3) resolves real passages out of real skills so an author can
+ * read what a good guardrail looks like. It would be one line to put those passages in this
+ * prompt as few-shot examples, and it must not happen.
+ *
+ * Most of this corpus is `attribution_required`. A model handed an attributed paragraph can
+ * reproduce it, in whole or in part, into a document that carries no attribution — so the
+ * platform would be laundering a licence obligation through its own builder, on the exact
+ * axis the download route returns 451 to protect. The second reason is Doc 2's risk register:
+ * pasting the strong band's own sentences into every new draft is archetype homogenisation
+ * with the volume turned up.
+ *
+ * What travels instead is **our own vocabulary about the corpus** — a block type's label, its
+ * blurb and its two prevalence numbers. Those are facts about categories we defined, not
+ * somebody's prose, which is the same line R6.2's telemetry columns hold.
+ *
+ * This is structural rather than a promise: `Scaffold` has no fragment field, so a fragment
+ * cannot reach `userPrompt` without someone widening the type first. Widening it is the
+ * change to refuse.
+ *
  * ## Untrusted input, in both directions
  *
  * The author's text is untrusted (R7.3), and so is anything that reached the scaffold from
@@ -101,12 +122,17 @@ export type GenerateInput = {
 
 const INSTRUCTIONS = `You write agent skills: Markdown documents that tell an AI agent how to perform a task.
 
-You will be given a section skeleton derived from a corpus of real skills, the author's own
-description of what they need, and their notes for individual sections. Write the document.
+You will be given a section skeleton derived from a corpus of real skills, a block grammar
+saying what the well-regarded skills in the category write inside those sections, the
+author's own description of what they need, and their notes for individual sections. Write
+the document.
 
 Rules:
 - Follow the given section skeleton. Use the exact headings supplied, in the order supplied.
   You may add a section the author's notes clearly require; do not drop a supplied one.
+- The block grammar is evidence, not a checklist. Write the blocks this skill genuinely
+  needs and omit any you would have to invent content for. A document carrying one of every
+  block type is worse than a shorter one that carries the two the task actually calls for.
 - The author's notes are the source of truth for content. Where a note is thin, write the
   section from the purpose rather than inventing specifics — never invent commands, file
   paths, URLs, credentials, API names or version numbers that were not given to you.
@@ -204,6 +230,36 @@ function userPrompt(input: GenerateInput): string {
     })
     .join("\n\n");
 
+  /**
+   * The block grammar, given as *what to write inside those sections* (Doc 6 RW.2).
+   *
+   * This is the half the section skeleton could not express. At full corpus coverage the
+   * best section lift is around +10 while `decision-rule` reaches +21 — so a prompt built
+   * only from headings asks for the shape that stopped discriminating and says nothing about
+   * the content that still does.
+   *
+   * Each line carries its own evidence for the same reason the sections do (R5.2): a model
+   * told "70% against 49%" can weigh a block against the author's purpose, where a bare
+   * instruction to include one reads as mandatory and produces a decision rule in a skill
+   * that has no decisions to make.
+   *
+   * Density is stated only where the strong band writes several. "Usually more than one"
+   * changes what gets written; "1.2 on average" is noise dressed as precision.
+   */
+  const blocks = scaffold.blocks
+    .map((block) => {
+      const count =
+        block.strongDensity >= 1.8
+          ? `; well-regarded skills here usually carry ${Math.round(block.strongDensity)} or so`
+          : "";
+      return (
+        `- ${block.label}: ${block.blurb} ` +
+        `(${block.strongPrevalence}% of well-regarded skills in this category against ` +
+        `${block.weakPrevalence}% of the rest${block.required ? "; expected" : ""}${count})`
+      );
+    })
+    .join("\n");
+
   const conventions = scaffold.traits
     .slice(0, 6)
     .map((t) => `- ${t.label} (${t.strongPrevalence}% vs ${t.weakPrevalence}%)`)
@@ -240,6 +296,21 @@ function userPrompt(input: GenerateInput): string {
     sections,
     "</section-skeleton>",
     "",
+    /*
+     * After the sections, never instead of them, and explicitly not a checklist.
+     *
+     * The risk this tag runs is a document that contains one of everything: eleven block
+     * types offered to a model that treats a list as a specification produces a skill with a
+     * glossary nobody needed. So the instruction says these are the passages that separate
+     * good skills in the category and that a block with nothing real to say is left out —
+     * the same "measured, not mandated" posture the archetype pages take.
+     */
+    blocks
+      ? `<block-grammar>\nWhat the well-regarded skills in this category write INSIDE those ` +
+        `sections, roughly in this order. Percentages are the evidence for each. Write the ` +
+        `ones this skill genuinely needs and leave out any you would have to invent content ` +
+        `for — an empty block is worse than a missing one.\n${blocks}\n</block-grammar>\n`
+      : "",
     conventions ? `<conventions-in-this-category>\n${conventions}\n</conventions-in-this-category>\n` : "",
     avoid ? `<avoid-in-this-category>\n${avoid}\n</avoid-in-this-category>\n` : "",
     scaffold.norms.medianWords > 0

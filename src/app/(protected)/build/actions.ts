@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 
+import { isBlockType } from "@/lib/block-types";
+import { libraryFragments, type LibraryResult } from "@/server/analytics/block-library";
 import { requireSession } from "@/server/dal/session";
 import { buildScaffold, type Scaffold } from "@/server/builder/scaffold";
 import { createDraft, generateForDraft } from "@/server/builder/drafts";
@@ -204,5 +206,44 @@ export async function findSimilarAction(text: string): Promise<
     return { ok: true, report };
   } catch (error) {
     return { ok: false, message: (error as Error).message.slice(0, 300) };
+  }
+}
+
+/**
+ * Real fragments of one block type, for the compose panel (Doc 6 RW.3).
+ *
+ * On demand and one type at a time, like `findSimilarAction` beside it, because each call is
+ * a set of object reads against an EU bucket. Loading all of a category's block types with
+ * the page would be five bundle fan-outs before the author had asked to see any of them.
+ *
+ * **Read-only and public data.** The session is still resolved — every action is a POST
+ * endpoint and that rule has no exceptions — but nothing here is org-scoped: the library
+ * reads the public corpus, and `libraryFragments` pins `org_id is null` so a Team-tier
+ * private skill's blocks can never surface as somebody else's example (RC.5).
+ */
+export async function blockFragmentsAction(
+  category: string,
+  type: string,
+): Promise<ActionResult<LibraryResult>> {
+  try {
+    await requireSession();
+    if (!isBlockType(type)) return { ok: false, message: "Unknown block type." };
+    const result = await libraryFragments({
+      category,
+      type,
+      limit: 4,
+      /*
+       * The wider corpus is allowed here, and only here.
+       *
+       * A thin category's curated band may hold no fragment of a type it nonetheless
+       * recommends, and "no examples" is a worse answer than "examples from the wider
+       * corpus". Every fragment carries `curated`, so the panel labels the two rather than
+       * presenting them as equivalent.
+       */
+      includeWiderCorpus: true,
+    });
+    return { ok: true, data: result };
+  } catch (error) {
+    return failure(error);
   }
 }

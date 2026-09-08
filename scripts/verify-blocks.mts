@@ -604,5 +604,299 @@ if (connected) {
   await c.end();
 }
 
+/*
+ * ---------------------------------------------------------------------------------------
+ * The block library (Doc 6 RW.3) — a coordinate resolved back into the right passage
+ * ---------------------------------------------------------------------------------------
+ *
+ * Everything above checks that spans were stored correctly. The library *reads* them, and
+ * that is where the interesting failure lives: `skill_blocks` holds character offsets into
+ * the marker body, so a reader using a different offset base returns a passage shifted by
+ * the length of the YAML block — **plausible text, wrongly attributed to a named
+ * repository**. Nothing about that looks broken from the outside.
+ *
+ * The first draft of `block-library.ts` had exactly that bug in waiting: a three-line local
+ * frontmatter stripper instead of `splitFrontmatter`. So the check below does not compare
+ * the library against a hand-written expectation — it compares it against **the extractor's
+ * own slice of the same bundle**, which is the only authority on where a body starts.
+ */
+console.info("\nThe library resolves a coordinate back to the extractor's own text");
+
+{
+  const c2 = new Client({ connectionString: process.env.DATABASE_URL_UNPOOLED });
+  let connected = false;
+  try {
+    await c2.connect();
+    connected = true;
+  } catch {
+    console.info("  skip  no database connection");
+  }
+
+  if (connected) {
+    const { rows: exists } = await c2.query<{ present: boolean }>(
+      `select to_regclass('public.skill_blocks') is not null as present`,
+    );
+    let stored = "0";
+    if (exists[0].present) {
+      const { rows } = await c2.query<{ n: string }>(
+        `select count(*)::text as n from skill_blocks where extractor_version = $1`,
+        [EXTRACTOR_VERSION],
+      );
+      stored = rows[0].n;
+    }
+
+    if (stored === "0") {
+      console.info("  skip  no blocks stored yet — run pnpm structures --extract --drain");
+    } else {
+      const { libraryFragments, FRAGMENT_MIN_WORDS, FRAGMENT_MAX_WORDS } = await import(
+        "../src/server/analytics/block-library"
+      );
+      const { archetypeDetail } = await import("../src/server/analytics/archetype-read");
+
+      /*
+       * `review` is the largest banded category and the one the block finding was measured
+       * on, so it is the one with something to lose if this breaks.
+       */
+      const archetype = await archetypeDetail("review");
+      const published = (archetype?.skeleton.blocks ?? []).map((b) => b.type);
+
+      if (published.length === 0) {
+        console.info("  skip  the review archetype publishes no blocks — re-mine at 3.0.0");
+      } else {
+        const result = await libraryFragments({ category: "review", type: published[0], limit: 4 });
+        check(
+          "the library returns fragments for a published block type",
+          result.fragments.length > 0,
+          `${result.fragments.length} for ${published[0]}`,
+        );
+
+        check(
+          "every fragment is within the exemplar bounds",
+          result.fragments.every(
+            (f) => f.wordCount >= FRAGMENT_MIN_WORDS && f.wordCount <= FRAGMENT_MAX_WORDS,
+          ),
+          `${FRAGMENT_MIN_WORDS}-${FRAGMENT_MAX_WORDS} words`,
+        );
+
+        /**
+         * One per source, which is the fragment-scale version of counting distinct
+         * structures rather than skills.
+         *
+         * The first ranking returned three of four reference pointers from one repository,
+         * all three unquotable. A panel of four items with one usable is what this prevents.
+         */
+        const sources = result.fragments.map((f) => f.attribution.source);
+        check(
+          "no source contributes two fragments to one list",
+          new Set(sources).size === sources.length,
+          sources.join(", ").slice(0, 90),
+        );
+
+        /**
+         * The licence gate, asserted as a property of the result rather than of the data.
+         *
+         * `metadata_only` and `unresolved` skills are analysed and never copied. Their rows
+         * exist — that is the point of storing a coordinate — so the failure this rules out
+         * is text arriving beside a posture that forbids it.
+         */
+        const leaked = result.fragments.filter(
+          (f) =>
+            f.text !== null &&
+            !["mirror_allowed", "attribution_required"].includes(f.attribution.redistribution),
+        );
+        check(
+          "no fragment carries text its licence does not permit copying",
+          leaked.length === 0,
+          leaked.map((f) => `${f.attribution.slug}:${f.attribution.redistribution}`).join(", ") ||
+            "the download route's own two postures, and no others",
+        );
+
+        check(
+          "a withheld fragment still carries attribution and a reason",
+          result.fragments
+            .filter((f) => f.text === null)
+            .every((f) => f.withheld !== null && f.attribution.source.length > 0),
+          "attribution plus a link to origin is a real answer; a blank row is not",
+        );
+
+        /**
+         * The offset-base check, and the reason this section exists.
+         *
+         * Re-extract the same bundle with the real extractor, find the block at the same
+         * span, and require the library's text to be that block's own slice. If the two ever
+         * disagree about where the body starts, this goes red — where a hand-written
+         * expectation would have gone green on plausible, wrong text.
+         */
+        const quotable = result.fragments.find((f) => f.text !== null);
+        if (!quotable) {
+          console.info("  skip  no quotable fragment in this sample to re-derive");
+        } else {
+          const { rows: loc } = await c2.query<{
+            content_hash: string;
+            content_stored: boolean;
+            marker_path: string;
+            start_char: number;
+            end_char: number;
+            provenance: unknown;
+          }>(
+            `select sv.content_hash, sv.content_stored, st.marker_path,
+                    b.start_char, b.end_char, sv.provenance
+             from skill_blocks b
+             join skill_versions sv on sv.id = b.skill_version_id
+             join skill_structures st on st.skill_version_id = sv.id
+               and st.extractor_version = b.extractor_version
+             where b.id = $1`,
+            [quotable.id],
+          );
+
+          const { loadBundle } = await import("../src/server/validation/bundle-loader");
+          const { splitFrontmatter } = await import("../src/server/skills/normalize");
+
+          const bundle = await loadBundle({
+            contentStored: loc[0].content_stored,
+            contentHash: loc[0].content_hash,
+            tier: "public",
+            provenance: loc[0].provenance as never,
+          });
+          const marker = bundle.files.find((f) => f.path === loc[0].marker_path);
+          check(
+            "the marker file the offsets belong to is the one the fingerprint named",
+            Boolean(marker),
+            loc[0].marker_path,
+          );
+
+          if (marker) {
+            const { frontmatter, body } = splitFrontmatter(marker.content.toString("utf8"));
+            const fingerprint = extractStructure({
+              body,
+              frontmatter,
+              files: bundle.files,
+              markerPath: loc[0].marker_path,
+            });
+            const same = fingerprint.blocks.find(
+              (b) => b.startChar === loc[0].start_char && b.endChar === loc[0].end_char,
+            );
+            check(
+              "the stored span still matches a block the extractor produces today",
+              Boolean(same),
+              `${loc[0].start_char}-${loc[0].end_char} in ${quotable.attribution.slug}`,
+            );
+
+            const expected = body.slice(loc[0].start_char, loc[0].end_char).trim();
+            check(
+              "the library's text is the extractor's own slice, character for character",
+              quotable.text === expected,
+              quotable.text === expected
+                ? `${expected.length} chars agree`
+                : `library ${quotable.text?.length} vs extractor ${expected.length} chars`,
+            );
+
+            /*
+             * And the bug reproduced, so the check above is proven to be able to fail.
+             *
+             * Slicing the *whole file* is what a local frontmatter stripper gets wrong. On a
+             * skill with frontmatter the two must differ; on one without, they are legitimately
+             * identical and the case is skipped rather than asserted, because a fixture that
+             * cannot reproduce the bug proves nothing.
+             */
+            const raw = marker.content.toString("utf8");
+            if (raw === body) {
+              console.info(
+                "  skip  this fragment's skill has no frontmatter, so the wrong base cannot differ",
+              );
+            } else {
+              const wrongBase = raw.slice(loc[0].start_char, loc[0].end_char).trim();
+              check(
+                "reading the same offsets against the un-split file gives different text",
+                wrongBase !== expected,
+                "proves the offset base is load-bearing rather than incidental",
+              );
+            }
+          }
+        }
+      }
+
+      /*
+       * The other half of RW.3: a draft is compared with the same instrument.
+       *
+       * `blockDeviations` runs `extractStructure` over a synthetic one-file bundle, so a
+       * corpus skill's own body must come back reporting the blocks the corpus already
+       * stored for it. Anything else means the draft comparison and the archetype it is
+       * compared against are measuring with two different rulers.
+       */
+      const { blockDeviations } = await import("../src/server/builder/deviation");
+      const { rows: sample } = await c2.query<{
+        slug: string;
+        content_hash: string;
+        content_stored: boolean;
+        marker_path: string;
+        provenance: unknown;
+        stored_types: string[];
+      }>(
+        `select sk.slug, sv.content_hash, sv.content_stored, st.marker_path, sv.provenance,
+                (select array_agg(distinct b.type) from skill_blocks b
+                  where b.skill_version_id = sv.id and b.extractor_version = $1
+                    and b.type is not null) as stored_types
+         from skills sk
+         join skill_versions sv on sv.id = sk.current_version_id
+         join skill_structures st on st.skill_version_id = sv.id and st.extractor_version = $1
+         join skill_categories c on c.skill_id = sk.id and c.axis = 'function' and c.value = 'review'
+         where sk.status = 'indexed' and sv.content_stored and st.marker_path is not null
+           and st.block_count > 6
+         order by sk.quality_score desc nulls last, sk.id
+         limit 1`,
+        [EXTRACTOR_VERSION],
+      );
+
+      if (sample.length === 0) {
+        console.info("  skip  no stored review skill to re-measure as a draft");
+      } else {
+        const { loadBundle } = await import("../src/server/validation/bundle-loader");
+        const { splitFrontmatter } = await import("../src/server/skills/normalize");
+        const bundle = await loadBundle({
+          contentStored: sample[0].content_stored,
+          contentHash: sample[0].content_hash,
+          tier: "public",
+          provenance: sample[0].provenance as never,
+        });
+        const marker = bundle.files.find((f) => f.path === sample[0].marker_path);
+        const { body } = splitFrontmatter(marker?.content.toString("utf8") ?? "");
+        const report = await blockDeviations(body, "review");
+
+        check(
+          "the draft comparison types blocks in a real document",
+          report !== null && report.totalBlocks > 0,
+          `${report?.totalBlocks ?? 0} blocks in ${sample[0].slug}`,
+        );
+        check(
+          "it distinguishes 'no blocks measured' from 'nothing missing'",
+          report !== null && report.notMeasured === false,
+          "an archetype without blocks must not read as a fully conformant draft",
+        );
+        /*
+         * The types it finds are the types already stored for the same document. Not a
+         * tautology across a version bump: the stored rows came from a batch run weeks ago
+         * and this runs the extractor now, so a change to segmentation that nobody
+         * re-extracted for shows up here as a disagreement.
+         */
+        const found = new Set([
+          ...(report?.followed ?? []).map((b) => b.type as string),
+          ...(report?.extra ?? []).map((b) => b.type as string),
+        ]);
+        const storedTypes = new Set(sample[0].stored_types ?? []);
+        const drift = [...storedTypes].filter((x) => !found.has(x));
+        check(
+          "re-measuring a stored document finds the block types already stored for it",
+          drift.length === 0,
+          drift.length > 0
+            ? `missing ${drift.join(", ")} — the extractor moved without a re-extract`
+            : `${storedTypes.size} types agree`,
+        );
+      }
+    }
+    await c2.end();
+  }
+}
+
 console.info(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail > 0 ? 1 : 0);

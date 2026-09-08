@@ -3,11 +3,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, ShieldOff } from "lucide-react";
 
+import { DeviationCard } from "@/components/builder/deviation-card";
 import { DraftActions } from "@/components/builder/draft-actions";
 import { ActivationCostBadge } from "@/components/registry/activation-cost";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { blockDeviations } from "@/server/builder/deviation";
 import { getDraft } from "@/server/builder/drafts";
 import { getSkillsByIds } from "@/server/dal/skills";
 import { requireSession } from "@/server/dal/session";
@@ -39,6 +41,16 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
   const publishedSlug = draft.publishedSkillId
     ? ((await getSkillsByIds([draft.publishedSkillId]))[0]?.slug ?? null)
     : null;
+
+  /*
+   * R4.3's deviation marks, at block granularity.
+   *
+   * Computed on read rather than stored on the draft, and that is the same argument the
+   * published slug above makes: an archetype is re-mined and a stored comparison would go on
+   * describing a version of the guidance nobody is served any more. Free — the extractor is
+   * pure rules over a string already in memory.
+   */
+  const deviations = draft.body ? await blockDeviations(draft.body, draft.archetypeCategory) : null;
 
   return (
     <div className="grid min-w-0 gap-6">
@@ -123,6 +135,13 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
           </CardContent>
         </Card>
       ) : null}
+
+      {/*
+        After the document, before validation, because that is the order of consequence.
+        Validation decides whether this can be published; the archetype comparison is advice
+        an author weighs, and putting advice above a blocking gate misreports which is which.
+      */}
+      {deviations ? <DeviationCard report={deviations} /> : null}
 
       {draft.validation ? (
         <Card>

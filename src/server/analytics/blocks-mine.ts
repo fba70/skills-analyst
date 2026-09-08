@@ -179,13 +179,34 @@ export async function blockLiftAcrossCategories(categories: readonly string[]): 
   }
   const banded = examined.filter((r) => r.banded);
 
+  /**
+   * Counted per **version**, not per joined row.
+   *
+   * The first version of this left-joined `skill_structures` and counted rows, which was
+   * right exactly once: while every version had at most one fingerprint. After the 2.0.0
+   * re-extract each version has two — 1.1.0 and 2.0.0 — so the denominator doubled and the
+   * command reported **50% coverage at a moment when it was complete**, printing a warning
+   * telling the reader to distrust a result that was solid.
+   *
+   * A `filter` on a fan-out join is the trap: the numerator counts what it should and the
+   * denominator counts join output, so the ratio is wrong by exactly the fan-out factor and
+   * looks plausible the whole way. Both halves are now subqueries over versions.
+   */
   const [coverageRow] = await db
     .select({
-      fingerprinted: sql<number>`count(*) filter (where st.extractor_version = ${EXTRACTOR_VERSION})::int`,
-      eligible: sql<number>`count(*)::int`,
+      fingerprinted: sql<number>`(
+        select count(distinct st.skill_version_id)::int
+        from skill_structures st
+        join skill_versions sv on sv.id = st.skill_version_id
+        where st.extractor_version = ${EXTRACTOR_VERSION}
+          and sv.status in ('indexed', 'quarantined')
+      )`,
+      eligible: sql<number>`(
+        select count(*)::int from skill_versions
+        where status in ('indexed', 'quarantined')
+      )`,
     })
-    .from(sql`skill_versions sv left join skill_structures st on st.skill_version_id = sv.id`)
-    .where(sql`sv.status in ('indexed', 'quarantined')`);
+    .from(sql`(select 1) as one`);
 
   const byType = BLOCK_TYPES.map((type) => {
     const rows = banded

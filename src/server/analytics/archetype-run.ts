@@ -69,9 +69,25 @@ function describeChange(
 
     if (added.length > 0) parts.push(`sections added: ${added.join(", ")}`);
     if (removed.length > 0) parts.push(`sections dropped: ${removed.join(", ")}`);
+
+    /**
+     * Blocks get their own line in the changelog (Doc 6 RW.3).
+     *
+     * R6.2's acceptance criterion is that the changelog cites what moved the skeleton, and
+     * from 3.0.0 onwards blocks are most of what moves it: at full coverage they carry roughly
+     * twice the lift sections do. A changelog naming only section changes would report "miner
+     * 3.0.0" and nothing else on a mine where five block types entered the guidance.
+     */
+    const blocksBefore = new Set((previous.blocks ?? []).map((b) => b.type));
+    const blocksAfter = new Set(next.blocks.map((b) => b.type));
+    const blocksAdded = [...blocksAfter].filter((b) => !blocksBefore.has(b));
+    const blocksDropped = [...blocksBefore].filter((b) => !blocksAfter.has(b));
+    if (blocksAdded.length > 0) parts.push(`blocks added: ${blocksAdded.join(", ")}`);
+    if (blocksDropped.length > 0) parts.push(`blocks dropped: ${blocksDropped.join(", ")}`);
+
     if (minerChanged) parts.push(`miner ${MINER_VERSION}`);
     if (parts.length === 0 && !telemetryCitation) {
-      parts.push("prevalence shifted without changing the section set");
+      parts.push("prevalence shifted without changing the section or block set");
     }
   }
 
@@ -173,6 +189,14 @@ export async function mineAndStore(
          * made the v7 investigation expensive.
          */
         measured: archetype.measured,
+        /**
+         * The same argument, for blocks (Doc 6 RW.3).
+         *
+         * Two of the eleven types currently clear nothing — `stance` and `anti-example` —
+         * and these rows are the evidence for whether to prune them under Doc 6 §7. Storing
+         * only what survived would leave that decision with nothing to stand on.
+         */
+        measuredBlocks: archetype.measuredBlocks,
         /** R6.2's inputs, pinned with the skeleton they shaped. */
         telemetry: archetype.telemetry,
       },

@@ -215,43 +215,50 @@ where these numbers came from.
 | Discovery | 1,998 candidates awaiting a decision |
 | Taxonomy | **46,489 labelled**, 103,588 assignments · 163 held below the floor · 1,327 unlabelled |
 | Validation | 443,222 verdicts, all current |
-| Archetypes | 13 categories at **v8**, miner 2.3.0 · 78 earlier rows kept as history · public at `/archetypes` |
-| Blocks | **new (A2)** — `skill_blocks`, extractor 2.0.0, eleven typed span types |
-| Embeddings | **new (A6)** — pgvector 0.8.6, HNSW cosine, 1,536 dimensions |
+| Archetypes | 13 categories at **v9 (review v10)**, miner **3.0.0** · 91 earlier rows kept as history · public at `/archetypes` |
+| Blocks | **1,620,316 typed spans** at extractor 2.0.0 across 50,870 of 50,965 documents · now mined and published |
+| Embeddings | 47,854 of 47,855 canonical skills · pgvector 0.8.6, HNSW cosine, 1,536 dimensions · $0.08 |
 | Lifecycle | **new (A4)** — derived second axis; battle-tested unreachable by construction |
 | Entitlements | **new (A5)** — three plans; the trust surfaces cannot be gated at all |
-| Builder | live at `/build` · scaffolds sections plus traits and exemplars per category |
+| Builder | live at `/build` · scaffolds sections, **the block grammar with real fragments**, traits and exemplars · draft pages mark block-level archetype deviations (R4.3) |
 | MCP | live at `/api/mcp` · six tools, token-gated, rate-limit scope now follows the plan |
-| Schema | 29 migrations (0000–0028) · 33 tables · 26 RLS policies |
-| Spend, cumulative | **$31.58** — $31.52 taxonomy, $0.05 builder, $0.02 embeddings. All metered. |
+| Schema | 31 migrations (0000–0030) · 35 tables · 28 RLS policies |
+| Spend, cumulative | **$31.70** — $31.52 taxonomy, $0.10 builder, $0.08 embeddings. All metered. |
 
 **Ingestion, classification and every backfill run from a local terminal**, not from the
 schedule — a 6,000-skill repository needs longer than any function ceiling, and locally there
 is none. Start them in **your own shell**: a loop started from inside an agent session gets
 killed with the session, which cost two runs before anyone noticed.
 
-### The one thing that will confuse you: two backfills are mid-flight
+### Both backfills are finished, and one lesson from them is worth keeping
 
-`EXTRACTOR_VERSION` went to **2.0.0** for blocks (A2) and a new `EMBEDDER_VERSION` landed
-(A6). Every derived table is selected on its version string, so both read as nearly empty
-until the re-derive catches up:
+`EXTRACTOR_VERSION` went to **2.0.0** for blocks (A2) and `EMBEDDER_VERSION` landed with A6.
+Every derived table is selected on its version string, so for a while both read as nearly
+empty while the pages kept serving stored output — and the only visible symptom was a mining
+run that quietly found no evidence. `archetypes --blocks` printing eleven rows of zeros at 1%
+coverage was exactly that.
+
+Both are now complete: **50,965 of 50,966** fingerprints, **1,620,316 blocks**, **47,854 of
+47,855** embeddings. The single missing row in each is one skill version, not a stall.
+
+> **What made them take longer than they should have: both commands processed 500 rows per
+> invocation and stopped.** Finishing meant roughly a hundred manual runs, which is why "the
+> scripts are done" was said twice while they were at 3% and 31%. `--drain` now loops both
+> until the remaining count reaches zero. A backfill that needs a human in the loop per batch
+> is a backfill that does not finish.
 
 ```
-pnpm structures --extract 500     # free, ~2-3 hours, repeat until remaining 0
-pnpm embeddings --backfill 5000   # ~$0.08 total, repeat until remaining 0
+pnpm structures --extract 500 --drain    # free
+pnpm embeddings --backfill 5000 --drain  # ~$0.08 for the whole corpus
 ```
 
-> **`pnpm taxonomy --status` now says 2 function categories are minable, down from 13.**
-> Nothing is broken. The evidence gate counts *distinct structures at the current extractor
-> version*, and only ~2% of the corpus has been re-extracted, so twelve categories legitimately
-> fall below the band floor. **Do not re-mine archetypes until the re-extract finishes** — it
-> would replace v8 with a thin skeleton mined from 2% of the evidence, which is precisely the
-> v7 collapse in a new costume.
->
-> The served product is unaffected, and that was checked rather than assumed: `/archetypes`,
-> `/build` and the skill pages read the stored `archetypes` table, not fingerprints.
-> `pnpm db:audit` prints current-versus-stale per derived table, so the gap is one command
-> away rather than something to rediscover.
+> **`pnpm db:audit` answers "is the derived data current" in one command**, and it now
+> answers it honestly. It used to print `total − current` as *re-derive outstanding*, which
+> on an append-only table reports permanent history as permanent unfinished work: archetypes
+> keep all 105 rows for R7.2 reproducibility and R3.5 drift-diffing, so that arrow could
+> never be cleared by any amount of work. It now counts **subjects covered against subjects
+> to cover** — versions, canonical skills, categories — with retained history printed under
+> a heading that says it is retained. An alarm nobody can silence stops being read.
 
 **The taxonomy gap is closed.** It was the dominant gap in every previous audit — 11,298
 unlabelled at one point, widening with every sync. The corpus is now 97% labelled and held
@@ -1827,7 +1834,7 @@ Both are reasons to build it *after* the corpus is balanced, not before.
 
 ### Section presence stopped discriminating, and the threshold had to learn to scale
 
-`pnpm verify:archetypes` (8 checks, free) · miner 2.3.0 · v8
+`pnpm verify:archetypes` (20 checks, free) · superseded by miner 3.0.0 below · this is the v8 story
 
 The first mine over the fully-labelled corpus produced **five archetypes with zero sections**
 and eight more with one or two. `--mine-all` printed thirteen ticks and a list of dropped
@@ -1886,6 +1893,169 @@ returning zero on one side looks like a filter bug.
 > exist". The corpus is allowed to have no structural consensus; what it may not do is
 > scaffold an empty form. That distinction is the whole bug: the measurement was right and the
 > output was unusable, and only the first had anything checking it.
+
+### And then blocks discriminated, which is what the section collapse was pointing at
+
+`pnpm verify:archetypes` (20 checks, free) · miner **3.0.0** · v9, review v10
+
+The section finding above ends with an unanswered question. Everybody writes `steps` now, the
+best section lift across the three largest categories is **+10**, and traits reach +35 — so
+the shape of the *document* had stopped being the interesting part. Doc 6 §2 bets that the
+discriminator moved one level down, into what the passages inside those sections are doing.
+
+**The bet holds, and by roughly a factor of two.** Measured with the miner's own bands,
+representative reduction and significance rule — not a second copy of them:
+
+| block type | categories earning a place | median lift |
+|---|---|---|
+| `reference-pointer` | 11 of 13 | **+19** |
+| `decision-rule` | 10 of 13 | **+22** |
+| `guardrail` | 6 of 13 | +15 |
+| `output-spec` | 6 of 13 | +15 |
+| `tool-contract` | 4 of 13 | +14 |
+
+`review` is the clearest single case: five block types clear the bar where two sections do,
+and density adds a dimension presence cannot reach — a curated review skill carries **4.3
+procedures against 3.2**, and nearly twice the reference pointers.
+
+**An archetype is now a grammar rather than a heading list.** Which block types, in the order
+the strong band writes them, at what lift, with the count beside it. It reaches an author
+three ways, and all three had to be wired or the mine would have been a database row again:
+the block card on `/archetypes`, a read-only list in the builder's sections step, and a
+`<block-grammar>` tag in the generation prompt carrying each block's two bands for R5.2
+traceability. `verify:archetypes` asserts that what is stored is what the scaffold offers —
+"written correctly, dropped on the way out" is the failure this codebase has hit most often.
+
+**Inclusion is decided on presence, using the identical rule the sections use.** Density is
+carried as descriptive evidence and explicitly not significance-tested: ranking by a mean
+nobody tested, printed in the same typeface as a tested number, is how the `quality_score`
+banding mistake happened.
+
+> **Two block types earn nothing in any category, and one of them is a finding about our
+> detector rather than about skills.** `stance` measures −6 in `review` and is a genuine
+> pruning candidate (Doc 6 §7 anticipates this). `anti-example` measures −5, which
+> contradicts Doc 6 §2 head-on — it is named there as the rarest and most valuable type.
+>
+> **Neither is published as guidance, deliberately.** Negative lift becomes an anti-pattern
+> for free everywhere else in the miner, and it would here too. But the `anti-example`
+> detector fires on markers — ❌, "common mistakes", "what not to do" — and long-tail skills
+> reach for that punctuation constantly while a vendor writing formal documentation expresses
+> the same knowledge as prose and matches nothing. So the negative lift may be measuring
+> **house style rather than the presence of failure-mode knowledge**.
+>
+> A negative claim also deserves a higher bar than a positive one: "the strong band writes
+> these" invites an author to add something, while "the strong band writes fewer of these"
+> invites them to delete knowledge, and being wrong costs more. Every measurement is stored
+> in `stats.measuredBlocks`, so a better detector — or fifty skills read by hand — can
+> revisit it. `verify:archetypes` **refuses any published block with non-positive lift**, so
+> the reasoning cannot be undone by a sort order changing.
+
+A miner bump was required rather than optional: `mineAndStore` skips on an unchanged skeleton
+*and* a matching miner version, so 3.0.0's blocks would otherwise have reached exactly zero
+archetypes, silently. Same trap 2.1.0's attribution walked into.
+
+
+### The block library, and a ranking that had to be read to be found wrong
+
+`src/server/analytics/block-library.ts` · `src/server/builder/deviation.ts`
+`pnpm blocks --library <category>` · `pnpm verify:blocks` (55 checks, free)
+
+The archetype now says *a curated review skill carries a decision rule, 75% against 55%*. An
+author's next question is immediate and the platform could not answer it: **what does a good
+one look like?** The answer was eight exemplar skills, which asks somebody to open eight
+documents and find the relevant passage in each. The blocks table already knew where every
+passage in the corpus was.
+
+**A row is a coordinate, so a fragment is resolved and never stored.** `skill_blocks` holds
+`[startChar, endChar)` and no text — that decision was made for this feature and it pays off
+three ways: the licence gate applies at the moment of *reading* rather than a snapshot of what
+it said months ago, a withdrawn skill stops being quotable immediately (R7.5) rather than
+living on in a stored copy, and an edited skill cannot be misquoted because the offsets belong
+to one `content_hash`.
+
+**Ranked on source trust, never on the quality score** — the same reversal the miner had to
+make, importing `CURATED_LIST` rather than copying it. The library shows fragments from the
+band that produced the guidance, or the guidance and its examples are two different claims.
+
+> **The first ranking was wrong in three ways at once, and only running it showed that.**
+> It sorted `quality_score desc, word_count desc`, which looked entirely reasonable.
+>
+> **Quality score is degenerate here, so it sorted nothing.** Every fragment came back
+> `q100` — exactly what the archetype section above documents about a score bounded at 100
+> with thousands tied there. **So `word_count desc` decided**, and it means *longest under
+> the ceiling*: the results were 219, 216, 200 and 199 words against a 220-word cap. The
+> library was reliably returning the biggest passage that fit. **And unquotable fragments
+> crowded out readable ones** — reference pointers came back three-of-four withheld, all
+> from one repository whose licence is `unresolved`: a panel of four items with one usable.
+>
+> It now sorts quotable-first, then curated, then **distance from the median length of that
+> type in that band**, computed in the same query because a typical guardrail and a typical
+> procedure are different lengths. Plus `distinct on (src.id)` — **one fragment per source**,
+> which is R3.4's distinct-structures argument at fragment scale.
+>
+> None of this was a bug a type checker or a row count could have caught. It needed the
+> output printed and read, which is why `pnpm blocks --library` exists at all.
+
+**What it refuses to show, each refusal load-bearing:** unlicensed content (`metadata_only`
+and `unresolved` are analysed and never copied — the row still exists, and the reader gets
+attribution and a link to origin instead of text); more than one fragment per source;
+near-duplicate variants; and fragments below 12 or above 220 words, because a four-word
+guardrail teaches nothing and a 400-word one is a section wearing a block's clothes.
+
+**No copy button, deliberately.** A library that pastes a stranger's paragraph into a draft
+manufactures the homogenisation Doc 2's risk register warns about *and* launders an
+attribution-required fragment into a document with no attribution. These are examples to read.
+
+**Fragments never reach the generation prompt either, and that is structural.** It would be
+one line to add them as few-shot examples. Most of this corpus is `attribution_required`, and
+a model handed attributed prose can reproduce it into a document carrying no attribution — the
+platform laundering a licence obligation through its own builder, on the exact axis the
+download route returns 451 to protect. What travels instead is **our own vocabulary about the
+corpus**: a block type's label, blurb and two prevalence numbers. `Scaffold` has no fragment
+field, so widening the type is the change to refuse.
+
+#### The offset base is the one thing that must be exactly right
+
+> **The first draft of the library had this bug in waiting.** It carried a three-line local
+> frontmatter stripper instead of calling `splitFrontmatter`. The offsets index the body the
+> extractor segmented, so a reader using a different base returns a passage shifted by the
+> length of the YAML block — **plausible text, wrongly attributed to a named repository**.
+> Nothing about that looks broken from the outside, and it would have been a **second source
+> of truth for where a body starts**, which is the same mistake as a checker holding its own
+> copy of the rule it checks.
+>
+> So `verify:blocks` does not compare the library against a hand-written expectation. It
+> re-extracts the same bundle with the real extractor and requires the library's text to be
+> **that block's own slice, character for character** — then reads the same offsets against
+> the un-split file and requires the two to *differ*, so the check is proven able to fail. A
+> skill with no frontmatter is skipped rather than asserted, because a fixture that cannot
+> reproduce the bug proves nothing.
+
+#### R4.3, closed at block granularity
+
+`blockDeviations` runs the draft through **`extractStructure` itself**, by handing it a
+synthetic one-file bundle. Nothing reimplements segmentation, and that is the whole reason the
+comparison means anything: a second, lighter detector would drift, and every drift would
+surface as a deviation the author cannot act on — the archetype saying 75% of curated skills
+carry a decision rule, the draft genuinely carrying one, and a different parser reporting it
+missing. Same argument R6.1 makes for publish-back calling the real validator.
+
+The panel is written so it cannot become a checklist. A **missing** block states the evidence
+and stops; nothing is blocked, because a skill with no decisions to make should not carry a
+decision rule and no measurement here knows which case the author is in. An **extra** block
+type carries no judgement at all — two types measure negative lift and the miner deliberately
+refuses to publish that, so calling an unlisted type a problem here would smuggle in through
+the builder the claim `archetype.ts` declines to make. **Density is reported and never
+scored**, because inclusion was decided on presence and a builder demanding 4.3 procedures
+would be enforcing an untested mean.
+
+> Two checks that matter more than the rest: re-measuring a *stored* corpus document must find
+> the block types already stored for it — not a tautology, because the stored rows came from a
+> batch run weeks ago and this runs the extractor now, so segmentation moving without a
+> re-extract shows up here as a disagreement. And `notMeasured` is distinguished from "nothing
+> missing", because an archetype with no blocks would otherwise read as a fully conformant
+> draft.
+
 
 ### Similarity for authors: what already exists (Doc 2 R3.6)
 
@@ -2440,6 +2610,80 @@ link wrapping nothing is an invisible tab stop.
 
 First measurement, over the 510 extracted so far: **median 1.2K tokens, mean 1.8K** — and
 that sample is not random, so read it as a first look rather than a corpus figure.
+
+### Doc 6's central bet, measured: blocks discriminate about twice as well as sections
+
+`pnpm archetypes --blocks` · full corpus, 50,965 fingerprints at extractor 2.0.0
+
+The whole RW.x programme rests on one claim: section *presence* has stopped separating good
+skills from the rest, and the functional units **inside** sections still do. That is testable,
+and it has now been tested on complete coverage rather than on a sample.
+
+**It holds.** Corpus-wide, over 13 banded categories:
+
+| block type | clears its threshold in | best lift | median |
+|---|---|---|---|
+| reference-pointer | 11 of 13 | +29 | **+18** |
+| decision-rule | 10 of 13 | +26 | **+21** |
+| output-spec | 6 of 13 | +23 | +14 |
+| guardrail | 6 of 13 | +21 | +10 |
+| tool-contract | 4 of 13 | +20 | +7 |
+
+The number to compare against is the one in the section above: **the best *section* lift
+across the three largest categories is +10.** Block lift reaches +20 in `review` alone and
++29 corpus-wide, with two types clearing the bar in ten or eleven categories out of thirteen.
+
+`review`, the largest category at 3,748 structures (407 curated / 3,341 other), keeps five
+block types where section presence produced a thin skeleton:
+
+```
+decision-rule      75% / 55%   +20     3.3 vs 2.4 per skill
+reference-pointer  47% / 33%   +14     1.3 vs 0.7
+tool-contract      54% / 43%   +11     3.0 vs 2.4
+procedure          89% / 80%    +9     4.3 vs 3.2
+output-spec        65% / 57%    +8     2.3 vs 1.9
+```
+
+The density column is the part a heading count could never reach. Everyone writes a
+procedure — 89% against 80% is barely a finding — but curated skills write **4.3 of them
+against 3.2**, and carry nearly twice as many reference pointers. "Has a steps section" and
+"breaks the work into four checkable steps and links to two bundled files" are different
+claims, and only one of them is advice.
+
+#### Two of the eleven types earn nothing, and one contradicts Doc 6 directly
+
+`anti-example` clears the threshold in **zero** categories, median **−3**, and in `review` it
+is outright negative: 32% of curated structures against 37% of the rest. Doc 6 calls it
+*"the rarest and most valuable block type"*. The corpus disagrees.
+
+`stance` is also 0 of 13, and in `review` sits at 5% against 11% — below the prevalence floor
+entirely.
+
+> **Before pruning either, the detector is a live suspect for one of them.** The
+> `anti-example` cues are markers: ❌, "common mistakes", "what not to do". Long-tail skills
+> — many of them model-generated — reach for that punctuation constantly; a vendor writing
+> formal documentation expresses the same knowledge as prose and matches nothing. So the
+> negative lift may be measuring **house style rather than the presence of failure-mode
+> knowledge**, which is a detector limitation and not a finding about skills. That is exactly
+> the shape of the `quality_score` banding mistake: a confident number measuring the wrong
+> thing.
+>
+> `stance` reads differently and is probably real. *"You are an expert…"* is a hallmark of
+> prompt-shaped generated skills, which sit overwhelmingly in the weak band, and a vendor
+> documenting its own product has no need for persona theatre.
+>
+> **So: `stance` is a candidate for pruning under Doc 6 §7. `anti-example` is unresolved and
+> should not be pruned on this evidence** — the honest next step is reading fifty curated
+> skills and asking whether the knowledge is absent or merely unmarked.
+
+> **The warning printed above this result was wrong, and that is worth recording.** The
+> coverage query left-joined `skill_structures` and counted rows — correct for exactly as long
+> as each version had one fingerprint. After the 2.0.0 re-extract every version has two, so
+> the denominator doubled and the command announced **50% coverage at the moment it was
+> complete**, telling the reader to distrust a solid result. A `count(*) filter` over a
+> fan-out join gets the numerator right and the denominator wrong, so the ratio is off by
+> exactly the fan-out and looks plausible throughout. Both halves are subqueries over versions
+> now.
 
 ### Blocks: the grain below the heading (Doc 6 RW.1 / RW.2)
 
@@ -3351,6 +3595,8 @@ pnpm structures --extract 500        # structural fingerprints + blocks — free
 pnpm structures --probe 250          # block detection, DRY: reads bundles, writes nothing
 pnpm structures --blocks             # stored block coverage (Doc 6 RW.1)
 pnpm archetypes --blocks             # does the block grain discriminate? (RW.2) — free
+pnpm blocks --library review         # read real fragments per block type (RW.3) — free
+pnpm blocks --library plan --type reference-pointer --wider
 pnpm taxonomy --sample 20            # categories — COSTS MONEY, capped at 100/run
 pnpm taxonomy --status | --review | --resync
 pnpm verify:lists | verify:revocation | verify:export | verify:takedown | verify:publish
@@ -3359,6 +3605,8 @@ pnpm verify:otp | verify:db-retry        # both free, no network, no database
 pnpm verify:http-deadline | verify:rate-limit   # free; both reproduce the bug first
 pnpm verify:dedup                        # repo identity folds case; free, probes then rolls back
 pnpm verify:taxonomy | verify:archetypes # vocabulary and mined guidance; both free
+pnpm verify:blocks | verify:lifecycle | verify:outcomes | verify:flags   # all free
+pnpm db:audit                            # is the derived data current? one command, free
 pnpm verify:blocks                       # block taxonomy and span invariants; free
 pnpm verify:tokens                       # activation cost, bands and honesty; free
 pnpm verify:lifecycle                    # lifecycle cannot be granted; free, rolls back

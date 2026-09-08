@@ -4,6 +4,7 @@ import Link from "next/link";
 import { LicenseBadge, licensePostureDetail, POSTURE_KEYS } from "@/components/registry/license-badge";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { BLOCK_TYPE_META } from "@/lib/block-types";
 import { CAPABILITY_META } from "@/lib/capabilities";
 import { getDocsOrigin } from "@/lib/app-url";
 import { FAQ_SECTIONS, type FaqAnchor } from "@/lib/faq";
@@ -478,6 +479,40 @@ export default function FaqPage() {
               </div>
             ))}
           </dl>
+        </Q>
+
+        {/*
+          Blocks, explained because two surfaces now show them.
+          The archetype page and the builder both present a block grammar, and this page's
+          standing rule is that anything the interface asserts is explained here from the
+          same constants the interface reads. The list below is BLOCK_TYPE_META itself, so a
+          type added or pruned moves this section with it.
+        */}
+        <Q q="What is a block?">
+          <p>
+            A passage inside a section, typed by the work it does. A section role says what a
+            heading is <em>about</em>; a block says what the text underneath it is{" "}
+            <em>doing</em> — a procedure, a decision rule, a guardrail, a worked example.
+          </p>
+          <p className="text-muted-foreground">
+            This grain exists because the coarser one stopped being useful. Nearly every skill
+            now has a steps section, so its presence separates good skills from weak ones by
+            only a few points. What still separates them is whether there is a real decision
+            rule or a pointer to bundled detail inside it — which is why an archetype lists
+            both, and why the block list is usually the more specific advice.
+          </p>
+          <dl className="grid gap-2">
+            {Object.entries(BLOCK_TYPE_META).map(([type, meta]) => (
+              <div key={type} className="grid gap-0.5">
+                <dt className="text-sm font-medium">{meta.label}</dt>
+                <dd className="text-muted-foreground text-sm">{meta.blurb}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="text-muted-foreground">
+            Detected by rules, never required. A passage that matches none of these is left
+            untyped and is still perfectly good content.
+          </p>
         </Q>
       </Section>
 

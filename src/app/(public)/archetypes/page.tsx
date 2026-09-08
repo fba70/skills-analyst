@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
+import { blockTypeLabel } from "@/lib/block-types";
 import { sectionRoleLabel } from "@/lib/section-roles";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -104,6 +105,20 @@ function ArchetypeTile({ entry }: { entry: ArchetypeIndexEntry }) {
               No section separates the bands in this category.
             </p>
           )}
+
+          {/*
+            One line about blocks, not a second badge row. The tile has to stay scannable
+            across thirteen of them, and the strongest block is the part of the block
+            grammar that would make somebody open the page.
+          */}
+          {entry.blocks.length > 0 ? (
+            <p className="text-muted-foreground text-sm">
+              Inside those sections:{" "}
+              <span className="text-foreground">{blockTypeLabel(entry.blocks[0].type)}</span>
+              {entry.blocks.length > 1 ? ` and ${entry.blocks.length - 1} more block ` : " "}
+              {entry.blocks.length > 1 ? "types separate" : "separates"} the bands.
+            </p>
+          ) : null}
 
           {topTrait ? (
             <p className="text-muted-foreground text-sm">

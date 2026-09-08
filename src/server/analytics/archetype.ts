@@ -2,7 +2,7 @@ import "server-only";
 
 import { sql } from "drizzle-orm";
 
-import type { BlockType } from "@/lib/block-types";
+import { BLOCK_TYPES, type BlockType } from "@/lib/block-types";
 import { db } from "@/server/db";
 import { EXTRACTOR_VERSION, type SectionRole } from "@/server/analytics/structure";
 import { SEED_REPOS } from "@/server/crawl/seeds";
@@ -98,7 +98,27 @@ import { REVIEW_FLOOR } from "@/server/taxonomy/vocabulary";
  *   cost four throwaway scripts rebuilding numbers the miner had already computed and thrown
  *   away.
  */
-export const MINER_VERSION = "2.3.0";
+/*
+ * 3.0.0 — the skeleton is a **grammar**, not a heading list (Doc 6 RW.3).
+ *
+ *   Sections stopped discriminating at full coverage and 2.3.0 said so honestly, leaving
+ *   several categories with one or two sections and a list of traits. Blocks were then mined
+ *   and measured over the whole corpus, and the answer was decisive: `reference-pointer`
+ *   clears its threshold in 11 of 13 categories at median **+18** and `decision-rule` in 10
+ *   of 13 at median **+21**, against a best *section* lift of +10. In `review` five block
+ *   types clear the bar where the section skeleton was thin.
+ *
+ *   So an archetype now carries blocks alongside sections: which functional units the strong
+ *   band writes, **how many of each**, and roughly where in the document. Density is the part
+ *   a heading count could never reach — 89% of curated review skills have a procedure against
+ *   80% of the rest, which is barely a finding, but they write 4.3 procedures against 3.2.
+ *
+ *   Major rather than minor: `mineAndStore` skips on an unchanged skeleton *and* a matching
+ *   miner version, so a bump is the only thing that lets new evidence reach a stored row —
+ *   the lesson 2.1.0 learned when its attribution work would otherwise have reached exactly
+ *   zero archetypes, silently.
+ */
+export const MINER_VERSION = "3.0.0";
 
 /** R3.2's gate, in the terms that actually resist a monoculture. */
 export const MIN_STRUCTURES = 50;
@@ -201,6 +221,8 @@ export type MeasuredRole = {
 
 export type Representative = {
   skillId: string;
+  /** The version the fingerprint and blocks belong to. Needed to aggregate block order. */
+  skillVersionId: string;
   slug: string;
   name: string;
   qualityScore: number;
@@ -258,6 +280,7 @@ export async function representatives(category: string): Promise<Representative[
     with labelled as (
       select
         sk.id as skill_id,
+        sv.id as skill_version_id,
         sk.slug,
         sk.name,
         sk.quality_score,
@@ -304,6 +327,7 @@ export async function representatives(category: string): Promise<Representative[
     const headings = (row.headings ?? []) as Array<{ role: string | null }>;
     return {
       skillId: row.skill_id as string,
+      skillVersionId: row.skill_version_id as string,
       slug: row.slug as string,
       name: row.name as string,
       qualityScore: row.quality_score as number,
@@ -388,7 +412,7 @@ export async function representatives(category: string): Promise<Representative[
  * `op ANY/ALL (array) requires array on right side` — the driver does not hand Postgres an
  * array in that position. Repository names cannot contain a comma, so the join is lossless.
  */
-const CURATED_LIST: string = [...CURATED_SOURCES].join(",");
+export const CURATED_LIST: string = [...CURATED_SOURCES].join(",");
 
 export async function gateEvidence(): Promise<
   Array<{
@@ -505,6 +529,51 @@ export type SkeletonSection = {
   telemetry: SectionTelemetryRef | null;
 };
 
+/**
+ * One functional unit the strong band writes (Doc 6 RW.3).
+ *
+ * ## Inclusion is decided on presence, and density is carried beside it
+ *
+ * Presence uses the identical rule sections use — `MIN_LIFT`, three standard errors, a
+ * prevalence floor — so a block lift and a section lift are directly comparable, which is the
+ * whole basis of the claim that blocks discriminate better.
+ *
+ * Density is reported and **not** significance-tested, deliberately. It is the more useful
+ * number for an author (4.3 procedures against 3.2 says something a presence percentage
+ * cannot) but testing a difference of means needs variance this does not compute, and
+ * inventing a threshold for it would be exactly the confident-number-measuring-the-wrong-thing
+ * mistake the `quality_score` banding made. Reported as evidence, never as the gate.
+ */
+export type SkeletonBlock = {
+  type: BlockType;
+  /** Percent of strong-band structures carrying at least one. */
+  strongPrevalence: number;
+  weakPrevalence: number;
+  /** strong − weak, in points. What earns the block its place. */
+  lift: number;
+  /** Mean per structure, per band. Descriptive: see the note above. */
+  strongDensity: number;
+  weakDensity: number;
+  /**
+   * Median position through the document among strong-band structures, 0–1.
+   *
+   * What makes this a grammar rather than a set: an author is told the order the strong band
+   * puts these in, not just which ones it uses. Normalised, because documents differ wildly
+   * in length and an absolute block index would put "third" in a 40-block skill next to
+   * "third" in a 4-block one.
+   */
+  typicalPosition: number;
+  /** Present in nearly every strong example — expected rather than optional. */
+  required: boolean;
+};
+
+export type MeasuredBlock = SkeletonBlock & {
+  standardError: number;
+  requiredLift: number;
+  kept: boolean;
+  rejectedFor: string | null;
+};
+
 export type SkeletonTrait = {
   key: string;
   label: string;
@@ -540,6 +609,8 @@ export type Archetype = {
   gateReason: string | null;
   skeleton: {
     sections: SkeletonSection[];
+    /** The functional units inside the sections, in the order the strong band writes them. */
+    blocks: SkeletonBlock[];
     traits: SkeletonTrait[];
     norms: {
       medianWords: number;
@@ -550,6 +621,15 @@ export type Archetype = {
   antiPatterns: SkeletonTrait[];
   /** Every role measured, kept or rejected, with the threshold it was judged against. */
   measured: MeasuredRole[];
+  /**
+   * Every block type measured, kept or rejected.
+   *
+   * Stored for the same reason `measured` is: diagnosing the v7 section collapse cost four
+   * throwaway scripts rebuilding numbers the miner had already computed and discarded. Two
+   * types currently clear nothing — `stance` and `anti-example` — and their measurements are
+   * the evidence for whether to prune them under Doc 6 §7.
+   */
+  measuredBlocks: MeasuredBlock[];
   /** The authoring signal this mine consumed, for the changelog and the page (R6.2). */
   telemetry: {
     drafts: number;
@@ -631,6 +711,48 @@ const TRAITS: Array<{ key: string; label: string; of: (r: Representative) => boo
     of: (r) => r.descriptionShape.hasConcreteNoun === true,
   },
 ];
+
+/**
+ * Median position of each block type through the document, 0–1, over the given versions.
+ *
+ * One aggregate query rather than a column on the representative row. The alternative was
+ * storing an ordered block-type list on `skill_structures` at extraction time, which would
+ * have been cheaper to read and would have needed another full re-extract of 51,000 bundles
+ * to obtain — a poor trade for a number thirteen mining runs need once each.
+ *
+ * Normalised by the document's own block count, because an absolute index would place
+ * "third" in a 40-block skill beside "third" in a 4-block one and call them the same
+ * position. `percentile_cont` over the normalised value is the median an author is told.
+ */
+async function blockPositions(versionIds: readonly string[]): Promise<Map<BlockType, number>> {
+  if (versionIds.length === 0) return new Map();
+
+  const result = await db.execute(sql`
+    with sized as (
+      select b.skill_version_id, b.type, b.block_order,
+             max(b.block_order) over (partition by b.skill_version_id) as last_order
+      from skill_blocks b
+      where b.extractor_version = ${EXTRACTOR_VERSION}
+        and b.type is not null
+        and b.skill_version_id = any(${sql`array[${sql.join(
+          versionIds.map((id) => sql`${id}`),
+          sql`, `,
+        )}]::uuid[]`})
+    )
+    select type,
+           percentile_cont(0.5) within group (
+             order by case when last_order > 0 then block_order::float / last_order else 0 end
+           ) as position
+    from sized
+    group by type
+  `);
+
+  const out = new Map<BlockType, number>();
+  for (const row of result.rows as Array<{ type: string; position: number }>) {
+    out.set(row.type as BlockType, Math.round(Number(row.position) * 100) / 100);
+  }
+  return out;
+}
 
 /** Skills in a category before de-duplication, for the collapse ratio. */
 async function skillTotal(category: string): Promise<number> {
@@ -756,6 +878,89 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
 
   sections.sort((a, b) => a.typicalPosition - b.typicalPosition || b.lift - a.lift);
 
+  /**
+   * Blocks (Doc 6 RW.3) — the grain below the heading.
+   *
+   * Presence is judged by the identical rule the sections above use, so the two lifts are
+   * directly comparable; density and order are gathered as the evidence that makes the result
+   * a grammar rather than a set.
+   */
+  const positions = await blockPositions(strong.map((r) => r.skillVersionId));
+  const measuredBlocks: MeasuredBlock[] = [];
+  const blocks: SkeletonBlock[] = [];
+
+  for (const type of BLOCK_TYPES) {
+    const has = (r: Representative) => r.blockTypes.includes(type);
+    const strongPrevalence = pct(strong.filter(has).length, strong.length);
+    const weakPrevalence = pct(weak.filter(has).length, weak.length);
+    const lift = strongPrevalence - weakPrevalence;
+
+    const se = liftStandardError(strongPrevalence, strong.length, weakPrevalence, weak.length);
+    const required = Math.max(MIN_LIFT, LIFT_SIGMA * se);
+    const commonEnough = strongPrevalence >= MIN_STRONG_PREVALENCE;
+    const kept = commonEnough && lift >= required;
+
+    const meanOf = (band: Representative[]) =>
+      band.length === 0
+        ? 0
+        : Math.round(
+            (band.reduce((sum, r) => sum + (r.blockCounts[type] ?? 0), 0) / band.length) * 10,
+          ) / 10;
+
+    const entry: SkeletonBlock = {
+      type,
+      strongPrevalence,
+      weakPrevalence,
+      lift,
+      strongDensity: meanOf(strong),
+      weakDensity: meanOf(weak),
+      typicalPosition: positions.get(type) ?? 0.5,
+      required: strongPrevalence >= 80,
+    };
+
+    measuredBlocks.push({
+      ...entry,
+      standardError: Math.round(se * 10) / 10,
+      requiredLift: Math.round(required * 10) / 10,
+      kept,
+      rejectedFor: kept
+        ? null
+        : !commonEnough
+          ? "not common in the strong band"
+          : "lift below threshold",
+    });
+
+    if (kept) blocks.push(entry);
+  }
+
+  blocks.sort((a, b) => a.typicalPosition - b.typicalPosition || b.lift - a.lift);
+
+  /**
+   * **No block anti-patterns in 3.0.0, deliberately** — and this is a decision, not an
+   * omission.
+   *
+   * Negative lift becomes an anti-pattern for free everywhere else in this file, and it would
+   * here too: `anti-example` measures −5 in `review` and −3 corpus-wide, `stance` −6. Emitting
+   * those as guidance would tell authors *write fewer anti-examples*, and that advice would be
+   * actively harmful if the measurement is wrong.
+   *
+   * There is good reason to think one of them is. The `anti-example` detector fires on
+   * markers — ❌, "common mistakes", "what not to do" — and long-tail skills, many of them
+   * model-generated, reach for that punctuation constantly while a vendor writing formal
+   * documentation expresses the same knowledge as prose and matches nothing. So the negative
+   * lift may be measuring **house style rather than the presence of failure-mode knowledge**.
+   * That is precisely the shape of the `quality_score` banding mistake: a confident number
+   * measuring the wrong thing, and it produced a confidently wrong archetype last time.
+   *
+   * A negative claim also deserves a higher bar than a positive one. "The strong band writes
+   * these" invites an author to add something; "the strong band writes fewer of these" invites
+   * them to delete knowledge, and being wrong costs more.
+   *
+   * Every measurement is stored in `measuredBlocks`, so a later version can revisit this with
+   * a better detector or with fifty curated skills read by hand — which is the honest way to
+   * settle whether the knowledge is absent or merely unmarked.
+   */
+
   const traits: SkeletonTrait[] = [];
   const antiPatterns: SkeletonTrait[] = [];
   for (const trait of TRAITS) {
@@ -830,6 +1035,7 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
     gateReason,
     skeleton: {
       sections,
+      blocks,
       traits,
       norms: {
         medianWords: median(strong.map((r) => r.wordCount)),
@@ -841,6 +1047,7 @@ export async function mineArchetype(category: string): Promise<Archetype | null>
     },
     antiPatterns,
     measured,
+    measuredBlocks,
     telemetry: {
       drafts: telemetry.drafts,
       orgs: telemetry.orgs,

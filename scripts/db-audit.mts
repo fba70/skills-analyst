@@ -229,46 +229,122 @@ for (const row of counts.rows) {
  * output, and the only visible symptom is a mining run that quietly finds no evidence.
  * `archetypes --blocks` reporting eleven rows of zeros at 1% coverage was exactly this.
  *
- * So coverage is reported against the version the code is pinned to, beside the total, and
- * the gap between the two columns is the work outstanding.
+ * ## Coverage counts subjects, not rows — and this took a second pass to get right
+ *
+ * The first version printed `total − current` as "re-derive outstanding", which is wrong on
+ * every append-only table here and wrong in the direction that matters: it reports permanent
+ * history as permanent unfinished work. `archetypes` keeps all 105 rows on purpose (R7.2
+ * reproducibility and R3.5 drift-diffing both need them), and `skill_structures` keeps its
+ * extractor 1.x rows, so both columns would have carried a red arrow that no amount of
+ * re-deriving could ever clear. An alarm that cannot be silenced stops being read — the
+ * same failure as a status line that is green because a table is empty, wearing the other
+ * costume.
+ *
+ * So the question asked is **how many subjects are covered at the pinned version**, against
+ * how many there are to cover. That number can reach its target, and its target is stated.
  */
 console.info("\nDerived data, at the version the code currently pins");
 const { EXTRACTOR_VERSION } = await import("../src/server/analytics/structure");
 const { EMBEDDER_VERSION } = await import("../src/server/analytics/embeddings");
 const { MINER_VERSION } = await import("../src/server/analytics/archetype");
 
-const eligible = await c.query<{ n: string }>(
-  `select count(*)::text as n from skill_versions where status in ('indexed','quarantined')`,
-);
-const derived = await c.query<{ label: string; current: string; total: string }>(
+/**
+ * One row per derived table: subjects covered, the subjects there are, and the unit.
+ *
+ * The unit differs per table and saying so is the point. A fingerprint covers a skill
+ * version; an embedding covers a canonical skill, because a near-duplicate variant is
+ * deliberately never embedded; an archetype covers a function category, and only the ones
+ * that clear the evidence gate can ever be covered.
+ */
+const coverage = await c.query<{ label: string; covered: string; universe: string; unit: string }>(
   `select 'fingerprints' as label,
-          count(*) filter (where extractor_version = $1)::text as current,
-          count(*)::text as total from skill_structures
-   union all
-   select 'blocks',
-          count(*) filter (where extractor_version = $1)::text,
-          count(*)::text from skill_blocks
+          (select count(distinct skill_version_id) from skill_structures
+            where extractor_version = $1)::text as covered,
+          (select count(*) from skill_versions
+            where status in ('indexed','quarantined'))::text as universe,
+          'skill versions' as unit
    union all
    select 'embeddings',
-          count(*) filter (where embedder_version = $2)::text,
-          count(*)::text from skill_embeddings
+          (select count(*) from skill_embeddings where embedder_version = $2)::text,
+          (select count(*) from skills
+            where status = 'indexed' and canonical_skill_id is null)::text,
+          'canonical skills'
    union all
    select 'archetypes',
-          count(*) filter (where miner_version = $3)::text,
-          count(*)::text from archetypes`,
+          (select count(distinct category) from archetypes
+            where miner_version = $3 and org_id is null and axis = 'function')::text,
+          (select count(distinct category) from archetypes
+            where org_id is null and axis = 'function')::text,
+          'function categories'`,
   [EXTRACTOR_VERSION, EMBEDDER_VERSION, MINER_VERSION],
 );
-for (const row of derived.rows) {
-  const cur = Number(row.current);
-  const total = Number(row.total);
-  const stale = total - cur;
+
+for (const row of coverage.rows) {
+  const covered = Number(row.covered);
+  const universe = Number(row.universe);
+  const missing = universe - covered;
+  /* Floored, not rounded. 50,965 of 50,966 rounds to 100% and would print "100%" beside
+     "1 to re-derive" — a line that argues with itself is worse than one that says 99%. */
+  const percent = universe === 0 ? 0 : Math.floor((covered / universe) * 100);
   console.info(
-    `  ${row.label.padEnd(14)} ${cur.toLocaleString().padStart(8)} current` +
-      `  ${stale.toLocaleString().padStart(8)} at an older version` +
-      (stale > 0 ? "  <- re-derive outstanding" : ""),
+    `  ${row.label.padEnd(14)} ${covered.toLocaleString().padStart(8)} of ${universe.toLocaleString().padEnd(8)} ${row.unit.padEnd(23)} ${String(percent).padStart(3)}%` +
+      (missing > 0 ? `  <- ${missing.toLocaleString()} to re-derive` : ""),
   );
 }
-console.info(`  ${"eligible".padEnd(14)} ${Number(eligible.rows[0].n).toLocaleString().padStart(8)} skill versions`);
+
+/**
+ * Blocks are volume, not coverage — and getting this wrong printed a false alarm.
+ *
+ * The first version measured blocks as *distinct versions carrying a block row* against
+ * current fingerprints, and reported **95 to re-derive**. There is nothing to re-derive:
+ * extractor 2.0.0 writes `block_count` on every fingerprint it produces, so a fingerprint at
+ * the current version has been block-scanned by construction — and all 95 of those rows say
+ * `block_count = 0` because the documents have nothing to segment. Forty-one are empty and
+ * the set averages eleven words.
+ *
+ * Which makes a coverage column for blocks meaningless: it can only ever restate the
+ * fingerprint row. What is worth printing is how many blocks exist and how many documents
+ * legitimately hold none, because that second number is the honest measure of whether the
+ * segmenter is finding structure or inventing it.
+ */
+const blocks = await c.query<{ total: string; scanned: string; empty: string }>(
+  `select (select count(*) from skill_blocks where extractor_version = $1)::text as total,
+          (select count(*) from skill_structures where extractor_version = $1)::text as scanned,
+          (select count(*) from skill_structures
+            where extractor_version = $1 and block_count = 0)::text as empty`,
+  [EXTRACTOR_VERSION],
+);
+{
+  const b = blocks.rows[0];
+  const scanned = Number(b.scanned);
+  const empty = Number(b.empty);
+  console.info(
+    `  ${"blocks".padEnd(14)} ${Number(b.total).toLocaleString().padStart(8)} typed spans` +
+      ` across ${(scanned - empty).toLocaleString()} of ${scanned.toLocaleString()} scanned documents` +
+      ` · ${empty.toLocaleString()} hold none`,
+  );
+}
+
+/**
+ * History, reported as history.
+ *
+ * Rows at a superseded version are not a backlog. They are what makes a stored verdict
+ * reproducible and an archetype diffable, and the only honest thing to do with the count is
+ * print it under a heading that says so.
+ */
+const kept = await c.query<{ label: string; n: string }>(
+  `select 'fingerprints' as label, count(*)::text as n from skill_structures where extractor_version <> $1
+   union all select 'embeddings', count(*)::text from skill_embeddings where embedder_version <> $2
+   union all select 'archetypes', count(*)::text from archetypes where miner_version <> $3`,
+  [EXTRACTOR_VERSION, EMBEDDER_VERSION, MINER_VERSION],
+);
+const history = kept.rows.filter((r) => Number(r.n) > 0);
+if (history.length > 0) {
+  console.info(
+    `  retained at a superseded version, deliberately: ` +
+      history.map((r) => `${r.label} ${Number(r.n).toLocaleString()}`).join(", "),
+  );
+}
 
 console.info("\nSpend, cumulative (RC.3 ledger)");
 const spend = await c.query<{ purpose: string; calls: string; micros: string }>(

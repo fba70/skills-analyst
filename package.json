@@ -44,6 +44,7 @@
     "rescan": "tsx --conditions=react-server scripts/rescan.mts",
     "seed": "tsx --conditions=react-server scripts/seed.mts",
     "structures": "tsx --conditions=react-server scripts/structures.mts",
+    "blocks": "tsx --conditions=react-server scripts/blocks-library.mts",
     "embeddings": "tsx --conditions=react-server scripts/embeddings.mts",
     "taxonomy": "tsx --conditions=react-server scripts/taxonomy.mts",
     "submit": "tsx --conditions=react-server scripts/submit-repo.mts",

@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { AttributionCard } from "@/components/archetypes/attribution-card";
+import { BlocksCard } from "@/components/archetypes/blocks-card";
 import { EvidenceCard } from "@/components/archetypes/evidence-card";
 import { ExemplarsCard } from "@/components/archetypes/exemplars-card";
 import { SkeletonCard } from "@/components/archetypes/skeleton-card";
@@ -73,6 +74,12 @@ export default async function ArchetypePage(props: PageProps<"/archetypes/[categ
       </header>
 
       <SkeletonCard skeleton={archetype.skeleton} />
+
+      {/*
+        Blocks sit directly under the skeleton because they are the same claim at a finer
+        grain — which sections, then what goes inside them — and an author reads down.
+      */}
+      <BlocksCard blocks={archetype.skeleton.blocks} />
 
       <TraitsCard
         title="What curated skills do"

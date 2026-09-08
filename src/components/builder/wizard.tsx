@@ -11,6 +11,7 @@ import {
 } from "@/app/(protected)/build/actions";
 import type { Scaffold } from "@/server/builder/scaffold";
 import { DOMAINS } from "@/server/taxonomy/vocabulary";
+import { BlockLibrary } from "@/components/builder/block-library";
 import { SimilarSkills } from "@/components/builder/similar-skills";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -337,6 +338,40 @@ export function BuilderWizard({ categories }: { categories: Category[] }) {
               ))}
             </CardContent>
           </Card>
+
+          {/*
+            The block grammar, shown because the prompt is getting it.
+            R5.2 says a suggestion must be traceable to the archetype element it came from,
+            and the sections list satisfied that while the headings were the whole scaffold.
+            They are not any more: the prompt now also carries what to write inside them, so
+            an author who could not see this list would be reading a draft shaped by evidence
+            the interface never showed them.
+
+            Read-only, unlike the sections. Notes are collected per section because that is
+            the unit the author writes in and the unit telemetry counts (R6.2); a textarea
+            per block would ask somebody to draft their document twice.
+          */}
+          {scaffold.blocks.length > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">What goes inside those sections</CardTitle>
+                <CardDescription>
+                  The passages that separate well-regarded {scaffold.categoryLabel.toLowerCase()}{" "}
+                  skills from the rest, roughly in the order they appear. These are written
+                  where the skill needs them — not a checklist to complete.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {/*
+                  The list is expandable into real fragments (Doc 6 RW.3) rather than being
+                  prose about each type. "75% of curated skills carry a decision rule" and
+                  "here are four of them" are different amounts of help, and the blocks table
+                  already knows where every passage in the corpus is.
+                */}
+                <BlockLibrary category={scaffold.category} blocks={scaffold.blocks} />
+              </CardContent>
+            </Card>
+          ) : null}
 
           {scaffold.traits.length > 0 || scaffold.exemplars.length > 0 ? (
             <Card>

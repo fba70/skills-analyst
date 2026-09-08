@@ -38,6 +38,35 @@ function render(a: NonNullable<Awaited<ReturnType<typeof mineArchetype>>>) {
     }
   }
 
+  /*
+   * Blocks under the sections, in the order the strong band writes them.
+   *
+   * Density is printed beside the prevalence because the two say different things and one
+   * of them is not a reason anything is on this list: inclusion is decided on presence, by
+   * the same rule the sections use, and the count is descriptive evidence.
+   */
+  if (a.skeleton.blocks.length > 0) {
+    console.info("\n  BLOCKS                       curated / other   lift   per skill   position");
+    for (const b of a.skeleton.blocks) {
+      console.info(
+        `  ${b.required ? "▪" : "·"} ${b.type.padEnd(26)} ${String(b.strongPrevalence).padStart(3)}% / ${String(b.weakPrevalence).padStart(3)}%   +${String(b.lift).padEnd(4)}  ` +
+          `${b.strongDensity.toFixed(1)} / ${b.weakDensity.toFixed(1)}    ${b.typicalPosition.toFixed(2)}`,
+      );
+    }
+    /* The rejects, one line, because a type that missed by two points is a different fact
+       from one that was never considered — and the negatives are the evidence behind the
+       decision not to publish block anti-patterns. */
+    const rejected = a.measuredBlocks.filter((b) => !b.kept);
+    if (rejected.length > 0) {
+      console.info(
+        `    rejected: ${rejected
+          .sort((x, y) => y.lift - x.lift)
+          .map((b) => `${b.type} ${b.lift >= 0 ? "+" : "−"}${Math.abs(b.lift)}`)
+          .join(", ")}`,
+      );
+    }
+  }
+
   if (a.skeleton.traits.length > 0) {
     console.info("\n  DO");
     for (const t of a.skeleton.traits) {

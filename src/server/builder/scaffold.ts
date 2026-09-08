@@ -1,5 +1,6 @@
 import "server-only";
 
+import { blockTypeBlurb, blockTypeLabel } from "@/lib/block-types";
 import { sectionRoleBlurb, sectionRoleLabel } from "@/lib/section-roles";
 import { archetypeDetail, type ArchetypeDetail } from "@/server/analytics/archetype-read";
 import type { SkillRef } from "@/server/dal/skills";
@@ -43,6 +44,29 @@ export type ScaffoldSection = {
   required: boolean;
 };
 
+/**
+ * A block type the category's strong band writes (Doc 6 RW.1, RW.2).
+ *
+ * Offered beside the sections rather than nested inside one, and that is the honest shape:
+ * the miner measures a block's prevalence across the whole document, not per section, so
+ * claiming `decision-rule` belongs under `steps` would be a placement this evidence cannot
+ * support. What it can support is *what to write* and *roughly where* — which is what an
+ * author needs and all that was measured.
+ */
+export type ScaffoldBlock = {
+  type: string;
+  label: string;
+  blurb: string;
+  strongPrevalence: number;
+  weakPrevalence: number;
+  lift: number;
+  /** How many a curated skill in this category typically carries. */
+  strongDensity: number;
+  /** Normalised median position, 0–1. Rendered as words, never as this number. */
+  typicalPosition: number;
+  required: boolean;
+};
+
 export type ScaffoldTrait = {
   label: string;
   strongPrevalence: number;
@@ -59,6 +83,11 @@ export type Scaffold = {
   /** The evidence line, so the form can say where its shape came from (R3.4, R5.2). */
   evidence: { structures: number; sources: number; skills: number } | null;
   sections: ScaffoldSection[];
+  /**
+   * The block grammar for this category, in document order. Empty for a category with no
+   * archetype and for any row mined before miner 3.0.0.
+   */
+  blocks: ScaffoldBlock[];
   /** Conventions worth following, strongest first. */
   traits: ScaffoldTrait[];
   /** Choices that mark a skill out as weaker in this category. */
@@ -96,6 +125,7 @@ export async function buildScaffold(category: string): Promise<Scaffold | null> 
         }
       : null,
     sections: archetype ? sectionsFrom(archetype) : fallbackSections(),
+    blocks: blocksFrom(archetype),
     traits: archetype?.skeleton.traits ?? [],
     antiPatterns: archetype?.antiPatterns ?? [],
     norms: archetype?.skeleton.norms ?? {
@@ -146,6 +176,29 @@ function sectionsFrom(archetype: ArchetypeDetail): ScaffoldSection[] {
   // Essentials first: they are what the document opens with, and the mined list is already
   // ordered by where each section typically sits.
   return [...essential, ...mined];
+}
+
+/**
+ * The mined blocks, with no fallback list.
+ *
+ * Sections get `FALLBACK_ROLES` because a document with no heading at all is unusable and
+ * those four are in every dialect's own documentation. There is no equivalent claim to make
+ * about blocks: no block type is structurally required, and a hand-written default list
+ * would be exactly the invented evidence the `lift: null` convention exists to prevent.
+ * An unmined category therefore gets no block guidance, which is the truth.
+ */
+function blocksFrom(archetype: ArchetypeDetail | null): ScaffoldBlock[] {
+  return (archetype?.skeleton.blocks ?? []).map((block) => ({
+    type: block.type,
+    label: blockTypeLabel(block.type),
+    blurb: blockTypeBlurb(block.type),
+    strongPrevalence: block.strongPrevalence,
+    weakPrevalence: block.weakPrevalence,
+    lift: block.lift,
+    strongDensity: block.strongDensity,
+    typicalPosition: block.typicalPosition,
+    required: block.required,
+  }));
 }
 
 function fallbackSections(): ScaffoldSection[] {

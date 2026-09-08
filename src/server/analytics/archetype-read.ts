@@ -10,6 +10,7 @@ import {
   MIN_SOURCES,
   MIN_STRUCTURES,
   type Contributor,
+  type SkeletonBlock,
   type SkeletonSection,
   type SkeletonTrait,
 } from "./archetype";
@@ -33,6 +34,14 @@ import {
 
 export type ArchetypeSkeleton = {
   sections: SkeletonSection[];
+  /**
+   * The block grammar (Doc 6 RW.1), absent on every row mined before miner 3.0.0.
+   *
+   * Optional in the type rather than defaulted in the row, because "this version measured
+   * no blocks" and "this version was mined before blocks existed" are different facts and
+   * only the second one should read as *not measured yet* on the page.
+   */
+  blocks?: SkeletonBlock[];
   traits: SkeletonTrait[];
   norms: {
     medianWords: number;
@@ -43,6 +52,7 @@ export type ArchetypeSkeleton = {
 
 const EMPTY_SKELETON: ArchetypeSkeleton = {
   sections: [],
+  blocks: [],
   traits: [],
   norms: { medianWords: 0, medianDescriptionLength: 0, medianFileCount: 0 },
 };
@@ -60,6 +70,8 @@ export type ArchetypeIndexEntry = {
   distinctStructures: number;
   sourceCount: number;
   sections: SkeletonSection[];
+  /** Empty both when nothing was measured and when the row predates miner 3.0.0. */
+  blocks: SkeletonBlock[];
   traits: SkeletonTrait[];
   antiPatternCount: number;
   minedAt: Date | null;
@@ -108,6 +120,7 @@ export async function archetypeIndex(): Promise<ArchetypeIndexEntry[]> {
       distinctStructures: row?.distinctStructures ?? 0,
       sourceCount: row?.sourceCount ?? 0,
       sections: skeleton.sections ?? [],
+      blocks: skeleton.blocks ?? [],
       traits: skeleton.traits ?? [],
       antiPatternCount: ((row?.antiPatterns as SkeletonTrait[] | undefined) ?? []).length,
       minedAt: row?.createdAt ?? null,
