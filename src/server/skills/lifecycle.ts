@@ -1,6 +1,6 @@
 import "server-only";
 
-import { eq, sql, type SQL } from "drizzle-orm";
+import { asc, eq, sql, type SQL } from "drizzle-orm";
 
 import {
   isLifecycleDeclaration,
@@ -350,4 +350,42 @@ export async function lifecycleSummary() {
     .from(skills);
 
   return { rows, governance };
+}
+
+export type DueForReview = {
+  id: string;
+  slug: string;
+  name: string;
+  reviewBy: Date | null;
+};
+
+/**
+ * Skills whose review date has passed or falls due shortly (Doc 6 RK.2, plan step E1).
+ *
+ * ## Dated skills only, and that is the whole selector
+ *
+ * A review date is a governance decision somebody made. Its absence means nobody has made one —
+ * not that the skill is neglected — so an undated skill is not overdue and never appears here.
+ * The alternative lists 49,000 rows and is ignored by lunchtime, which is the same reason
+ * `db:audit` stopped reporting retained history as outstanding work.
+ *
+ * Overdue first, then soonest, because the panel is a queue and the top of it should be the thing
+ * that is already wrong rather than the thing that will be.
+ */
+export async function dueForReview(withinDays: number, limit = 50): Promise<DueForReview[]> {
+  return db
+    .select({
+      id: skills.id,
+      slug: skills.slug,
+      name: skills.name,
+      reviewBy: skills.reviewBy,
+    })
+    .from(skills)
+    .where(
+      sql`${skills.reviewBy} is not null
+          and ${skills.reviewBy} < now() + make_interval(days => ${withinDays})
+          and ${skills.status} = 'indexed'`,
+    )
+    .orderBy(asc(skills.reviewBy))
+    .limit(limit);
 }

@@ -242,7 +242,7 @@ where these numbers came from.
 | Entitlements | **new (A5)** — three plans; the trust surfaces cannot be gated at all |
 | Builder | live at `/build` · **a draft is typed blocks and the body is their render (C1)** · block editing, revisions and a no-model scaffold path (C1b, R4.6, R4.7) · **Interview mode, five techniques, typed candidates accepted or rejected (C2, RW.4, R5.1, R5.4)** · block-level archetype deviations (R4.3) |
 | MCP | live at `/api/mcp` · six tools, token-gated, rate-limit scope now follows the plan |
-| Schema | 38 migrations (0000–0036) · 43 tables · 38 RLS policies |
+| Schema | 39 migrations (0000–0037) · 44 tables · 39 RLS policies |
 | Spend, cumulative | **$31.70** — $31.52 taxonomy, $0.10 builder, $0.08 embeddings. All metered. |
 
 **Ingestion, classification and every backfill run from a local terminal**, not from the
@@ -2168,6 +2168,109 @@ would be enforcing an untested mean.
 > missing", because an archetype with no blocks would otherwise read as a fully conformant
 > draft.
 
+
+### Freshness: the mechanism had no way in, and one kind of decay nobody declares (RK.2, plan step E1)
+
+`src/lib/freshness.ts` · `src/server/skills/links.ts` · Settings → **Freshness** · migration 0037
+`pnpm links --status | --check N | --rotten` · `pnpm verify:freshness` (31 checks, free)
+
+A4 shipped `review_by` and a derived `stale` state with **no web entry point at all** — only
+`pnpm lifecycle --review-by`. Its own note said why the panel waited: *one that can set a review
+date but cannot yet tell anyone it has passed is furniture.* E1 is the telling-anyone half.
+
+**Undated is not neglected.** A review date is a governance decision somebody made, and its
+absence means nobody has made one. The queue selects only dated skills; the alternative lists
+49,000 rows and is ignored by lunchtime — the same reason `db:audit` stopped reporting retained
+history as outstanding work.
+
+#### Link rot is the only freshness signal nobody has to declare
+
+Everything else about staleness is a judgement expressed as a date. A dead link is a fact, and it
+is the commonest way a skill quietly stops working: a `reference-pointer` to a vendor page that
+moved sends an agent nowhere, and every analyzer still passes.
+
+**Most non-200 responses are not rot**, and the naive rule — anything ≥ 400 is broken — fills the
+panel with sites that dislike robots. Four statuses instead:
+
+| | |
+|---|---|
+| `broken` | 404 or 410 — the page itself saying it is gone. The only confident one. |
+| `blocked` | 401, 403, 429 — the server refusing *us*. A fact about our user agent. |
+| `unreachable` | timeout, DNS, 5xx. Often the network, often temporary. |
+| `ok` | it answered |
+
+And a single failure is never rot: `consecutive_failures` must reach `ROT_THRESHOLD` (2), reset to
+zero the moment a check succeeds so a recovered link stops accusing immediately. A panel that
+cried wolf on a deploy or a rate limit would be ignored inside a week — the
+alarm-nobody-can-silence problem arriving from the other direction.
+
+> **`HEAD` then `GET`, and the fallback is not politeness.** A great many servers answer `405` or
+> `501` to `HEAD`, and reading that as a dead page would be the single largest source of false
+> rot. The retry is a one-byte ranged `GET`. `verify:freshness` starts a local server that refuses
+> `HEAD` and asserts the fallback end to end — no third party is contacted by the suite.
+
+**A state table, not a log**, which is the opposite of this repo's default. `verdicts`,
+`eval_runs` and `llm_usage` are append-only because each row is evidence about a moment; a link
+check's entire value is *is this broken now*, and a log would grow by URL × check to answer a
+question only the newest row answers. The history worth keeping is the two numbers the rot rule
+reads, so they are columns.
+
+Keyed on the **version**, not the skill: re-sync produces a new document with possibly different
+links, and keying on the skill would carry a dead URL forward onto a document that no longer
+contains it.
+
+#### Coverage travels with the count
+
+"4 dead links" over a corpus 3% checked reads as a healthy corpus — the `archetypes --blocks`
+misreading in a new place. The panel and the CLI both lead with how much has been checked, and
+the panel states what it is *withholding*: how many blocked and unreachable links it found and
+why neither is listed. A reader who does not know the list is the confident subset will read it as
+the whole answer.
+
+> **Three bugs the first real pass found, none of which reading could have.** Running
+> `pnpm links --check 200` over the corpus is what turned each of them up.
+>
+> **The rot threshold was unreachable by construction.** 50 links returned 404 and *none* were
+> reportable, because rot needs two consecutive failures and an oldest-first selector returns to a
+> given document once per sweep — 245 passes, at 200 a time over 49,000. A document with an
+> outstanding failure now jumps the queue after `RECHECK_AFTER_HOURS`, and stops jumping once the
+> failure is confirmed, so discovery is not starved either. `verify:freshness` backdates a row and
+> drives `nextTargets` rather than asserting the SQL exists: the first kind of check would have
+> passed throughout.
+>
+> **Most of the "unreachable" links were placeholders the filter should have caught.**
+> `api.example.com`, `staging.example.com` and `attacker-server.example.com` are subdomains of an
+> RFC 2606 name and the filter matched the bare name only; `http://burpsuite` and `http://model_a`
+> have no dot at all. 27 of 308 rows, each costing a real DNS lookup and landing in the panel as
+> true and useless. Widening it needed a **prune**, too — a version is immutable, so its link set
+> only changes when the extraction rules do, and orphaned rows would have sat there for ever.
+>
+> **`<> all(${array})` in a `sql` template is a row constructor, not an array.** Postgres answered
+> *malformed array literal*. CLAUDE.md already records this trap from the lifecycle branch, where
+> the same cause produced *op ANY/ALL (array) requires array on right side* — it shipped again
+> because the template form reads so naturally. `notInArray` is the fix, both times.
+>
+> A fourth, smaller: `metadata_only` skills have no stored bytes, so they produced nothing, sorted
+> to the front as never-checked, and **sorted to the front again next pass** — starving the queue
+> behind them. Excluded from the selector rather than marked checked, because a row saying "looked,
+> found nothing" would be a claim about a document we cannot open.
+
+> **The extractor had the bug its own comment warned about.** A URL inside backticks kept the
+> closing backtick, and a URL with a stray character 404s — which is the one verdict this module
+> treats as confident. The backtick is now excluded from the character class rather than stripped
+> afterwards, because it can never appear in a URL; `*` and `_` are stripped in trailing position
+> only, since both are legal inside one and neither ever ends one. Found by the suite, not by
+> reading.
+
+> **And one type that lied.** `linkCheckSummary` annotated `min(checked_at)` as `sql<Date | null>`
+> and the CLI called `.toISOString()` on the string the driver actually returns. `sql<T>` is a
+> *claim about* a value, not a conversion of it — drizzle applies no parser to a raw expression.
+> Same shape as reading `usage.inputTokens` from `embedMany`, which returns `undefined` and meters
+> a backfill as free. It is typed `string | null` now and converted once, at the boundary.
+
+One cache per pass, too: the corpus links to the same handful of vendor docs thousands of times,
+and asking one host four hundred times in a run is how a crawler gets blocked — which would then
+be recorded as `blocked` on four hundred skills.
 
 ### Impact analytics: two functions that had been written and never read (RK.7, plan step E4)
 
@@ -4367,6 +4470,8 @@ pnpm verify:trigger --live               # adds the collision round trip — COS
 pnpm verify:matrix                       # RW.7 with/without deltas, and eval-delta; free
 pnpm verify:optimise                     # RW.9 compression, verified before offered; free
 pnpm verify:impact                       # RK.7 impact analytics, and honest zeros; free
+pnpm verify:freshness                    # RK.2 review dates and link rot; free
+pnpm links --status | --check 200        # external link rot; free, bounded, polite
 pnpm verify:tree                         # would a fresh clone build this? free, offline
 pnpm db:audit                            # is the derived data current? one command, free
 pnpm verify:blocks                       # block taxonomy and span invariants; free

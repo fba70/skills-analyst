@@ -843,3 +843,69 @@ export async function saveModelSettingsAction(
     return failure(error);
   }
 }
+
+/**
+ * Set or clear a skill's review date (Doc 6 RK.2, plan step E1).
+ *
+ * The web entry point A4 deliberately did not build. Its note said why: *a panel that can set a
+ * review date but cannot yet tell anyone it has passed is furniture*, so the control arrives with
+ * the overdue list rather than before it.
+ *
+ * Clearing is passed as an explicit `null` rather than inferred from an empty string deeper down.
+ * `setReviewDate` writes a different audit event for the two cases, and the one time this was
+ * ambiguous it wrote `lifecycle.cleared` — telling an operator they had lifted a deprecation when
+ * they had set a date.
+ */
+export async function setReviewDateAction(
+  skillId: string,
+  reviewBy: string | null,
+): Promise<ActionResult> {
+  try {
+    const actor = await requireAdmin();
+
+    let parsed: Date | null = null;
+    if (reviewBy) {
+      parsed = new Date(reviewBy);
+      /*
+       * Refused rather than stored as `Invalid Date`. The CLI shipped without this and
+       * `--review-by <slug> clear` ran `new Date("clear")` — the one option its own usage string
+       * advertised had never once worked.
+       */
+      if (Number.isNaN(parsed.getTime())) {
+        return { ok: false, message: `Not a date: ${reviewBy}` };
+      }
+    }
+
+    const { setReviewDate } = await import("@/server/skills/lifecycle");
+    const result = await setReviewDate({ skillId, reviewBy: parsed, actorId: actor.userId });
+    if (!result.ok) return { ok: false, message: result.error };
+
+    revalidatePath("/settings");
+    return { ok: true, message: parsed ? `Due ${reviewBy}` : "No longer on a clock" };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Check a slice of the corpus for dead links.
+ *
+ * Free — no model — so it is bounded by politeness rather than by budget: one pass, oldest-checked
+ * first, each URL fetched once however many skills carry it.
+ */
+export async function checkLinksAction(limit: number): Promise<ActionResult> {
+  try {
+    await requireAdmin();
+    const { checkLinks } = await import("@/server/skills/links");
+    const report = await checkLinks({ limit });
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      message:
+        `${report.versionsChecked} document(s), ${report.linksChecked} link(s) · ` +
+        `${report.rotten} newly dead, ${report.recovered} recovered`,
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}

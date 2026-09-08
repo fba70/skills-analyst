@@ -7,6 +7,7 @@ import { ArchetypePanel } from "@/components/settings/archetype-panel";
 import { PipelinePanel } from "@/components/settings/pipeline-panel";
 import { ListControls, SettingsTabs } from "@/components/settings/list-controls";
 import { FlagsPanel } from "@/components/settings/flags-panel";
+import { FreshnessPanel } from "@/components/settings/freshness-panel";
 import { PlansPanel, type PlanRow } from "@/components/settings/plans-panel";
 import { QuarantinePanel } from "@/components/settings/quarantine-panel";
 import { ReviewPanel } from "@/components/settings/review-panel";
@@ -28,6 +29,9 @@ import { crawlCoverage } from "@/server/crawl/run";
 import { sourceDiversity } from "@/server/analytics/templates";
 import { archetypeSummary } from "@/server/analytics/archetype-run";
 import { archetypeActivity, loopEvents, loopMetrics } from "@/server/analytics/loop";
+import { DUE_SOON_DAYS } from "@/lib/freshness";
+import { dueForReview } from "@/server/skills/lifecycle";
+import { linkCheckSummary, rottenLinks } from "@/server/skills/links";
 import { MODEL_TASKS } from "@/lib/models";
 import { getModelSettings } from "@/server/settings/models";
 import { getRateLimits } from "@/server/settings/rate-limits";
@@ -84,6 +88,7 @@ const TABS = [
   "takedowns",
   "spend",
   "loop",
+  "freshness",
   "schedule",
   "limits",
   "models",
@@ -124,12 +129,18 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
    * them carry an open count. A count fetched only when its own tab is showing is a count
    * nobody sees until they have already gone looking.
    */
-  const [counts, coverage, curation, takedowns, flagCounts] = await Promise.all([
+  const [counts, coverage, curation, takedowns, flagCounts, dueCount] = await Promise.all([
     platformCounts(),
     crawlCoverage(),
     curationCounts(),
     takedownCounts(),
     flagSummary(),
+    /*
+     * Loaded whatever tab is open, like the flag and takedown counts, because it is in the tab
+     * label — and an overdue skill is already being shown to readers as stale, which is the
+     * property that earns a number on a tab nobody has clicked.
+     */
+    dueForReview(DUE_SOON_DAYS, 200),
   ]);
 
   const shardTotals = coverage.shards.reduce(
@@ -138,7 +149,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, flags, platformBudget, breakdown, metrics, activity, loopLog, schedule, rateLimits, models] =
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, flags, platformBudget, breakdown, metrics, activity, loopLog, linkRot, linkCoverage, schedule, rateLimits, models] =
     await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
@@ -161,6 +172,8 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "loop" ? loopMetrics() : null,
     tab === "loop" ? archetypeActivity() : null,
     tab === "loop" ? loopEvents() : null,
+    tab === "freshness" ? rottenLinks(50) : null,
+    tab === "freshness" ? linkCheckSummary() : null,
     tab === "schedule" ? getSchedule() : null,
     tab === "limits" ? getRateLimits() : null,
     tab === "models" ? getModelSettings() : null,
@@ -211,6 +224,15 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
           { value: "quarantine", label: `Quarantine (${curation.quarantined})` },
           { value: "sources", label: "Sources" },
           { value: "loop", label: "Loop" },
+          {
+            value: "freshness",
+            /*
+             * The overdue count is in the label, like Flags and Takedowns and for the same
+             * reason: an overdue skill is already being shown to readers as stale, so it has a
+             * clock on it in a way a quarantined one does not.
+             */
+            label: dueCount.length > 0 ? `Freshness (${dueCount.length})` : "Freshness",
+          },
           { value: "schedule", label: "Schedule" },
           { value: "limits", label: "Rate limits" },
           { value: "spend", label: "Spend" },
@@ -301,6 +323,29 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
             rates={Object.fromEntries(
               MODEL_TASKS.map((task) => [models[task], rateFor(models[task]).inputPerMTok]),
             )}
+          />
+        ) : null}
+
+        {tab === "freshness" && linkRot && linkCoverage ? (
+          <FreshnessPanel
+            /* Serialised at the boundary into a client component, as the plans panel does. */
+            due={dueCount.map((row) => ({
+              id: row.id,
+              slug: row.slug,
+              name: row.name,
+              reviewBy: row.reviewBy?.toISOString() ?? null,
+            }))}
+            rotten={linkRot.map((row) => ({
+              ...row,
+              firstFailedAt: row.firstFailedAt?.toISOString() ?? null,
+            }))}
+            coverage={{
+              versionsChecked: linkCoverage.versionsChecked,
+              servable: linkCoverage.servable,
+              links: linkCoverage.links,
+              blocked: linkCoverage.blocked,
+              unreachable: linkCoverage.unreachable,
+            }}
           />
         ) : null}
 
