@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { isBlockType } from "@/lib/block-types";
 import { isDraftBlockForm, type DraftBlock, type DraftBlockInput } from "@/lib/draft-blocks";
 import { isEvalKind } from "@/lib/evals";
+import type { MatrixReport } from "@/lib/matrix";
 import type { TriggerReport } from "@/lib/trigger";
 import { isCandidateDecision, isInterviewTechnique } from "@/lib/interview";
 import { libraryFragments, type LibraryResult } from "@/server/analytics/block-library";
@@ -654,9 +655,10 @@ export async function runEvalsAction(
     if (!draft) return { ok: false, message: "Draft not found." };
     if (!draft.body) return { ok: false, message: "Write the draft before running its evals." };
 
+    const { evalParentFor } = await import("@/server/evals/store");
     const { runEvals } = await import("@/server/evals/run");
     const result = await runEvals({
-      draftId,
+      ...evalParentFor(draft),
       orgId,
       name: String(draft.frontmatter.name ?? draft.slug),
       description: String(draft.frontmatter.description ?? draft.summary ?? ""),
@@ -700,9 +702,10 @@ export async function triggerReportAction(
     const { hasEntitlement } = await import("@/server/dal/entitlements");
     const entitled = includeCollisions ? await hasEntitlement(orgId, "trigger-lab-full") : false;
 
+    const { evalParentFor } = await import("@/server/evals/store");
     const { triggerReport } = await import("@/server/evals/trigger");
     const report = await triggerReport({
-      draftId,
+      ...evalParentFor(draft),
       orgId,
       name: String(draft.frontmatter.name ?? draft.slug),
       description: String(draft.frontmatter.description ?? draft.summary ?? ""),
@@ -715,6 +718,55 @@ export async function triggerReportAction(
       ok: true,
       data: { report, collisionsGated: includeCollisions && !entitled },
     };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Run the with/without matrix (Doc 6 RW.7, plan step D3).
+ *
+ * ## Pro, and expensive enough that the button says so
+ *
+ * Eight model calls per golden task — producer and judge, with and without, across two models.
+ * `MAX_MATRIX_TASKS` is the fuse; the org budget is what bounds the money, and a refusal
+ * mid-run leaves incomplete tasks that the report excludes rather than averaging in.
+ *
+ * ## It is the only action here that can write an outcome signal
+ *
+ * `eval-delta` attaches to a `skill_version`, so it lands only once the draft has been
+ * published. Before that the matrix still measures — the author learns whether their skill
+ * helps — and the report says plainly which of the two happened.
+ */
+export async function runMatrixAction(
+  draftId: string,
+): Promise<ActionResult<MatrixReport>> {
+  try {
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
+    if (!orgId) return { ok: false, message: "No active workspace." };
+
+    const { requireEntitlement } = await import("@/server/dal/entitlements");
+    await requireEntitlement(orgId, "eval-lab");
+
+    const { getDraft } = await import("@/server/builder/drafts");
+    const draft = await getDraft(draftId, orgId);
+    if (!draft) return { ok: false, message: "Draft not found." };
+    if (!draft.body) return { ok: false, message: "Write the draft before measuring it." };
+
+    const { evalParentFor } = await import("@/server/evals/store");
+    const { runMatrix } = await import("@/server/evals/matrix");
+    const report = await runMatrix({
+      ...evalParentFor(draft),
+      orgId,
+      name: String(draft.frontmatter.name ?? draft.slug),
+      description: String(draft.frontmatter.description ?? draft.summary ?? ""),
+      body: draft.body,
+      publishedSkillId: draft.publishedSkillId,
+    });
+
+    revalidatePath(`/build/${draftId}`);
+    return { ok: true, data: report };
   } catch (error) {
     return failure(error);
   }

@@ -6,6 +6,7 @@ import { ArrowLeft, ShieldOff } from "lucide-react";
 import { BlockEditor } from "@/components/builder/block-editor";
 import { EvalPanel } from "@/components/builder/eval-panel";
 import { Interview } from "@/components/builder/interview";
+import { MatrixPanel } from "@/components/builder/matrix-panel";
 import { TriggerLab } from "@/components/builder/trigger-lab";
 import { RevisionHistory } from "@/components/builder/revision-history";
 import { DraftActions } from "@/components/builder/draft-actions";
@@ -14,7 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getDraftBlocks, listDraftRevisions } from "@/server/builder/blocks";
-import { contentHashOf, evalStates } from "@/server/evals/store";
+import { contentHashOf, evalParentFor, evalStates } from "@/server/evals/store";
 import { getSession, listSessions } from "@/server/interview/session";
 import { blockDeviations } from "@/server/builder/deviation";
 import { getDraft } from "@/server/builder/drafts";
@@ -74,7 +75,12 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         getDraftBlocks(draft.id, orgId),
         listDraftRevisions(draft.id, orgId),
         listSessions(draft.id, orgId),
-        evalStates({ draftId: draft.id }, orgId),
+        /*
+         * The parent moves on publish — `publishDraft` re-points every case onto the skill — so
+         * asking for `{ draftId }` after publication finds nothing and the panel reads as data
+         * loss. One helper decides, at every call site that needs it.
+         */
+        evalStates(evalParentFor(draft), orgId),
       ])
     : [[], [], [], []];
 
@@ -254,6 +260,19 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         entitled={evalEntitled}
         canRun={Boolean(draft.body)}
       />
+
+      {/*
+        The matrix sits with the trigger lab, under the evals both read. It is the last panel
+        that costs money and the only one that can produce an outcome signal, so it is also the
+        last one an author reaches — by the time it is worth pressing, the document is finished.
+      */}
+      {evalCases.some((c) => c.kind === "golden-task") ? (
+        <MatrixPanel
+          draftId={draft.id}
+          goldenTasks={evalCases.filter((c) => c.kind === "golden-task").length}
+          published={Boolean(draft.publishedSkillId)}
+        />
+      ) : null}
 
       {/*
         The trigger lab sits directly under the evals it reads, because it is the same probes

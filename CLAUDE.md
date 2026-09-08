@@ -242,7 +242,7 @@ where these numbers came from.
 | Entitlements | **new (A5)** — three plans; the trust surfaces cannot be gated at all |
 | Builder | live at `/build` · **a draft is typed blocks and the body is their render (C1)** · block editing, revisions and a no-model scaffold path (C1b, R4.6, R4.7) · **Interview mode, five techniques, typed candidates accepted or rejected (C2, RW.4, R5.1, R5.4)** · block-level archetype deviations (R4.3) |
 | MCP | live at `/api/mcp` · six tools, token-gated, rate-limit scope now follows the plan |
-| Schema | 36 migrations (0000–0034) · 42 tables · 37 RLS policies |
+| Schema | 37 migrations (0000–0035) · 42 tables · 37 RLS policies |
 | Spend, cumulative | **$31.70** — $31.52 taxonomy, $0.10 builder, $0.08 embeddings. All metered. |
 
 **Ingestion, classification and every backfill run from a local terminal**, not from the
@@ -2168,6 +2168,69 @@ would be enforcing an untested mean.
 > missing", because an archetype with no blocks would otherwise read as a fully conformant
 > draft.
 
+
+### The with/without matrix, and R6.3's collection half is finally complete (RW.7, plan step D3)
+
+`src/lib/matrix.ts` · `src/server/evals/matrix.ts` · migration 0035
+`pnpm verify:matrix` (24 checks, free)
+
+Skill CI says the golden tasks pass. It cannot say whether they would have passed anyway — and
+a skill carrying no knowledge a capable model lacks is indistinguishable, from inside CI, from
+one carrying a great deal. That difference is the entire value proposition, so each golden task
+now runs four ways: with the document and without it, across two models.
+
+**Two models, because "it helps" is usually "it helps this one."** A skill that lifts a cheap
+model towards a capable one's baseline is a real and saleable finding, and a *different* finding
+from one that lifts both — which a single-model matrix reports identically to no effect at all.
+The default pair is Sonnet and Haiku for exactly that contrast.
+
+**`eval-delta` is written**, which empties `UNIMPLEMENTED_KINDS` and completes R6.3's collection
+half. The value is signed: a skill that made results worse records a negative, because that is
+the finding this milestone exists to surface and the one an author is least likely to look for.
+Only for a published skill — the signal attaches to a `skill_version` and a draft has none, so a
+matrix while authoring measures without recording, and the panel says which happened.
+
+#### Half a measurement renders as a perfect result
+
+A delta is a subtraction between two arms, which gives it a failure mode none of the other
+measurements have. If the budget refuses partway through, the with-arm ran and the without-arm
+did not, and the naive subtraction reads `1 − 0` as a **flawless +100 points**. A number wrong in
+the flattering direction is the one nobody questions.
+
+So a delta is computed only over tasks with a decided verdict in **all four cells** at the
+current document. Incomplete tasks are counted and excluded. `verify:matrix` reproduces the naive
+form producing +100 from one arm before asserting the real one declines.
+
+`error` is dropped from both numerator and denominator, and here that matters more than in CI: a
+refusal in the *without* arm would read as the skill helping.
+
+> **The interaction that would have shipped silently.** D1 takes the newest run per case as the
+> case's state, and a matrix writes a run per arm — where the without-arm is *supposed* to fail.
+> Without a filter, a successful matrix would make every golden task look freshly broken and the
+> publish gate would call it a regression. `eval_runs.with_skill` is nullable and **NULL means a
+> Skill CI run**; `evalStates` filters on `is null`. A boolean rather than an arm enum because
+> the model is already a column: the four cells are `(with_skill, model)`, and a second name for
+> a pair the row already carries is how two descriptions of one thing start to disagree.
+
+#### Smaller decisions worth keeping
+
+- **The two arms have separate prompts**, written out rather than one template with a
+  conditional. The difference between them *is* the experiment, and a shared template is one
+  edit away from a variable neither arm controls.
+- **A cell already measured at this document is skipped.** Eight calls a task makes a second
+  press the most expensive no-op in the product.
+- **The sample size is not stored on the signal.** `outcome_signals` carries a kind and a value
+  and no free-text column, which is what makes its read policy safe; how many tasks a delta came
+  from belongs with the runs, which are already rows.
+- **`evalParentFor`** fixes a wart D1 left: `publishDraft` re-points cases from the draft to the
+  skill, so `{ draftId }` after publication finds nothing and the eval panel, trigger lab and
+  matrix would all read as data loss. One helper, at the four call sites that need it — the
+  fourth being the one it would have been forgotten at.
+
+> **This makes migration 0035 a hard dependency of the eval surfaces.** `evalStates` selects
+> `with_skill`, so `verify:evals` and `verify:trigger` fail with `column does not exist` until it
+> is applied. Migration-before-code, loud rather than silent, and worth knowing before wondering
+> why two green suites turned red.
 
 ### The trigger lab, and a budget that was pointed at the wrong pocket (RW.8, R2.8, plan step D2)
 
@@ -4147,6 +4210,7 @@ pnpm verify:stream | verify:interview    # conversation budget, and RW.4; both f
 pnpm verify:evals                        # Skill CI: regression gate, staleness, probes; free
 pnpm verify:trigger                      # RW.8 precision, recall, collisions; free
 pnpm verify:trigger --live               # adds the collision round trip — COSTS A LITTLE
+pnpm verify:matrix                       # RW.7 with/without deltas, and eval-delta; free
 pnpm db:audit                            # is the derived data current? one command, free
 pnpm verify:blocks                       # block taxonomy and span invariants; free
 pnpm verify:tokens                       # activation cost, bands and honesty; free

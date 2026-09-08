@@ -2,7 +2,7 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 
-import { asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import {
   isEvalKind,
@@ -33,6 +33,25 @@ export function contentHashOf(body: string): string {
 }
 
 export type EvalParent = { draftId: string } | { skillId: string };
+
+/**
+ * Which parent a draft's eval cases hang off right now.
+ *
+ * `publishDraft` re-points every case from the draft to the skill it became, so after
+ * publication `{ draftId }` finds nothing — the eval panel would empty, the trigger lab would
+ * report unknown, and the matrix would find zero tasks. All three look like data loss and none
+ * of them is.
+ *
+ * One helper rather than the same ternary at four call sites, because the fourth is the one it
+ * would be forgotten at. It lives here rather than beside the actions because a `"use server"`
+ * module may only export server actions, and this is a two-line pure function.
+ */
+export function evalParentFor(draft: {
+  id: string;
+  publishedSkillId: string | null;
+}): EvalParent {
+  return draft.publishedSkillId ? { skillId: draft.publishedSkillId } : { draftId: draft.id };
+}
 
 export type CreateEvalInput = EvalParent & {
   orgId: string;
@@ -131,10 +150,19 @@ export async function evalStates(
        * eventually — the parameterised form costs nothing and does not depend on where the
        * values came from staying true.
        */
+      /*
+       * Skill CI runs only. A matrix arm (`with_skill` non-null) is a measurement of what
+       * happens *without* the skill as often as with it, and letting one into this stream would
+       * make the newest run per case sometimes describe a document the author never wrote — a
+       * without-arm failure reading as a regression and blocking the publish.
+       */
       .where(
-        inArray(
-          evalRuns.evalId,
-          cases.map((c) => c.id),
+        and(
+          inArray(
+            evalRuns.evalId,
+            cases.map((c) => c.id),
+          ),
+          isNull(evalRuns.withSkill),
         ),
       )
       .orderBy(desc(evalRuns.runAt));

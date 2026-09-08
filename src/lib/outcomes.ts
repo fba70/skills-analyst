@@ -68,9 +68,15 @@ export const OUTCOME_KINDS = [
    */
   "flagged",
   /**
-   * Measured impact from an eval run (RW.7). **Not written yet** — plan step D3.
+   * Measured impact from an eval run (RW.7), written by the with/without matrix (D3).
    *
-   * The signal R6.3 most wants and the one furthest away: it needs the Eval Lab to exist.
+   * The signal R6.3 most wants, and the one that was furthest away because it needed the Eval
+   * Lab to exist. `value` is the delta — pass rate with the skill minus pass rate without it,
+   * averaged over the models — and it is **signed**: a skill that made results worse records a
+   * negative, which is the finding this whole milestone exists to surface.
+   *
+   * Only for a published skill. The signal attaches to a `skill_version` and a draft has none,
+   * so a matrix run while authoring measures without recording.
    */
   "eval-delta",
 ] as const;
@@ -100,7 +106,16 @@ export function isOutcomeKind(value: unknown): value is OutcomeKind {
  * one and the suite goes red, naming the kind to remove. That is the only mechanism that
  * makes forgetting this list loud rather than silent.
  */
-export const UNIMPLEMENTED_KINDS: readonly OutcomeKind[] = ["eval-delta"];
+/*
+ * Empty as of plan step D3, and that is the whole of R6.3's collection half.
+ *
+ * The list stays — it is a statement about the code that cannot be derived, and the next kind
+ * added will need it again. `verify:outcomes` asserts every kind named here has zero stored
+ * rows, so leaving `eval-delta` on it after the matrix began writing would have turned the Loop
+ * panel red rather than merely stale. That is the correction the `flagged` entry had to make
+ * the hard way.
+ */
+export const UNIMPLEMENTED_KINDS: readonly OutcomeKind[] = [];
 
 /**
  * Why each uncollected kind is uncollected, so the sentence cannot outlive its reason.
@@ -110,9 +125,7 @@ export const UNIMPLEMENTED_KINDS: readonly OutcomeKind[] = ["eval-delta"];
  * file and the explanation lived in another. Keyed off the same kind, a reason disappears
  * exactly when the kind does.
  */
-export const UNIMPLEMENTED_REASON: Record<string, string> = {
-  "eval-delta": "needs the Eval Lab to exist",
-};
+export const UNIMPLEMENTED_REASON: Record<string, string> = {};
 
 export type Valence = "positive" | "negative" | "neutral";
 

@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   index,
   integer,
@@ -144,6 +145,21 @@ export const evalRuns = pgTable(
     /** 0–100 for a trigger probe. Null for a golden task, which is pass or fail. */
     confidence: smallint("confidence"),
 
+    /**
+     * Which arm of the with/without matrix this run is (Doc 6 RW.7, plan step D3).
+     *
+     * **NULL is a Skill CI run**, and that is the load-bearing value. D1's verdict, staleness
+     * and regression logic reads the newest run per case, so a matrix arm landing in that
+     * stream would be read as the case's current state — and a *without-the-skill* failure,
+     * which is the arm working correctly, would look like a regression and block the publish.
+     * `evalStates` filters on `with_skill is null` for exactly that reason.
+     *
+     * A boolean rather than an arm enum because the model is already a column: the four cells
+     * are `(with_skill, model)`, and inventing a second name for a pair the row already carries
+     * is how two descriptions of one thing start to disagree.
+     */
+    withSkill: boolean("with_skill"),
+
     /** Which model decided, so a verdict batch is identifiable after a model change. */
     model: text("model").notNull(),
     /** What this run cost, denormalised from the ledger for a per-run figure on screen. */
@@ -153,6 +169,8 @@ export const evalRuns = pgTable(
   },
   (t) => [
     index("eval_runs_eval_idx").on(t.evalId, sql`${t.runAt} desc`),
+    /** The matrix reads one case's arms at one document; CI reads neither. */
+    index("eval_runs_matrix_idx").on(t.evalId, t.withSkill, t.contentHash),
 
     /**
      * SELECT and INSERT only. A run that the application can rewrite is not evidence, and the

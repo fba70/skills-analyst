@@ -33,6 +33,7 @@ export const MODEL_TASKS = [
   "builder",
   "interview",
   "evalAgent",
+  "evalAgentB",
   "evalJudge",
   "consistency",
 ] as const;
@@ -71,6 +72,15 @@ export const MODEL_DEFAULTS: ModelSettings = {
    */
   evalAgent: "anthropic/claude-sonnet-5",
   /**
+   * The second arm of the with/without matrix (Doc 6 RW.7).
+   *
+   * Deliberately a *smaller* model than the first. The interesting result is rarely "this helps
+   * everything equally" — it is that a skill lifts a cheaper model towards a more capable one's
+   * baseline, which is a real and saleable finding and one a single-model matrix reports
+   * identically to no effect at all.
+   */
+  evalAgentB: "anthropic/claude-haiku-4.5",
+  /**
    * The judge (Doc 6 RW.6).
    *
    * Bounded judgement over text that is all supplied — did this output meet this expectation,
@@ -103,6 +113,11 @@ export const MODEL_TASK_META: Record<ModelTask, { label: string; blurb: string }
     label: "Eval — the agent under test",
     blurb:
       "Follows the skill on a golden task, so the output can be judged. Stands in for a real consumer, so it should be the class of model one would be.",
+  },
+  evalAgentB: {
+    label: "Eval — the second arm",
+    blurb:
+      "The other model in the with/without matrix. Pairing a capable model with a cheaper one is what separates 'this skill helps' from 'this skill helps a small model'.",
   },
   evalJudge: {
     label: "Eval — the judge",
