@@ -480,5 +480,78 @@ if (connected) {
   }
 }
 
+// ---------------------------------------------------------------------------------------
+console.info("\nCan the detector fire at all?");
+// ---------------------------------------------------------------------------------------
+
+/**
+ * The positive control, against a real model. Opt in with `--live`; costs about a fifth of a cent.
+ *
+ * ## Why this exists
+ *
+ * The first real mine returned **0 conflicts across 13 pairs**. That is either an honest finding —
+ * conflicts should be rare — or a detector that cannot fire, and **nothing in this suite could
+ * tell those apart**, because every other check here mocks the model and therefore tests
+ * everything except whether the prompt works.
+ *
+ * ## Both directions, because one proves nothing
+ *
+ * A detector that answers "conflict" to every pair passes a positive-only test, and one that
+ * answers "no" to everything passes a negative-only test. The prompt spends most of its length
+ * suppressing false positives, which makes over-suppression the likely failure — so the pair of
+ * checks is the evidence, not either one.
+ */
+if (process.argv.includes("--live")) {
+  const { compareGuardrails } = await import("../src/server/analytics/conflicts");
+  const { MODEL_DEFAULTS } = await import("../src/lib/models");
+  const model = MODEL_DEFAULTS.evalJudge;
+
+  const contradiction = await compareGuardrails(
+    { name: "squash-merge", guardrails: ["Always squash commits into one before merging to main."] },
+    {
+      name: "preserve-history",
+      guardrails: ["Never squash commits when merging; every individual commit must be preserved."],
+    },
+    model,
+  );
+  check(
+    "a plain contradiction is reported",
+    contradiction.output.conflicts.length >= 1,
+    contradiction.output.conflicts[0]?.why ?? "nothing reported",
+  );
+
+  const unrelated = await compareGuardrails(
+    { name: "squash-merge", guardrails: ["Always squash commits into one before merging to main."] },
+    { name: "test-first", guardrails: ["Never deploy without running the full test suite."] },
+    model,
+  );
+  check(
+    "and two rules about different things are not",
+    unrelated.output.conflicts.length === 0,
+    unrelated.output.conflicts[0]?.why ?? "correctly silent",
+  );
+
+  /*
+   * The case the prompt spends the most words on. A stricter rule that still satisfies the looser
+   * one is the commonest false positive, and reporting it would fill the panel with pairs nobody
+   * can act on.
+   */
+  const stricter = await compareGuardrails(
+    { name: "review-one", guardrails: ["Every change must have at least one reviewer."] },
+    { name: "review-two", guardrails: ["Every change must have at least two reviewers."] },
+    model,
+  );
+  check(
+    "and a stricter rule that still satisfies the looser one is not",
+    stricter.output.conflicts.length === 0,
+    stricter.output.conflicts[0]?.why ?? "correctly silent",
+  );
+} else {
+  skip(
+    "the detector's positive control",
+    "three real model calls, about $0.002 — re-run with --live",
+  );
+}
+
 console.info(`\n${pass} passed, ${fail} failed${skipped > 0 ? `, ${skipped} skipped` : ""}\n`);
 process.exit(fail > 0 ? 1 : 0);

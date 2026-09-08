@@ -9,7 +9,7 @@
  * - **`similar-to` already lives in the A6 vectors.** A stored copy is a snapshot that goes stale
  *   the moment a skill is re-embedded, and resolving it live is a `<=>` lookup against an index
  *   that exists — free, and correct by construction.
- * - **`supersedes` already lives on `skills.superseded_by`.** A4 made that a declaration with a
+ * - **`supersedes` already lives on `skills.superseded_by_skill_id`.** A4 made that a declaration with a
  *   live join precisely so a replacement quarantined since would stop being recommended; copying
  *   it into an edge table would resurrect exactly the stale-pointer problem A4 solved.
  *
@@ -114,11 +114,15 @@ export type Relation = {
 /**
  * Bumped when the conflict detector changes what it would decide.
  *
+ * 1.1.0 rewrote the prompt around a single satisfiability test after a live control showed 1.0.0
+ * reporting *"at least one reviewer"* against *"at least two reviewers"* as a conflict — the
+ * stricter-than false positive the prompt already had a bullet against and was not applying.
+ *
  * Stored on every mined row, for the reason `MINER_VERSION` and `EXTRACTOR_VERSION` exist: a
  * conflict is a claim somebody will act on, and "which rules produced this" has to be answerable
  * after the rules move. It is also the re-mine selector.
  */
-export const CONFLICT_MINER_VERSION = "1.0.0";
+export const CONFLICT_MINER_VERSION = "1.1.0";
 
 /**
  * How close two skills must be before their guardrails are worth comparing.

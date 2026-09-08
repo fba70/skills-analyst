@@ -2207,8 +2207,10 @@ pair is still 240,000 calls over this corpus if the pairs are chosen badly:
 1. near neighbours only — a Terraform rule and a legal-review rule are not in disagreement, they
    are about different things;
 2. both sides must actually carry guardrails, which most skills do not;
-3. the two sets must share a significant word — free, and it removes most of what survives the
-   first two.
+3. the two sets must share a significant word — free, and on a first real sample it removed 2 of
+   11, which is useful and much weaker than the first two. Worth stating rather than assuming:
+   the similarity threshold does most of the work and this filter earns its place by costing
+   nothing, not by being decisive.
 
 `--conflicts` prints the gap between pairs considered and pairs called, because that number is
 what says whether the job is affordable at scale and it is invisible otherwise. One call per
@@ -2244,10 +2246,33 @@ finishes and one that does not.
 > the files that had already been fixed — a scanner shouting loudest where the problem is least. It
 > strips comments now and allows the correct `any(${sql`array[…]`})` form.
 
-> **The prompt spends most of its length on what is *not* a conflict** — a stricter rule that
-> still satisfies the looser one, rules with different stated circumstances, the same rule
-> reworded. Without those the model reports every stricter-than pair and the panel becomes noise
-> inside a day. It also says an empty list is the normal answer, because it is.
+> **The prompt spends most of its length on what is *not* a conflict, and the first version of it
+> did not work.** The first real mine returned **0 conflicts across 13 pairs** — which is either an
+> honest finding or a detector that cannot fire, and *nothing in the suite could tell those apart*,
+> because every check mocked the model and therefore tested everything except whether the prompt
+> works.
+>
+> So `verify:relations --live` drives the real model with three controls, for about $0.002: a plain
+> contradiction, two unrelated rules, and a stricter-than pair. Both directions are needed — a
+> detector answering "conflict" to everything passes a positive-only test, and one answering "no"
+> to everything passes a negative-only test.
+>
+> It found the failure immediately. *"At least one reviewer"* against *"at least two reviewers"*
+> was reported as a conflict, with the reasoning that a change with exactly one reviewer would
+> violate the second — which is wrong, because getting two satisfies both. That is the commonest
+> shape of rule in any corpus, and it was the exact case a bullet in the prompt already warned
+> against and the model was not applying.
+>
+> **1.1.0 replaced the list of exclusions with a single test**: *is there any one course of action
+> that satisfies both rules? If yes, there is no conflict.* Plus a worked example of the
+> stricter-than case, because a rule stated abstractly is a rule a model can agree with and then
+> ignore. All three controls pass.
+
+> **What the live run also showed about the input.** The guardrails reaching the detector are often
+> long expository paragraphs rather than unconditional rules — the block extractor types a passage
+> `guardrail` on modal verbs, so a page of prose containing "must" and "required" qualifies. The
+> plumbing is right and the raw material is coarser than the design assumed, which is a reason to
+> read a zero here as *"probably none among these pairs"* rather than as a corpus-wide finding.
 
 #### Symmetric edges are written as a pair, in one statement
 
@@ -4621,6 +4646,7 @@ pnpm verify:impact                       # RK.7 impact analytics, and honest zer
 pnpm verify:freshness                    # RK.2 review dates and link rot; free
 pnpm verify:demand                       # RK.5 demand signals and the publish floor; free
 pnpm verify:relations                    # RK.3 the graph, and what it refuses to store; free
+pnpm verify:relations --live             # 3 controls proving the detector fires — ~$0.002
 pnpm relations --status                  # stored edges; free
 pnpm relations --conflicts 20            # mine guardrail contradictions — COSTS MONEY
 pnpm links --status | --check 200        # external link rot; free, bounded, polite
