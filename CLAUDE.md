@@ -242,7 +242,7 @@ where these numbers came from.
 | Entitlements | **new (A5)** — three plans; the trust surfaces cannot be gated at all |
 | Builder | live at `/build` · **a draft is typed blocks and the body is their render (C1)** · block editing, revisions and a no-model scaffold path (C1b, R4.6, R4.7) · **Interview mode, five techniques, typed candidates accepted or rejected (C2, RW.4, R5.1, R5.4)** · block-level archetype deviations (R4.3) |
 | MCP | live at `/api/mcp` · six tools, token-gated, rate-limit scope now follows the plan |
-| Schema | 41 migrations (0000–0039) · 45 tables · 40 RLS policies |
+| Schema | 42 migrations (0000–0040) · 46 tables · 41 RLS policies |
 | Spend, cumulative | **$31.70** — $31.52 taxonomy, $0.10 builder, $0.08 embeddings. All metered. |
 
 **Ingestion, classification and every backfill run from a local terminal**, not from the
@@ -2168,6 +2168,100 @@ would be enforcing an untested mean.
 > missing", because an archetype with no blocks would otherwise read as a fully conformant
 > draft.
 
+
+### The knowledge graph, most of which is deliberately not stored (RK.3, plan step E2)
+
+`src/lib/relations.ts` · `src/server/analytics/relations.ts` · `src/server/analytics/conflicts.ts`
+migration 0040 · `pnpm relations --status | --conflicts N` · `pnpm verify:relations` (25 checks, free)
+
+The obvious build is one `skill_relations` table holding every edge. It is also **three second
+sources of truth**, and this codebase has paid for that shape enough times to recognise it:
+
+- **`similar-to` already lives in the A6 vectors.** A stored copy is a snapshot that a re-embed
+  invalidates, and resolving it live is one `<=>` against an index that exists — free, and correct
+  by construction.
+- **`supersedes` already lives on `skills.superseded_by_skill_id`.** A4 made that a *live join*
+  precisely so a replacement quarantined since stops being recommended; copying it into an edge
+  table resurrects the stale-pointer problem A4 solved.
+
+So the table holds the two kinds with nowhere else to live — **mined conflicts**, which cost a
+model call per pair, and **author-declared** edges, which are somebody's assertion. `relationsFor`
+composes all four at read time, and which are stored is an implementation detail. Declaring a
+derived kind is **refused with a message naming where the answer lives**, rather than silently
+accepted or silently dropped.
+
+#### The conflict half has no equivalent anywhere in the system
+
+Every other measurement judges one document. This is the first claim about a **pair**: install
+both and one says *always*, the other *never*. Nothing in validation can see it, because each
+document is individually fine.
+
+Guardrails are the input, and A2 said so when it defined them — *"correlates with passing
+validation; the input to conflict detection (RK.3)"*. A guardrail is unconditional by definition,
+so two either agree, address different things, or contradict. A procedure can differ without
+disagreeing.
+
+**Three filters before a model is called, and they are what make it affordable.** One call per
+pair is still 240,000 calls over this corpus if the pairs are chosen badly:
+
+1. near neighbours only — a Terraform rule and a legal-review rule are not in disagreement, they
+   are about different things;
+2. both sides must actually carry guardrails, which most skills do not;
+3. the two sets must share a significant word — free, and it removes most of what survives the
+   first two.
+
+`--conflicts` prints the gap between pairs considered and pairs called, because that number is
+what says whether the job is affordable at scale and it is invisible otherwise. One call per
+*pair*, not per guardrail pair: both sets go in together and the model returns the cross-pairs
+that contradict. The quadratic version is the obvious one and is the difference between a job that
+finishes and one that does not.
+
+> **The first candidate query did not run slowly — it did not finish.** It joined
+> `skill_embeddings` to itself with no join condition and filtered on the distance afterwards: a
+> cross product. With **30,133 skills carrying guardrails that is 454 million** distance
+> computations over 1536-dimension vectors, and the trailing `LIMIT` cannot help because the
+> predicate has to be evaluated across the whole product first. An HNSW index can only serve
+> `order by … limit k`, so the rewrite is a bounded top-K lateral per source with **nothing else
+> inside it** — extra predicates push the planner back to a scan, the well-known filtered-ANN trap.
+> Every other condition is applied to the K rows that come back. 5 sources, 3 pairs, 6.9 seconds.
+>
+> Sources are sampled **at random**, and that is a stated limitation. A pair produces a row only
+> when it *conflicts*, so "compared and clean" is recorded nowhere and there is no incremental
+> selector to write; ordering by id would re-examine the same head of the corpus for ever.
+> Random sampling grows coverage probabilistically and may re-ask a clean pair. Same posture as
+> `taxonomy --sample`, and if corpus-wide coverage is ever wanted the missing piece is a record of
+> clean comparisons — a table, not a tweak.
+
+> **`= any(${jsArray})` in a `sql` template, for the fourth time.** Drizzle renders a JS array as a
+> **row constructor**, so Postgres answers *op ANY/ALL (array) requires array on right side* — at
+> runtime only. The lifecycle branch shipped it, E1's link prune shipped it, this step's guardrail
+> lookup shipped it, and a tree-wide scan added in response found a **fourth**: `deleteStoredBundles`
+> in the takedown path, guarding an irreversible bundle delete, latent since it was written because
+> the branch containing it cannot currently fire.
+>
+> `verify:relations` now scans every file for the pattern. Its own first version was too crude and
+> is worth recording: it matched the *warnings* about the trap, so three of five hits were prose in
+> the files that had already been fixed — a scanner shouting loudest where the problem is least. It
+> strips comments now and allows the correct `any(${sql`array[…]`})` form.
+
+> **The prompt spends most of its length on what is *not* a conflict** — a stricter rule that
+> still satisfies the looser one, rules with different stated circumstances, the same rule
+> reworded. Without those the model reports every stricter-than pair and the panel becomes noise
+> inside a day. It also says an empty list is the normal answer, because it is.
+
+#### Symmetric edges are written as a pair, in one statement
+
+A conflict reads the same from either end, and there were two ways to store it: one row with a
+canonical ordering, or two written together. Two, because every read is then `where from_skill_id
+= $1` with no `or` and no ordering convention a later query can forget — and because a one-sided
+conflict would warn half the callers it should while looking completely normal from either page.
+`verify:relations` writes one edge and asserts both skills see it.
+
+**The warning warns and does not refuse.** It reaches an agent through `get_skill` *and*
+`download_skill` — an agent is not obliged to read a skill before taking it, so the last moment it
+can matter is the call that hands over the bundle. But a conflict is a measurement over two
+documents, not a licence or a takedown: the refusals here are for things nobody may do, and a
+caller may have good reason to install both.
 
 ### Demand signals: the only surface that turns user text into a public page (RK.5, R5.3, step E3)
 
@@ -4526,6 +4620,9 @@ pnpm verify:optimise                     # RW.9 compression, verified before off
 pnpm verify:impact                       # RK.7 impact analytics, and honest zeros; free
 pnpm verify:freshness                    # RK.2 review dates and link rot; free
 pnpm verify:demand                       # RK.5 demand signals and the publish floor; free
+pnpm verify:relations                    # RK.3 the graph, and what it refuses to store; free
+pnpm relations --status                  # stored edges; free
+pnpm relations --conflicts 20            # mine guardrail contradictions — COSTS MONEY
 pnpm links --status | --check 200        # external link rot; free, bounded, polite
 pnpm verify:tree                         # would a fresh clone build this? free, offline
 pnpm db:audit                            # is the derived data current? one command, free

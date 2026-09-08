@@ -281,6 +281,13 @@
       "when": 1788873480681,
       "tag": "0039_condemned_tusk",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1788874560992,
+      "tag": "0040_lucky_lady_bullseye",
+      "breakpoints": true
     }
   ]
 }

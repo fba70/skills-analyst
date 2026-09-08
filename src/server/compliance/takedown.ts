@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 
 import { contentSourceAt, sameRepoUrl } from "@/server/crawl/repo-identity";
 import { db } from "@/server/db";
@@ -374,8 +374,18 @@ async function deleteStoredBundles(
       and(
         inArray(skillVersions.contentHash, hashes),
         eq(skillVersions.contentStored, true),
+        /*
+         * `notInArray`, not `<> all(${array})` in a template.
+         *
+         * Drizzle renders a JS array in a template as a row constructor, so this branch would have
+         * thrown *op ANY/ALL (array) requires array on right side* the first time it ran with a
+         * non-empty list. It never has: the guard above it, as this file already documents, cannot
+         * currently fire — which is exactly why a latent break in an irreversible-delete guard sat
+         * here unnoticed. Found by the tree-wide scan added in E2, after the same trap appeared for
+         * the third time.
+         */
         withdrawnVersionIds.length > 0
-          ? sql`${skillVersions.id} <> all(${withdrawnVersionIds})`
+          ? notInArray(skillVersions.id, withdrawnVersionIds)
           : sql`true`,
       ),
     );

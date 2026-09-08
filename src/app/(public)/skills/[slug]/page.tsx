@@ -10,6 +10,7 @@ import { ReportForms } from "@/components/registry/report-forms";
 import { Explain, ExplainLink } from "@/components/registry/explain";
 import { ConsistencyCard } from "@/components/registry/consistency-card";
 import { ImpactCard } from "@/components/registry/impact-card";
+import { RelationsCard } from "@/components/registry/relations-card";
 import { DownloadCard } from "@/components/registry/download-card";
 import { ProvenanceCard } from "@/components/registry/provenance-card";
 import {
@@ -23,6 +24,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { WithdrawalNotice } from "@/components/registry/withdrawal-notice";
 import { minedCategories } from "@/server/analytics/archetype-read";
 import { outcomeCollectionStart, outcomesForSkill } from "@/server/analytics/outcomes";
+import { relationsFor } from "@/server/analytics/relations";
 import { withdrawalNotice } from "@/server/compliance/takedown";
 import { getSkillBySlug } from "@/server/dal/skills";
 import { labelFor } from "@/server/taxonomy/vocabulary";
@@ -66,9 +68,15 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
    * is for — and it is safe because of the column list: a kind, a value, a day and a digest, with
    * no free text and no caller identity.
    */
-  const [outcomes, collectionStart] = await Promise.all([
+  const [outcomes, collectionStart, relations] = await Promise.all([
     outcomesForSkill(skill.id),
     outcomeCollectionStart(),
+    /*
+     * The graph (RK.3). Two of its four kinds are resolved live rather than stored — similarity
+     * from the A6 index and supersession from A4's own column — so this is three cheap queries
+     * and no snapshot that can go stale.
+     */
+    relationsFor(skill.id),
   ]);
 
   const mined = await minedCategories();
@@ -196,6 +204,13 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
         only describes what happened to it afterwards. Before the download card, because a reader
         deciding whether to take it wants the evidence first.
       */}
+      {/*
+        Above impact, because a conflict is a warning and impact is a statistic. A reader deciding
+        whether to take this skill needs to know it contradicts another one before they read how
+        many people have downloaded it.
+      */}
+      <RelationsCard view={relations} />
+
       <ImpactCard outcomes={outcomes} collectionStart={collectionStart} />
 
       {skill.status === "withdrawn" ? (

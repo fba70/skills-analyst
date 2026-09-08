@@ -18,6 +18,7 @@ export * from "./interview";
 export * from "./evals";
 export * from "./freshness";
 export * from "./demand";
+export * from "./relations";
 export * from "./telemetry";
 export * from "./spend";
 export * from "./settings";

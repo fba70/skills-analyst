@@ -184,6 +184,13 @@ export function registerFreeTools(server: McpServer) {
       const skill = await getSkillBySlug(slug);
       if (!skill) return result({ found: false, slug });
 
+      /*
+       * Fetched alongside rather than lazily: the whole point is that a caller sees it in the same
+       * response it uses to decide, and a second round trip is a round trip an agent will skip.
+       */
+      const { conflictsFor } = await import("@/server/analytics/relations");
+      const conflicts = await conflictsFor(skill.id);
+
       return result(
         {
           found: true,
@@ -220,6 +227,22 @@ export function registerFreeTools(server: McpServer) {
           })),
           categories: skill.categories.map((c) => `${c.axis}:${c.value}`),
           near_duplicates: skill.variantCount,
+          /**
+           * Install-time conflict warnings (Doc 6 RK.3, plan step E2).
+           *
+           * The only field here that is a claim about a **pair** of skills. Everything else
+           * describes this document, and every one of them can be clean while installing this
+           * alongside a neighbour hands an agent *always* and *never* about the same thing.
+           *
+           * Read from stored rows, so it costs a single indexed lookup and no model call — the
+           * mining is a bounded offline job. An agent gets the warning at the moment it can still
+           * act on it, which is before it takes the skill rather than after it behaves oddly.
+           */
+          conflicts_with: conflicts.map((conflict) => ({
+            slug: conflict.slug,
+            name: conflict.name,
+            detail: conflict.detail,
+          })),
         },
         [
           fence([skill.name, skill.summary ?? ""].join("\n"), {
@@ -281,6 +304,20 @@ export function registerFreeTools(server: McpServer) {
         });
       }
 
+      /**
+       * The conflict warning, at the last moment it can still change what happens (RK.3, step E2).
+       *
+       * `get_skill` carries it too, but an agent is not obliged to read a skill before taking it —
+       * so the warning has to be on the call that hands over the bundle as well. Stored rows, one
+       * indexed lookup, no model call.
+       *
+       * It **warns and does not refuse**. A conflict is a measurement over two documents, not a
+       * licence or a takedown, and the caller may well have good reason to install both; the
+       * refusals in this codebase are for things nobody may do, and this is not one of them.
+       */
+      const { conflictsForSlug } = await import("@/server/analytics/relations");
+      const conflicts = await conflictsForSlug(slug);
+
       return result({
         available: true,
         slug,
@@ -289,6 +326,19 @@ export function registerFreeTools(server: McpServer) {
         content_hash: bundle.contentHash,
         validation_report_hash: bundle.reportHash,
         note: "Two downloads are byte-identical; the content hash is the one the verdicts cover.",
+        conflicts_with: conflicts.map((conflict) => ({
+          slug: conflict.slug,
+          name: conflict.name,
+          detail: conflict.detail,
+        })),
+        ...(conflicts.length > 0
+          ? {
+              warning:
+                `This skill has rules that contradict ${conflicts.length} other skill` +
+                `${conflicts.length === 1 ? "" : "s"} in the registry. Installing both would give ` +
+                `an agent instructions it cannot follow at once.`,
+            }
+          : {}),
       });
     },
   );
