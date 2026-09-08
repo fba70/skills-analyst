@@ -35,6 +35,7 @@ export const MODEL_TASKS = [
   "evalAgent",
   "evalAgentB",
   "evalJudge",
+  "optimise",
   "consistency",
 ] as const;
 
@@ -89,6 +90,16 @@ export const MODEL_DEFAULTS: ModelSettings = {
    * grading its own answer in one turn is not a judge.
    */
   evalJudge: "anthropic/claude-haiku-4.5",
+  /**
+   * The activation-cost optimiser (Doc 6 RW.9).
+   *
+   * A writing task, not a judging one: it has to preserve every decision rule and guardrail
+   * while cutting words, which is harder than writing the document was. A cheap model here
+   * produces a variant that reads fine and quietly drops the one exception the skill existed to
+   * capture — and the eval cases are what catch that, which is why the variant is verified
+   * rather than trusted whatever model wrote it.
+   */
+  optimise: "anthropic/claude-sonnet-5",
   /** R2.3's documentation-versus-code audit, over the ~7% of bundles carrying code. */
   consistency: "anthropic/claude-haiku-4.5",
 };
@@ -123,6 +134,11 @@ export const MODEL_TASK_META: Record<ModelTask, { label: string; blurb: string }
     label: "Eval — the judge",
     blurb:
       "Decides whether an output met its expectation, and whether a request should have fired the skill. Bounded judgement over supplied text.",
+  },
+  optimise: {
+    label: "Activation-cost optimiser",
+    blurb:
+      "Rewrites a skill shorter without changing what it does. One call per attempt, and the result is verified against the skill's own eval cases before it is offered.",
   },
   consistency: {
     label: "Description consistency (R2.3)",

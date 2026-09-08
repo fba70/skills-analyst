@@ -188,3 +188,87 @@ export const evalRuns = pgTable(
     }),
   ],
 );
+
+/**
+ * A proposed cheaper rewrite of a document (Doc 6 RW.9, plan step D4).
+ *
+ * ## Why a proposal is not a revision
+ *
+ * `draft_revisions` is applied history — what the document *was*. A variant is what it could be,
+ * and has not been. Filing one as a revision would put a document the author never chose into
+ * the history they scroll to understand what they did, and "restore" would then be offered for
+ * something that was never applied.
+ *
+ * ## `source_hash` is what keeps an offer honest
+ *
+ * A variant is a claim about a specific document: *this is that one, cheaper, with the same eval
+ * results*. Edit the original and every word of that sentence stops being true — the comparison
+ * was against bytes that no longer exist. So the source hash is stored and a variant whose
+ * source has moved is `superseded` rather than shown, for the same reason a stale eval result is
+ * marked rather than quietly reused.
+ *
+ * ## Accepting goes through the block importer
+ *
+ * The body here is a string, and `skill_drafts.body` is a *render* of blocks with exactly one
+ * writer. So accepting a variant re-imports it through `importDraftBody` — the same path a
+ * generation takes — rather than writing the column. That is the payoff of C1's design: the
+ * optimiser produces prose and never has to know that blocks exist.
+ */
+export const skillVariants = pgTable(
+  "skill_variants",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+
+    draftId: uuid("draft_id").references(() => skillDrafts.id, { onDelete: "cascade" }),
+    skillId: uuid("skill_id").references(() => skills.id, { onDelete: "cascade" }),
+
+    /** The document this was compressed from. A variant outlives its source only as history. */
+    sourceHash: text("source_hash").notNull(),
+    /** The variant itself, and its own hash — which is what its eval runs are stamped with. */
+    body: text("body").notNull(),
+    contentHash: text("content_hash").notNull(),
+
+    /** Estimated activation cost of each side, so a saving is two numbers rather than one. */
+    sourceTokens: integer("source_tokens").notNull(),
+    variantTokens: integer("variant_tokens").notNull(),
+
+    /** One of `VARIANT_STATUSES`. */
+    status: text("status").notNull().default("proposed"),
+    /**
+     * One of `VARIANT_OUTCOMES`, recorded at the moment the comparison was made.
+     *
+     * Stored rather than recomputed on read, unlike almost everything else here. A variant's
+     * outcome is a fact about a comparison between two frozen documents; recomputing it later
+     * against runs that have since accumulated would change a historical claim. The *offer* is
+     * still gated on the source hash still matching, so a stored outcome can never be presented
+     * as current when it is not.
+     */
+    outcome: text("outcome").notNull().default("unverified"),
+
+    /** Which model wrote it, so a bad batch is identifiable after a model change. */
+    model: text("model").notNull(),
+    costMicros: integer("cost_micros").notNull().default(0),
+
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("skill_variants_draft_idx").on(t.draftId, t.createdAt),
+    index("skill_variants_skill_idx").on(t.skillId, t.createdAt),
+
+    /** Exactly one parent, enforced by the database — the same rule `skill_evals` holds. */
+    check("skill_variants_one_parent", sql`(draft_id is null) <> (skill_id is null)`),
+
+    pgPolicy("org_scope", {
+      for: "all",
+      to: "app_runtime",
+      using: sql`org_id = current_setting('app.org_id', true)`,
+      withCheck: sql`org_id = current_setting('app.org_id', true)`,
+    }),
+  ],
+);

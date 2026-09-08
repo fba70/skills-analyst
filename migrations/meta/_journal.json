@@ -253,6 +253,13 @@
       "when": 1788868192281,
       "tag": "0035_watery_skin",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1788869240435,
+      "tag": "0036_motionless_cassandra_nova",
+      "breakpoints": true
     }
   ]
 }

@@ -242,7 +242,7 @@ where these numbers came from.
 | Entitlements | **new (A5)** — three plans; the trust surfaces cannot be gated at all |
 | Builder | live at `/build` · **a draft is typed blocks and the body is their render (C1)** · block editing, revisions and a no-model scaffold path (C1b, R4.6, R4.7) · **Interview mode, five techniques, typed candidates accepted or rejected (C2, RW.4, R5.1, R5.4)** · block-level archetype deviations (R4.3) |
 | MCP | live at `/api/mcp` · six tools, token-gated, rate-limit scope now follows the plan |
-| Schema | 37 migrations (0000–0035) · 42 tables · 37 RLS policies |
+| Schema | 38 migrations (0000–0036) · 43 tables · 38 RLS policies |
 | Spend, cumulative | **$31.70** — $31.52 taxonomy, $0.10 builder, $0.08 embeddings. All metered. |
 
 **Ingestion, classification and every backfill run from a local terminal**, not from the
@@ -2168,6 +2168,108 @@ would be enforcing an untested mean.
 > missing", because an archetype with no blocks would otherwise read as a fully conformant
 > draft.
 
+
+### A commit that built locally and not on the deploy, and the check that can see it
+
+`scripts/verify-tree.mts` · `pnpm verify:tree` (5 checks, free, offline)
+
+Commit `09cf61f` staged every **modified** file and no **new** one — the signature of `git add
+-u`. So `page.tsx` shipped importing a `matrix-panel` that was not in the commit, and the
+production build failed on a module that was open in the author's editor at the time.
+
+Nothing in the suite could see it. `typecheck`, `lint` and `build` all read the **working copy**,
+which has every file whether or not git knows about it, so all three were green on the machine
+that wrote the code and the failure only existed on the machine that cloned it.
+
+That is the second time "the tree does not match reality" has cost a deploy, in a different
+disguise each time — the first was migration 0031 applied and then removed, leaving a database
+ahead of a tree that could never reproduce it. `db:audit` catches that direction by counting
+applied against on-disk; this catches the other.
+
+**It asks one question of three places: would a fresh clone have this?**
+
+- every `@/…` and relative import in a tracked file resolves to a tracked file
+- every migration the journal names has its `.sql` committed, plus the newest snapshot
+- every `verify:*` in `package.json` points at a committed script
+
+Each failure says whether the target is **on disk but never added** or missing entirely, because
+those need opposite fixes and guessing between them is most of the time lost to a red build.
+
+> **Two things about the checker itself are worth keeping.** Its first regex bounded a module
+> specifier with `[^"']+`, which spans newlines — so an apostrophe in one doc comment matched a
+> quote several paragraphs later and it reported a page of prose as an unresolved import. A regex
+> that can match the wrong thing reports the wrong thing confidently.
+>
+> And it originally asserted **every** drizzle snapshot was committed, which is permanently red:
+> `0023` has been missing one since it was written and nothing depends on it. Only the newest
+> matters, because that is what the next `db:generate` diffs against. The rest are noted, not
+> failed — an alarm nobody can silence stops being read, which is the lesson `db:audit` already
+> paid for.
+
+The dynamic-import case is the one that mattered here: the broken call was
+`await import("@/server/evals/matrix")` inside a server action, which a grep for `^import` would
+never have seen. Same shape as the `aws4fetch` grep that returned clean and meant nothing.
+
+### The optimiser: a cheaper skill, proven before it is offered (RW.9, plan step D4)
+
+`src/lib/variants.ts` · `src/server/evals/optimise.ts` · migration 0036
+`pnpm verify:optimise` (24 checks, free)
+
+A3 put a token estimate on every skill — *this costs 4.2K tokens every time it fires* — and that
+was half a feature. RW.9's actual pitch is **here is a 1.9K version with identical eval results**,
+and the load-bearing words are the last three.
+
+Anyone can ask a model to halve a document. The hard half is the evidence, so a variant is
+**never offered until it has been run against the skill's own eval cases**, and the outcome leads
+the number rather than following it.
+
+#### The saving-only rule is a document shredder
+
+`verify:optimise` opens by reproducing it: a variant 40% shorter that fails a case the current
+document passes. The naive rule offers it, and −40% reads as a triumph. Three conditions gate an
+offer, and dropping any one breaks the feature:
+
+- **Nothing regressed.** One case that passed before and fails now disqualifies it outright,
+  whatever the saving. Something load-bearing was cut, and the regressions are named case by case
+  — "it broke something" without saying what is a result an author cannot act on, and the natural
+  response is to try again, which spends money to learn the same thing.
+- **Something was actually compared.** An unverified cut is a shorter string.
+- **The saving is real.** Under 10% is inside the estimator's own error.
+
+`error` on either side makes a case *incomparable* rather than regressed, and a case run on only
+one side is excluded rather than assumed to have held — an unmeasured case is not a passing one.
+A "compression" that grew the document reports a negative and is not offered.
+
+#### It needed no new results store, and accepting needed no new writer
+
+The variant gets its own content hash, and `eval_runs` is keyed by hash already — so running the
+cases against it stores ordinary rows and the comparison is two reads of one table. Same reason
+D2 reads D1's probes rather than keeping its own.
+
+Accepting hands the compressed prose to **`importDraftBody`**, the same path a generation takes,
+so it comes back as typed blocks and `skill_drafts.body` keeps its single writer. That is C1's
+design paying off: the optimiser produces prose and never learns blocks exist. `verify:optimise`
+asserts the absence of a body write here as well as in `verify:draft-blocks`, because this is the
+most tempting place in the codebase to add one — the variant *is* a body, and one update would
+do it.
+
+> **An offer is a claim about specific bytes.** `source_hash` is stored and the offer stops being
+> current the moment the original is edited — the comparison was against something that no longer
+> exists. Same rule the eval panel applies to a stale verdict, one level up. An earlier proposal
+> is `superseded` rather than left beside the new one: two live offers for one document is a
+> choice nobody asked for, and they were measured against the same source so nothing an author
+> can see distinguishes them.
+
+Smaller ones: the outcome is **stored** rather than recomputed on read, unlike almost everything
+else here — it is a fact about a comparison between two frozen documents, and recomputing it
+later against runs that have since accumulated would change a historical claim. Temperature zero,
+because an author is comparing two documents rather than browsing options. And taking a variant
+on a *published* skill is refused in words: its body lives in object storage behind the hash a
+verdict covers, so replacing it is a re-publish rather than an edit, and that is C6's problem.
+
+**M3 is complete.** R2.11, RW.6, RW.7, RW.8 and RW.9 are all closed, R6.3's collection half with
+them, and the paid tier is a product rather than a plan: a skill can now be shown to fire when it
+should, to do what it claims, to help more than nothing, and to do it for less.
 
 ### The with/without matrix, and R6.3's collection half is finally complete (RW.7, plan step D3)
 
@@ -4211,6 +4313,8 @@ pnpm verify:evals                        # Skill CI: regression gate, staleness,
 pnpm verify:trigger                      # RW.8 precision, recall, collisions; free
 pnpm verify:trigger --live               # adds the collision round trip — COSTS A LITTLE
 pnpm verify:matrix                       # RW.7 with/without deltas, and eval-delta; free
+pnpm verify:optimise                     # RW.9 compression, verified before offered; free
+pnpm verify:tree                         # would a fresh clone build this? free, offline
 pnpm db:audit                            # is the derived data current? one command, free
 pnpm verify:blocks                       # block taxonomy and span invariants; free
 pnpm verify:tokens                       # activation cost, bands and honesty; free

@@ -247,6 +247,10 @@ export function summariseChanges(changes: ReadonlyArray<DraftBlockChange>): stri
  * `interview` is a fifth because a block that arrived through an accepted suggestion has a
  * provenance worth reading in the history: it came from something the author said out loud
  * and then chose to keep, which is a different kind of content from a generated draft.
+ *
+ * `optimised` is a sixth for the sharpest reason of all: the document got *shorter* and nobody
+ * added anything. An author scrolling their history and finding a revision that removed a third
+ * of the text needs to know instantly that it was a verified compression rather than a mistake.
  */
 export const REVISION_REASONS = [
   "generated",
@@ -254,6 +258,7 @@ export const REVISION_REASONS = [
   "edited",
   "restored",
   "interview",
+  "optimised",
 ] as const;
 
 export type RevisionReason = (typeof REVISION_REASONS)[number];
@@ -264,4 +269,5 @@ export const REVISION_REASON_LABEL: Record<RevisionReason, string> = {
   edited: "Edited",
   restored: "Restored",
   interview: "Accepted from an interview",
+  optimised: "Compressed by the optimiser",
 };

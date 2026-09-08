@@ -7,6 +7,7 @@ import { BlockEditor } from "@/components/builder/block-editor";
 import { EvalPanel } from "@/components/builder/eval-panel";
 import { Interview } from "@/components/builder/interview";
 import { MatrixPanel } from "@/components/builder/matrix-panel";
+import { OptimiserPanel } from "@/components/builder/optimiser-panel";
 import { TriggerLab } from "@/components/builder/trigger-lab";
 import { RevisionHistory } from "@/components/builder/revision-history";
 import { DraftActions } from "@/components/builder/draft-actions";
@@ -260,6 +261,19 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         entitled={evalEntitled}
         canRun={Boolean(draft.body)}
       />
+
+      {/*
+        The optimiser is last of the eval surfaces, because it is the only one that proposes a
+        change to the document rather than reporting on it — and because it needs the cases the
+        panels above it exist to accumulate.
+      */}
+      {draft.body ? (
+        <OptimiserPanel
+          draftId={draft.id}
+          hasCases={evalCases.length > 0}
+          currentTokens={estimateTokens(draft.body)}
+        />
+      ) : null}
 
       {/*
         The matrix sits with the trigger lab, under the evals both read. It is the last panel

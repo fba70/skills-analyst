@@ -7,6 +7,7 @@ import { isDraftBlockForm, type DraftBlock, type DraftBlockInput } from "@/lib/d
 import { isEvalKind } from "@/lib/evals";
 import type { MatrixReport } from "@/lib/matrix";
 import type { TriggerReport } from "@/lib/trigger";
+import type { VariantReport } from "@/lib/variants";
 import { isCandidateDecision, isInterviewTechnique } from "@/lib/interview";
 import { libraryFragments, type LibraryResult } from "@/server/analytics/block-library";
 import { requireSession } from "@/server/dal/session";
@@ -767,6 +768,83 @@ export async function runMatrixAction(
 
     revalidatePath(`/build/${draftId}`);
     return { ok: true, data: report };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Propose a cheaper variant and verify it (Doc 6 RW.9, plan step D4).
+ *
+ * One generation plus a run of the draft's eval cases against the result. The verification is
+ * the expensive half and the whole point: a shorter document is one call and worth nothing
+ * unproven, and the claim being made is *identical eval results*.
+ */
+export async function optimiseAction(
+  draftId: string,
+): Promise<ActionResult<{ report: VariantReport; offerable: boolean; variantId: string; removed: string; body: string }>> {
+  try {
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
+    if (!orgId) return { ok: false, message: "No active workspace." };
+
+    const { requireEntitlement } = await import("@/server/dal/entitlements");
+    await requireEntitlement(orgId, "eval-lab");
+
+    const { getDraft } = await import("@/server/builder/drafts");
+    const draft = await getDraft(draftId, orgId);
+    if (!draft) return { ok: false, message: "Draft not found." };
+    if (!draft.body) return { ok: false, message: "Write the draft before compressing it." };
+
+    const { evalParentFor } = await import("@/server/evals/store");
+    const { optimise } = await import("@/server/evals/optimise");
+    const result = await optimise({
+      ...evalParentFor(draft),
+      orgId,
+      userId: session.user.id,
+      name: String(draft.frontmatter.name ?? draft.slug),
+      description: String(draft.frontmatter.description ?? draft.summary ?? ""),
+      body: draft.body,
+    });
+
+    revalidatePath(`/build/${draftId}`);
+    return {
+      ok: true,
+      data: {
+        report: result.report,
+        offerable: result.offerable,
+        variantId: result.variantId,
+        removed: result.removed,
+        body: result.body,
+      },
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** Take the compressed variant, or decline it. Both are decisions worth recording. */
+export async function decideVariantAction(
+  draftId: string,
+  variantId: string,
+  accept: boolean,
+): Promise<ActionResult> {
+  try {
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
+    if (!orgId) return { ok: false, message: "No active workspace." };
+
+    const { acceptVariant, rejectVariant } = await import("@/server/evals/optimise");
+    if (accept) {
+      const result = await acceptVariant(variantId, orgId, session.user.id);
+      if (!result.ok) return { ok: false, message: result.message };
+    } else {
+      await rejectVariant(variantId, orgId);
+    }
+
+    revalidatePath(`/build/${draftId}`);
+    revalidatePath("/build");
+    return { ok: true, data: undefined };
   } catch (error) {
     return failure(error);
   }

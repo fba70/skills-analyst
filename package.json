@@ -63,6 +63,8 @@
     "verify:evals": "tsx --conditions=react-server scripts/verify-evals.mts",
     "verify:trigger": "tsx --conditions=react-server scripts/verify-trigger.mts",
     "verify:matrix": "tsx --conditions=react-server scripts/verify-matrix.mts",
+    "verify:optimise": "tsx --conditions=react-server scripts/verify-optimise.mts",
+    "verify:tree": "tsx scripts/verify-tree.mts",
     "verify:tokens": "tsx --conditions=react-server scripts/verify-tokens.mts",
     "verify:lifecycle": "tsx --conditions=react-server scripts/verify-lifecycle.mts",
     "verify:entitlements": "tsx --conditions=react-server scripts/verify-entitlements.mts",
