@@ -27,6 +27,7 @@
     "verify:telemetry": "tsx --conditions=react-server scripts/verify-telemetry.mts",
     "verify:outcomes": "tsx --conditions=react-server scripts/verify-outcomes.mts",
     "verify:flags": "tsx --conditions=react-server scripts/verify-flags.mts",
+    "verify:search": "tsx --conditions=react-server scripts/verify-search.mts",
     "verify:spend": "tsx --conditions=react-server scripts/verify-spend.mts",
     "verify:schedule": "tsx --conditions=react-server scripts/verify-schedule.mts",
     "mail:check": "tsx --conditions=react-server scripts/mail-check.mts",

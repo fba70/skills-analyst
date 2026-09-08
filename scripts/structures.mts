@@ -9,6 +9,7 @@ import { categoryEvidence, sourceDiversity, templateClusters } from "../src/serv
  *
  *   pnpm structures --status
  *   pnpm structures --extract 500     # a bounded slice; run again to continue
+ *   pnpm structures --extract 500 --drain   # repeat until nothing is left (what you want)
  *   pnpm structures --extract 500 --force   # re-extract at the current extractor version
  *   pnpm structures --unresolved      # heading strings no rule recognised
  *   pnpm structures --probe 250       # block detection, DRY: reads bundles, writes nothing
@@ -60,16 +61,64 @@ if (args.includes("--status")) {
 }
 
 if (args.includes("--extract")) {
-  const report = await extractStructures({
-    limit: value("extract") ?? 500,
-    force: args.includes("--force"),
-    onProgress: (m) => console.info(m),
-  });
-  console.info(
-    `\nextracted ${report.extracted} · ${report.blocks} blocks · failed ${report.failed} · ` +
-      `remaining ${report.remaining} · ` +
-      `${report.unresolvedHeadings.length} unrecognised heading string(s)`,
-  );
+  /**
+   * `--drain` repeats until the queue is empty, which is what anyone re-extracting the corpus
+   * actually wants.
+   *
+   * The slice limit exists because a serverless invocation is capped; from a terminal there
+   * is no ceiling, and the honest consequence of *not* offering this was a re-extract that
+   * needed **a hundred invocations by hand** and predictably stopped at 3%. The pipeline
+   * command already had `--loop` for exactly this reason; the extractor should have had it
+   * from the start.
+   *
+   * Stops on an idle pass rather than a pass count, so it cannot spin once the work is gone,
+   * and stops on a pass that extracted nothing but still reports work remaining — that means
+   * every candidate in the slice failed to load, and looping would retry the same broken
+   * bundles for ever.
+   */
+  const drain = args.includes("--drain");
+  const limit = value("extract") ?? 500;
+  let totals = { extracted: 0, blocks: 0, failed: 0, remaining: 0 };
+  let pass = 0;
+
+  for (;;) {
+    pass += 1;
+    const report = await extractStructures({
+      limit,
+      force: args.includes("--force"),
+      onProgress: (m) => console.info(m),
+    });
+    totals = {
+      extracted: totals.extracted + report.extracted,
+      blocks: totals.blocks + report.blocks,
+      failed: totals.failed + report.failed,
+      remaining: report.remaining,
+    };
+    console.info(
+      `${drain ? `pass ${pass}: ` : "\n"}extracted ${report.extracted} · ${report.blocks} blocks · ` +
+        `failed ${report.failed} · remaining ${report.remaining}`,
+    );
+
+    if (!drain) break;
+    if (report.remaining === 0) {
+      console.info("\nnothing left to extract");
+      break;
+    }
+    if (report.extracted === 0) {
+      console.info(
+        `\nstopping: a whole pass extracted nothing while ${report.remaining} remain — ` +
+          `every candidate in the slice failed to load, so looping would retry the same ones`,
+      );
+      break;
+    }
+  }
+
+  if (drain && pass > 1) {
+    console.info(
+      `\ntotal across ${pass} passes: ${totals.extracted} extracted · ${totals.blocks} blocks · ` +
+        `${totals.failed} failed · ${totals.remaining} remaining`,
+    );
+  }
 }
 
 if (args.includes("--templates")) {

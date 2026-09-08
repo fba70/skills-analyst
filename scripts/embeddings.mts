@@ -14,6 +14,7 @@ import { rateFor } from "../src/lib/llm-pricing";
  *   pnpm embeddings --status
  *   pnpm embeddings --sample 100          # COSTS MONEY, tiny; proves the path
  *   pnpm embeddings --backfill 5000       # COSTS MONEY; bounded, resumable, re-runnable
+ *   pnpm embeddings --backfill 5000 --drain  # COSTS MONEY; repeats until nothing is left
  *   pnpm embeddings --similar "review a terraform plan"   # COSTS MONEY (one embed)
  *
  * ## Why the flags are split like this
@@ -119,23 +120,57 @@ const sample = value("sample");
 const backfill = value("backfill");
 if (sample !== undefined || backfill !== undefined) {
   const limit = sample ?? backfill ?? 100;
-  const report = await embedCorpus({
-    limit,
-    force: args.includes("--force"),
-    batchSize: value("batch"),
-    onProgress: (m) => console.info(m),
-  });
+  /**
+   * `--drain` repeats until nothing is left.
+   *
+   * Only offered on `--backfill`, never on `--sample`: the whole point of the sample flag is
+   * that it is small and bounded, and a draining sample is a backfill wearing a reassuring
+   * name. This one spends money, so it also reports the running cost each pass — a loop that
+   * bills silently is one nobody should start.
+   */
+  const drain = backfill !== undefined && args.includes("--drain");
+  let spentTokens = 0;
+  let embedded = 0;
+  let pass = 0;
+
+  for (;;) {
+    pass += 1;
+    const report = await embedCorpus({
+      limit,
+      force: args.includes("--force"),
+      batchSize: value("batch"),
+      onProgress: (m) => console.info(m),
+    });
+    spentTokens += report.inputTokens;
+    embedded += report.embedded;
+
+    console.info(
+      `${drain ? `pass ${pass}: ` : "\n"}embedded ${report.embedded} · ` +
+        `unchanged ${report.skippedUnchanged} · failed ${report.failed} · ` +
+        `remaining ${report.remaining} · $${usd(spentTokens).toFixed(4)} so far`,
+    );
+
+    if (!drain) break;
+    if (report.remaining === 0) {
+      console.info("\nnothing left to embed");
+      break;
+    }
+    if (report.embedded === 0) {
+      console.info(
+        `\nstopping: a whole pass embedded nothing while ${report.remaining} remain — ` +
+          `looping would repeat whatever is failing`,
+      );
+      break;
+    }
+  }
 
   console.info(
-    `\nembedded ${report.embedded} · unchanged ${report.skippedUnchanged} · ` +
-      `failed ${report.failed} · remaining ${report.remaining}`,
-  );
-  console.info(
-    `  ${report.inputTokens.toLocaleString()} tokens ≈ $${usd(report.inputTokens).toFixed(4)}` +
+    `\n${embedded} embedded across ${pass} pass${pass === 1 ? "" : "es"} · ` +
+      `${spentTokens.toLocaleString()} tokens ≈ $${usd(spentTokens).toFixed(4)}` +
       `  (metered against the platform budget)`,
   );
   await status();
-  process.exit(report.failed > 0 ? 1 : 0);
+  process.exit(0);
 }
 
 await status();

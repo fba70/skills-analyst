@@ -939,3 +939,160 @@ export async function getSkillsByIds(
     return ids.map((id) => byId.get(id)).filter((row) => row !== undefined);
   });
 }
+
+export type SkillVersionCitation = {
+  slug: string;
+  name: string;
+  /** Full content hash. The thing a citation is actually about. */
+  contentHash: string;
+  versionId: string;
+  status: string;
+  /** True when this is the version the registry currently serves. */
+  current: boolean;
+  syncedAt: Date;
+  byteSize: number | null;
+  fileCount: number | null;
+  licenseSpdx: string | null;
+  redistribution: string;
+  sourceName: string | null;
+  sourceUrl: string | null;
+  /** Commit SHA and upstream path, from the version's provenance. */
+  commitSha: string | null;
+  upstreamPath: string | null;
+  /** sha256 over the verdicts, recomputable from a downloaded archive. */
+  reportHash: string;
+  verdicts: SkillDetail["verdicts"];
+};
+
+/**
+ * One skill *version*, addressed by its content hash (Doc 2 R8.4).
+ *
+ * ## Why the hash and not the version id
+ *
+ * A citation should be checkable by the person reading it. The content hash is what the
+ * verdicts actually cover — the storage key literally *is* the hash — so a reader who
+ * downloaded the archive can confirm the bytes they hold are the bytes that were judged. A
+ * uuid is stable and proves nothing.
+ *
+ * A prefix of twelve characters or more is accepted, resolved **within one skill's own
+ * versions**. That keeps the ambiguity space to a handful of rows rather than the whole
+ * corpus, which is what makes a short form safe here where it would not be globally.
+ *
+ * ## It answers for versions the registry no longer serves
+ *
+ * That is the requirement, not a side effect. R8.4 exists so a verdict stays citable and an
+ * archetype's exemplar list stays resolvable after the upstream repository moves — so this
+ * deliberately does **not** filter on `indexed`. A tombstoned or withdrawn version resolves
+ * and reports its state; what it does not do is hand over content, which is the download
+ * route's decision and stays there.
+ */
+export async function getSkillVersionByHash(
+  slug: string,
+  hashPrefix: string,
+): Promise<SkillVersionCitation | null> {
+  const prefix = hashPrefix.trim().toLowerCase();
+  // Twelve is git's short-SHA territory: long enough to be unambiguous within one skill,
+  // short enough to survive being pasted into prose.
+  if (!/^[0-9a-f]{12,64}$/.test(prefix)) return null;
+
+  return withOrgScope(async (tx) => {
+    const rows = await tx
+      .select({
+        versionId: skillVersions.id,
+        slug: skills.slug,
+        name: skills.name,
+        contentHash: skillVersions.contentHash,
+        status: skillVersions.status,
+        currentVersionId: skills.currentVersionId,
+        syncedAt: skillVersions.syncedAt,
+        byteSize: skillVersions.byteSize,
+        fileCount: skillVersions.fileCount,
+        licenseSpdx: skillVersions.licenseSpdx,
+        redistribution: skillVersions.redistribution,
+        provenance: skillVersions.provenance,
+        sourceName: sources.name,
+        sourceUrl: sources.url,
+      })
+      .from(skillVersions)
+      .innerJoin(skills, eq(skills.id, skillVersions.skillId))
+      .leftJoin(sources, eq(sources.id, skillVersions.sourceId))
+      .where(
+        and(
+          eq(skills.slug, slug),
+          sql`${skillVersions.contentHash} like ${`${prefix}%`}`,
+        ),
+      )
+      // Newest first, so an ambiguous prefix resolves to the most recent rather than to an
+      // arbitrary row — and the page states the full hash, so a reader can tell.
+      .orderBy(desc(skillVersions.syncedAt))
+      .limit(1);
+
+    const row = rows[0];
+    if (!row) return null;
+
+    const verdictRows = await tx
+      .select({
+        analyzer: verdicts.analyzer,
+        analyzerVersion: verdicts.analyzerVersion,
+        result: verdicts.result,
+        severity: verdicts.severity,
+        evidence: verdicts.evidence,
+        at: verdicts.createdAt,
+      })
+      .from(verdicts)
+      .where(eq(verdicts.skillVersionId, row.versionId))
+      .orderBy(desc(verdicts.createdAt));
+
+    /**
+     * Newest verdict per analyzer, matching what the skill page shows.
+     *
+     * `verdicts` is append-only per analyzer version, so a re-scan leaves the old row in
+     * place — citing every row would show a reader three contradictory answers from one
+     * analyzer and no way to tell which is current.
+     */
+    const newest = new Map<string, (typeof verdictRows)[number]>();
+    for (const verdict of verdictRows) {
+      if (!newest.has(verdict.analyzer)) newest.set(verdict.analyzer, verdict);
+    }
+
+    const shaped: SkillDetail["verdicts"] = [...newest.values()].map((verdict) => ({
+      analyzer: verdict.analyzer,
+      analyzerVersion: verdict.analyzerVersion,
+      result: verdict.result,
+      severity: verdict.severity,
+      findings:
+        ((verdict.evidence as Record<string, unknown>)
+          ?.findings as SkillDetail["verdicts"][number]["findings"]) ?? [],
+      data: ((verdict.evidence as Record<string, unknown>)?.data as Record<string, unknown>) ?? {},
+    }));
+
+    const provenance = (row.provenance ?? {}) as { commitSha?: unknown; path?: unknown };
+    const { validationReportHash } = await import("@/server/skills/export");
+
+    return {
+      slug: row.slug,
+      name: row.name,
+      contentHash: row.contentHash,
+      versionId: row.versionId,
+      status: row.status,
+      current: row.currentVersionId === row.versionId,
+      syncedAt: row.syncedAt,
+      byteSize: row.byteSize,
+      fileCount: row.fileCount,
+      licenseSpdx: row.licenseSpdx,
+      redistribution: row.redistribution,
+      sourceName: row.sourceName,
+      sourceUrl: row.sourceUrl,
+      commitSha: typeof provenance.commitSha === "string" ? provenance.commitSha : null,
+      upstreamPath: typeof provenance.path === "string" ? provenance.path : null,
+      /**
+       * The same function the export receipt uses, so a citation and a downloaded archive
+       * report the same hash. Two implementations would eventually disagree, and the whole
+       * value of the number is that a reader can recompute it.
+       */
+      reportHash: validationReportHash(shaped),
+      verdicts: shaped,
+    };
+  });
+}
+

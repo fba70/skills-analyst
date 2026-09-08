@@ -353,6 +353,24 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
         syncedAt={skill.syncedAt}
       />
       {/*
+        The citable permalink (R8.4).
+        
+        Offered here rather than only documented, because a verdict nobody can find a stable
+        URL for is a verdict nobody cites. The hash is the address: it is what the verdicts
+        cover, so a reader holding the archive can check the bytes match.
+      */}
+      <p className="text-muted-foreground text-sm">
+        <Link
+          href={`/skills/${skill.slug}/${skill.contentHash.slice(0, 12)}`}
+          className="hover:text-foreground underline underline-offset-4"
+        >
+          Cite this exact version
+        </Link>{" "}
+        — a permalink to the bytes these verdicts judged, which does not change when the
+        skill does.
+      </p>
+
+      {/*
         Last on the page, quietly. R2.5's route from a reader to the quarantine queue, and
         R7.5's public notice form — the piece CLAUDE.md flagged as the obvious next step when
         takedowns shipped admin-only.
