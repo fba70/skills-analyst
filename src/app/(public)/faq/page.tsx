@@ -710,8 +710,9 @@ export default function FaqPage() {
         <Q q="Is the trust information behind a paywall?">
           <p>
             No, and it cannot be put behind one. Verdicts, provenance, quarantine reasons, the
-            capability surface, the quality score, licence posture, reading the registry and
-            downloading anything the licence permits are free on every plan, permanently.
+            capability surface, the quality score, licence posture, maintainer endorsements,
+            reading the registry and downloading anything the licence permits are free on every
+            plan, permanently.
           </p>
           <p className="text-muted-foreground">
             That is enforced in code rather than promised in a policy: the entitlement gate{" "}

@@ -34,5 +34,8 @@ export const config = {
     "/settings/:path*",
     // Drafts belong to an organisation, so unlike the registry this one is gated.
     "/build/:path*",
+    // RK.6's curation desk. The page itself `notFound()`s for anybody without standing; this
+    // only saves an anonymous visitor a round trip, like every other entry here.
+    "/curate/:path*",
   ],
 };

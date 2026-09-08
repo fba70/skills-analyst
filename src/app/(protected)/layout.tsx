@@ -4,6 +4,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
+import { isMaintainer } from "@/server/curation/maintainers";
 import { isAdmin } from "@/server/dal/admin";
 import { requireSession } from "@/server/dal/session";
 
@@ -16,9 +17,12 @@ import { requireSession } from "@/server/dal/session";
  */
 export default async function ProtectedLayout({ children }: LayoutProps<"/">) {
   const session = await requireSession();
-  // Only the admin flag is needed now that the sidebar no longer shows a workspace row.
-  // Keeping the organisation lookup would be a query per render for data nothing renders.
-  const admin = await isAdmin();
+  // Two flags, both cheap and both rendered: the admin group, and RK.6's curation desk. The
+  // organisation lookup stays gone — that one was a query per render for data nothing renders.
+  const [admin, maintainer] = await Promise.all([
+    isAdmin(),
+    isMaintainer(session.user.id),
+  ]);
 
   return (
     <SidebarProvider>
@@ -29,6 +33,7 @@ export default async function ProtectedLayout({ children }: LayoutProps<"/">) {
           image: session.user.image ?? null,
         }}
         isAdmin={admin}
+        isMaintainer={maintainer}
       />
       <SidebarInset className="min-w-0">
         {/*

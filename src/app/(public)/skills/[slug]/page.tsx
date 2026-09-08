@@ -12,6 +12,7 @@ import { ConsistencyCard } from "@/components/registry/consistency-card";
 import { ImpactCard } from "@/components/registry/impact-card";
 import { RelationsCard } from "@/components/registry/relations-card";
 import { DownloadCard } from "@/components/registry/download-card";
+import { EndorsementCard } from "@/components/registry/endorsement-card";
 import { ProvenanceCard } from "@/components/registry/provenance-card";
 import {
   OverallVerdict,
@@ -25,7 +26,9 @@ import { WithdrawalNotice } from "@/components/registry/withdrawal-notice";
 import { minedCategories } from "@/server/analytics/archetype-read";
 import { outcomeCollectionStart, outcomesForSkill } from "@/server/analytics/outcomes";
 import { relationsFor } from "@/server/analytics/relations";
+import { endorseAffordance, endorsementsFor } from "@/server/curation/maintainers";
 import { withdrawalNotice } from "@/server/compliance/takedown";
+import { getSession } from "@/server/dal/session";
 import { getSkillBySlug } from "@/server/dal/skills";
 import { labelFor } from "@/server/taxonomy/vocabulary";
 
@@ -68,7 +71,9 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
    * is for — and it is safe because of the column list: a kind, a value, a day and a digest, with
    * no free text and no caller identity.
    */
-  const [outcomes, collectionStart, relations] = await Promise.all([
+  const session = await getSession();
+
+  const [outcomes, collectionStart, relations, endorsement, affordance] = await Promise.all([
     outcomesForSkill(skill.id),
     outcomeCollectionStart(),
     /*
@@ -77,6 +82,20 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
      * and no snapshot that can go stale.
      */
     relationsFor(skill.id),
+    /*
+     * RK.6's endorsements (plan step E5), resolved live against current maintainership. It is a
+     * FREE_FOREVER surface, so it renders for an anonymous reader exactly as it does for anybody
+     * else — the absence of an endorsement is the part a reader most needs, and putting that
+     * behind an account would be a registry that gives away its good news and charges for the
+     * warning.
+     */
+    endorsementsFor(skill.id),
+    /*
+     * Whether *this* viewer may endorse, resolved on the server from live standing. Never a role
+     * inferred in the browser: the sidebar's admin flag takes the same posture, and the action
+     * re-checks anyway because a control is a hint and a POST is the operation.
+     */
+    endorseAffordance(session?.user.id ?? null, skill.id),
   ]);
 
   const mined = await minedCategories();
@@ -210,6 +229,29 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
         many people have downloaded it.
       */}
       <RelationsCard view={relations} />
+
+      {/*
+        Between the graph and the statistics, which is where a human judgement belongs: after the
+        warnings that are facts about other documents, before the counts that are facts about
+        strangers. It is deliberately not in the badge row at the top — a count of endorsements
+        beside the quality score would read as another measurement, and the whole point is that
+        it is not one.
+      */}
+      <EndorsementCard
+        slug={skill.slug}
+        endorsements={endorsement.endorsements.map((row) => ({
+          userId: row.userId,
+          name: row.name,
+          note: row.note,
+          at: row.at.toISOString(),
+          categoryLabel: row.categoryLabel,
+          stale: row.stale,
+        }))}
+        eligible={endorsement.eligible}
+        coveredCategories={endorsement.coveredCategories}
+        viewerMayEndorse={affordance.eligible}
+        viewerHasEndorsed={affordance.already}
+      />
 
       <ImpactCard outcomes={outcomes} collectionStart={collectionStart} />
 

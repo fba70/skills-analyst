@@ -9,6 +9,7 @@ import {
   Settings2,
   Search,
   Shapes,
+  ShieldCheck,
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
@@ -51,6 +52,19 @@ const adminItems: NavItem[] = [
   { title: "Settings", href: "/settings", icon: Settings2 },
 ];
 
+/**
+ * Category maintainers only (RK.6, plan step E5).
+ *
+ * Its own group rather than a row in Platform, because everything in Platform is something every
+ * signed-in person can open and this is not. Its own group rather than a row under
+ * Administration, because a maintainer is not a junior admin — they have authority over their
+ * categories and none over the platform, and putting the two links side by side under one label
+ * would say the opposite.
+ */
+const curationItems: NavItem[] = [
+  { title: "Curation", href: "/curate", icon: ShieldCheck },
+];
+
 export function NavMain() {
   const pathname = usePathname();
 
@@ -73,6 +87,31 @@ export function NavMain() {
         })}
       </SidebarMenu>
 
+    </SidebarGroup>
+  );
+}
+
+export function NavCuration() {
+  const pathname = usePathname();
+
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel>Curation</SidebarGroupLabel>
+      <SidebarMenu>
+        {curationItems.map((item) => {
+          const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+          return (
+            <SidebarMenuItem key={item.href}>
+              <SidebarMenuButton asChild isActive={active} tooltip={item.title}>
+                <Link href={item.href}>
+                  <item.icon />
+                  <span>{item.title}</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          );
+        })}
+      </SidebarMenu>
     </SidebarGroup>
   );
 }

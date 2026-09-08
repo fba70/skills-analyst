@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { Logo } from "@/components/brand";
-import { NavAdmin, NavMain } from "@/components/layout/nav-main";
+import { NavAdmin, NavCuration, NavMain } from "@/components/layout/nav-main";
 import { NavUser, type NavUserProps } from "@/components/layout/nav-user";
 import { ThemeToggleMenuItem } from "@/components/theme-toggle";
 import { SidebarToggleItem } from "@/components/layout/sidebar-toggle-item";
@@ -20,6 +20,14 @@ export type AppSidebarProps = {
   user: NavUserProps;
   /** System admin, resolved on the server. Gates the Administration group. */
   isAdmin?: boolean;
+  /**
+   * Holds live standing in at least one category (RK.6). Gates the Curation group.
+   *
+   * A separate flag from `isAdmin` and not derived from it: an admin who maintains no category
+   * can decide any report and can endorse nothing, so the two authorities are independent and
+   * the chrome should not imply otherwise.
+   */
+  isMaintainer?: boolean;
 };
 
 /**
@@ -27,7 +35,7 @@ export type AppSidebarProps = {
  * the sidebar renders complete on first paint. Only the interactive rows below are
  * client components.
  */
-export function AppSidebar({ user, isAdmin = false }: AppSidebarProps) {
+export function AppSidebar({ user, isAdmin = false, isMaintainer = false }: AppSidebarProps) {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
@@ -57,6 +65,7 @@ export function AppSidebar({ user, isAdmin = false }: AppSidebarProps) {
 
       <SidebarContent>
         <NavMain />
+        {isMaintainer ? <NavCuration /> : null}
         {isAdmin ? <NavAdmin /> : null}
       </SidebarContent>
 

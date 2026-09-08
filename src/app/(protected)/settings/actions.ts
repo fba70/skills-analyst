@@ -95,11 +95,18 @@ export async function setPlanAction(
 }
 
 /**
- * Decide a community flag (R2.5).
+ * Decide a community flag (R2.5), as a system admin **or** as a category maintainer (RK.6).
  *
- * `requireAdmin()` first, like every action here. Upholding records the R6.3 outcome signal
- * and queues re-validation; rejecting keeps the row, because a refused report is still a
- * report that was made and that record is the half of this that protects the platform.
+ * This is the one action in this file that is not `requireAdmin()` alone, and the exception is
+ * the point of plan step E5: a report about a legal-review skill should be decided by somebody
+ * who maintains `legal`, not by whoever holds the platform role. The maintainer's authority is
+ * bounded — `canCurate` requires a live standing in one of *this skill's* servable categories —
+ * and it is checked here on the POST, not only on the page that renders the queue.
+ *
+ * Upholding records the R6.3 outcome signal and queues re-validation; rejecting keeps the row,
+ * because a refused report is still a report that was made and that record is the half of this
+ * that protects the platform. Either way the deciding account is stored on the row, so "who
+ * decided this" stays answerable whichever authority they acted under.
  */
 export async function decideFlagAction(
   id: string,
@@ -107,14 +114,33 @@ export async function decideFlagAction(
   decision: string,
 ): Promise<ActionResult> {
   try {
-    const admin = await requireAdmin();
-    const { upholdFlag, rejectFlag } = await import("@/server/curation/flags");
+    const { requireSession } = await import("@/server/dal/session");
+    const { isAdmin } = await import("@/server/dal/admin");
+    const { flagSubject, upholdFlag, rejectFlag } = await import("@/server/curation/flags");
+
+    const session = await requireSession();
+    const actorId = session.user.id;
+
+    if (!(await isAdmin())) {
+      const subject = await flagSubject(id);
+      if (!subject) return { ok: false, message: "No such flag." };
+      const { canCurate } = await import("@/server/curation/maintainers");
+      if (!(await canCurate(actorId, subject.skillId))) {
+        return {
+          ok: false,
+          message: "You maintain none of this skill's categories.",
+        };
+      }
+    }
+
     const outcome = uphold
-      ? await upholdFlag(id, decision, admin.userId)
-      : await rejectFlag(id, decision, admin.userId);
+      ? await upholdFlag(id, decision, actorId)
+      : await rejectFlag(id, decision, actorId);
     if (!outcome.ok) return { ok: false, message: outcome.error };
 
+    /* Both queues render the same rows, and a maintainer only ever sees the second one. */
     revalidatePath("/settings");
+    revalidatePath("/curate");
     return {
       ok: true,
       message: uphold
@@ -905,6 +931,56 @@ export async function checkLinksAction(limit: number): Promise<ActionResult> {
         `${report.versionsChecked} document(s), ${report.linksChecked} link(s) · ` +
         `${report.rotten} newly dead, ${report.recovered} recovered`,
     };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Appoint a category maintainer (RK.6, plan step E5).
+ *
+ * Admin-only, and it stays that way: an appointment is the platform saying *this person speaks
+ * for this category*, which is exactly the authority a maintainer should not be able to hand
+ * themselves or their friends. Maintainers earn a curation right, not the right to make more
+ * maintainers — that is the difference between delegating work and delegating the platform.
+ */
+export async function grantMaintainerAction(
+  email: string,
+  axis: string,
+  category: string,
+  note: string,
+): Promise<ActionResult> {
+  try {
+    const admin = await requireAdmin();
+    const { grantMaintainer } = await import("@/server/curation/maintainers");
+    const outcome = await grantMaintainer({
+      email,
+      axis,
+      category,
+      note,
+      actorId: admin.userId,
+    });
+    if (!outcome.ok) return { ok: false, message: outcome.message };
+    revalidatePath("/settings");
+    return { ok: true, message: outcome.message };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** Withdraw standing. Their endorsements stop counting on the next read, with no sweep. */
+export async function revokeMaintainerAction(
+  userId: string,
+  axis: string,
+  category: string,
+): Promise<ActionResult> {
+  try {
+    const admin = await requireAdmin();
+    const { revokeMaintainer } = await import("@/server/curation/maintainers");
+    const outcome = await revokeMaintainer({ userId, axis, category, actorId: admin.userId });
+    if (!outcome.ok) return { ok: false, message: outcome.message };
+    revalidatePath("/settings");
+    return { ok: true, message: outcome.message };
   } catch (error) {
     return failure(error);
   }

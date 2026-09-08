@@ -14,6 +14,7 @@ import {
 import { callerDigest, utcDay } from "@/server/analytics/outcomes";
 import { db } from "@/server/db";
 import { events, skillFlags, skills, skillVersions } from "@/server/db/schema";
+import { REVIEW_FLOOR } from "@/server/taxonomy/vocabulary";
 
 /**
  * Community flagging (Doc 2 R2.5) — recording a reader's report, and deciding on it.
@@ -173,8 +174,40 @@ export type FlagQueueRow = {
  * Ordered by triage then age. `triageOf` is derived from the reason rather than stored, so
  * the ordering cannot drift from the vocabulary — the same reasoning that keeps outcome
  * valence out of a column.
+ *
+ * ## `scope` is the whole of RK.6's earned curation right, on the read side
+ *
+ * An admin passes nothing and sees everything. A **category maintainer** (plan step E5) passes
+ * the categories they hold, and sees only reports on skills in them. The pair is matched on both
+ * halves rather than on the value, because `function` and `domain` are separate vocabularies and
+ * a value-only match would widen somebody's queue across the axis they were never appointed to.
+ *
+ * The filter is the same servable-category rule the registry applies — a held assignment is one
+ * the classifier itself called unreliable, and giving somebody a report to decide on the strength
+ * of a guess puts a stranger's skill in the wrong person's hands.
  */
-export async function flagQueue(status: FlagStatus = "received"): Promise<FlagQueueRow[]> {
+export async function flagQueue(
+  status: FlagStatus = "received",
+  scope: ReadonlyArray<{ axis: string; category: string }> | null = null,
+): Promise<FlagQueueRow[]> {
+  /*
+   * An empty scope array is "a maintainer of nothing", which must return nothing — not
+   * everything. `null` is the admin case and is the only way to see the whole queue.
+   */
+  if (scope && scope.length === 0) return [];
+
+  const inScope = scope
+    ? sql`exists (
+        select 1 from skill_categories sc
+        where sc.skill_id = ${skills.id}
+          and (sc.confidence >= ${REVIEW_FLOOR} or sc.reviewed_at is not null)
+          and (${sql.join(
+            scope.map((s) => sql`(sc.axis = ${s.axis} and sc.value = ${s.category})`),
+            sql` or `,
+          )})
+      )`
+    : undefined;
+
   const rows = await db
     .select({
       id: skillFlags.id,
@@ -191,7 +224,7 @@ export async function flagQueue(status: FlagStatus = "received"): Promise<FlagQu
     })
     .from(skillFlags)
     .innerJoin(skills, eq(skills.id, skillFlags.skillId))
-    .where(eq(skillFlags.status, status))
+    .where(and(eq(skillFlags.status, status), inScope))
     .orderBy(desc(skillFlags.createdAt))
     .limit(200);
 
@@ -221,6 +254,23 @@ export async function flagQueue(status: FlagStatus = "received"): Promise<FlagQu
 }
 
 export type DecideResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Which skill a flag is about, so a caller can ask whether this person may decide it.
+ *
+ * The authorisation itself is not here. `upholdFlag` and `rejectFlag` take an `actorId` and
+ * record it; deciding *whether* that actor is allowed is the action's job, because there are two
+ * separate authorities — system admin and RK.6 category maintainer — and folding either into
+ * this module would make one of them invisible from the other's call site.
+ */
+export async function flagSubject(id: string): Promise<{ skillId: string } | null> {
+  const [row] = await db
+    .select({ skillId: skillFlags.skillId })
+    .from(skillFlags)
+    .where(eq(skillFlags.id, id))
+    .limit(1);
+  return row ?? null;
+}
 
 /**
  * Uphold a flag: the only operation here with consequences.

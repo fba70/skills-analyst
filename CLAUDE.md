@@ -2169,6 +2169,104 @@ would be enforcing an untested mean.
 > draft.
 
 
+### The first trust signal that is a person, and the first authority that is not an admin (RK.6, plan step E5)
+
+`src/lib/maintainers.ts` · `src/server/curation/maintainers.ts` · migration 0041
+`/curate` · Settings → **Maintainers** · `pnpm maintainers` · `pnpm verify:maintainers` (free)
+
+B2 built one half of RK.6 — typed reader feedback, one queue, one admin deciding all of it. This
+is the other half, and it is two things that turn out to be one mechanism: **per-category
+maintainer groups** with a real curation right, and **named endorsement** as a social signal
+beside the verdicts.
+
+**Every other trust surface here is mechanical.** Verdicts come from analyzers, the quality score
+from severities, the archetype from prevalence, the lifecycle from evidence, freshness from a HEAD
+request. Not one of them can say *a person who knows this subject has read it and thinks it is
+right* — which, over a corpus of 49,000 documents mostly written by strangers, is the signal that
+is hardest to fake and most conspicuously missing.
+
+It is also the easiest to make worthless, so four rules carry it:
+
+| rule | what it stops |
+|---|---|
+| only a maintainer of one of the **skill's own categories** may endorse | an endorsement from anybody, which is a like button |
+| nobody endorses a skill published from their own workspace | the cheapest self-dealing there is |
+| standing is resolved **live**, never copied | a claim outliving the person who made it |
+| the endorsed **version** is pinned | vouching for text the endorser never read |
+
+#### Revoking a maintainer must un-count their endorsements, and that is a join rather than a sweep
+
+The tempting schema stores "endorsed by a maintainer" as a boolean or copies the category onto the
+row and trusts it. Both mean somebody who stopped maintaining `review` goes on vouching for review
+skills until a job nobody wrote runs. So `skill_endorsements` stores **which category the endorser
+spoke as** and nothing about whether they still hold it; every read inner-joins
+`category_maintainers` with `revoked_at is null`. Withdraw the standing and the endorsement is gone
+from every surface on the next query.
+
+Same decision as A4's supersession join, archetype exemplars resolving live, and the block library
+resolving fragments from offsets. Fourth time, and it is a convention now rather than a discovery.
+
+> `verify:maintainers` checks it the only way that proves anything: endorse, read it back, revoke,
+> assert it is **gone**, re-grant, assert it is **back**. Reproducing the before state first is
+> what makes the after state evidence — the same shape as `verify:http-deadline` and
+> `verify:db-retry`. It also asserts the withdrawn standing row is still there, because the
+> decisions made under it are in the audit log and a log pointing at a row that exists nowhere is
+> unreadable.
+
+#### The earned curation right is bounded by filtering, not by sorting
+
+`flagQueue` takes a `scope`. An admin passes `null` and sees everything; a maintainer passes the
+categories they hold and sees only reports on skills in them. **A report they cannot act on is not
+a to-do list**, it is somebody else's work rendered as though it were theirs.
+
+Two things that look like details and are not:
+
+- **an empty scope returns nothing, not everything.** `scope = []` is *a maintainer of nothing*,
+  and the natural `if (!scope.length) skipTheFilter` reading of that turns a new appointee into a
+  second admin. It is an explicit early return with a comment saying so, and a check in the verify
+  suite.
+- **the pair is matched on both halves.** `function` and `domain` are separate vocabularies with no
+  guarantee of disjoint slugs, so `value in (…)` would widen somebody's queue across the axis they
+  were never appointed to — the case-insensitive-repo-lookup bug one layer up.
+
+`decideFlagAction` re-checks on the POST rather than trusting the page that rendered the queue,
+because a server action is an endpoint. The two authorities stay separate: an admin who maintains
+no category can decide any report and can endorse nothing.
+
+#### `/curate` is its own page, and `/settings` did not move
+
+`/settings` is admin-only three times over. Letting maintainers through to see one card out of
+seventeen would have weakened the only guarantee that page makes. A maintainer is **not a junior
+admin** — full authority over their categories, none at all over the platform — and two pages say
+that where one page with conditionally hidden tabs would not. Appointing maintainers stays behind
+the admin page: a maintainer earns a curation right, not the right to make more maintainers.
+
+#### The empty state is the part that took the most care
+
+Forty-two categories, a group appointed one at a time, and 49,000 skills. So for a long while
+most skills will carry no endorsement — and *nobody was eligible* and *the eligible people
+declined* are the same empty list and opposite conclusions. `EndorsementView` carries the eligible
+count and the covered category names beside the list, and the card prints whichever sentence is
+true. Printing "No endorsements" for both would be `archetypes --blocks` rendering eleven rows of
+zeros at 1% coverage, in a friendlier font.
+
+The settings panel lists **the categories with nobody**, derived from the real vocabulary rather
+than a remembered list, for the same reason `/archetypes` lists the categories below the evidence
+gate: a clean grid of what is covered looks finished and says nothing about where the group is
+thin.
+
+#### It is never a score, and it cannot be sold
+
+No badge in the skill page's header row, no column in the registry list, no sort. Endorsements will
+be single digits over tens of thousands of skills, and ranking on them would put four documents
+above forty-nine thousand on the strength of who happens to have a maintainer group — the argument
+that keeps popularity out of R2.9's search ranking.
+
+`endorsements` is the ninth **`FREE_FOREVER`** key, so the entitlement gate throws if anything asks
+whether a workspace may see it. It belongs there more obviously than most: the *absence* of an
+endorsement is the half a reader needs, and a registry that gives away its good news and charges
+for the warning is worse than one with no endorsements at all.
+
 ### The knowledge graph, most of which is deliberately not stored (RK.3, plan step E2)
 
 `src/lib/relations.ts` · `src/server/analytics/relations.ts` · `src/server/analytics/conflicts.ts`
@@ -2267,6 +2365,20 @@ finishes and one that does not.
 > that satisfies both rules? If yes, there is no conflict.* Plus a worked example of the
 > stricter-than case, because a rule stated abstractly is a rule a model can agree with and then
 > ignore. All three controls pass.
+
+> **The first real finding, and it is a good one.** After 1.1.0, a 20-source run found **one
+> conflict** across 10 pairs called, for $0.0153: `orbit-gmail-2` and `orbit-general-2` each carry
+> a verbatim *"Use exclusively the colors / fonts / radii defined in `example.html`"* alongside a
+> separate *"This is a hard constraint"* — one baking in Google Sans and Material chrome, the other
+> Cormorant and Inter. An agent holding both, asked for a briefing, has two absolute rules
+> demanding different fonts. Nothing in validation could see it: both documents are individually
+> exemplary.
+>
+> Checked against the source guardrails rather than taken on trust, because this text renders on a
+> public page and accuses somebody's work. The two quotes are exact; the one-sentence *why* is the
+> model's own prose and drew a detail from elsewhere in the same guardrail set, which is why the
+> **quotes** are the evidence on screen and the sentence is only the explanation. Two rows were
+> written, one per direction, which is the symmetric-edge design doing its job.
 
 > **What the live run also showed about the input.** The guardrails reaching the detector are often
 > long expository paragraphs rather than unconditional rules — the block extractor types a passage
@@ -4029,7 +4141,7 @@ market-analysis question — see the discovery section above and the open-web TO
 
 - **function** (13) — what the skill *does*: review, generate-document, edit-refactor,
   transform-data, orchestrate, … **Archetypes are mined on this axis.**
-- **domain** (26) — what field it serves: marketing, devops-infrastructure, legal, …
+- **domain** (29) — what field it serves: marketing, devops-infrastructure, legal, …
   Drives browse and filter.
 
 The split is the load-bearing decision. Structure correlates with function, not domain: a
@@ -4649,6 +4761,9 @@ pnpm verify:relations                    # RK.3 the graph, and what it refuses t
 pnpm verify:relations --live             # 3 controls proving the detector fires — ~$0.002
 pnpm relations --status                  # stored edges; free
 pnpm relations --conflicts 20            # mine guardrail contradictions — COSTS MONEY
+pnpm verify:maintainers                  # RK.6 endorsement counts only while standing does; free
+pnpm maintainers --status                # who maintains what, and which categories have nobody
+pnpm maintainers --grant <email> function review --by <you@example.com>
 pnpm links --status | --check 200        # external link rot; free, bounded, polite
 pnpm verify:tree                         # would a fresh clone build this? free, offline
 pnpm db:audit                            # is the derived data current? one command, free

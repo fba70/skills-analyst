@@ -96,6 +96,19 @@ export const FREE_FOREVER = [
   "public-registry",
   /** Downloading a skill whose licence permits it (R8.2). */
   "download",
+  /**
+   * Who has endorsed a skill, and that nobody has (RK.6).
+   *
+   * It belongs on this list for the same reason the verdicts do: it is a **trust surface**, and
+   * a reader deciding whether to run somebody else's instructions must be able to see the whole
+   * of what we know. Selling it would be worse than selling a verdict, because the absence is
+   * the part that matters most — "no maintainer has looked at this" behind a paywall is a
+   * registry that shows its good news for free and charges for the warning.
+   *
+   * *Endorsing* is a maintainer's right rather than a plan feature, so there is nothing to gate
+   * on the write side either.
+   */
+  "endorsements",
 ] as const;
 
 export type FreeForever = (typeof FREE_FOREVER)[number];

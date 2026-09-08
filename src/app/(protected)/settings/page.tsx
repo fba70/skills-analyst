@@ -13,6 +13,7 @@ import { QuarantinePanel } from "@/components/settings/quarantine-panel";
 import { ReviewPanel } from "@/components/settings/review-panel";
 import { SourcesPanel } from "@/components/settings/sources-panel";
 import { LoopPanel } from "@/components/settings/loop-panel";
+import { MaintainersPanel } from "@/components/settings/maintainers-panel";
 import { rateFor } from "@/lib/llm-pricing";
 import { ModelsPanel } from "@/components/settings/models-panel";
 import { RateLimitPanel } from "@/components/settings/rate-limit-panel";
@@ -44,6 +45,7 @@ import { staleSlices } from "@/server/validation/rescan";
 import { planRoster as listPlanRoster } from "@/server/dal/entitlements";
 import { outcomeSummary } from "@/server/analytics/outcomes";
 import { flagQueue, flagSummary } from "@/server/curation/flags";
+import { listMaintainers, maintainerSummary } from "@/server/curation/maintainers";
 import { isAdmin, listPlatformUsers, platformCounts } from "@/server/dal/admin";
 import {
   curationCounts,
@@ -56,6 +58,7 @@ import { requireSession } from "@/server/dal/session";
 import { MAX_BATCH } from "@/server/taxonomy/classify";
 import { MIN_SOURCES, MIN_STRUCTURES } from "@/server/analytics/archetype";
 import { reviewQueue, taxonomySummary } from "@/server/taxonomy/run";
+import { DOMAINS, FUNCTIONS } from "@/server/taxonomy/vocabulary";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -93,6 +96,7 @@ const TABS = [
   "limits",
   "models",
   "flags",
+  "maintainers",
   "plans",
   "users",
 ] as const;
@@ -149,7 +153,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, flags, platformBudget, breakdown, metrics, activity, loopLog, linkRot, linkCoverage, schedule, rateLimits, models] =
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, flags, platformBudget, breakdown, metrics, activity, loopLog, linkRot, linkCoverage, schedule, rateLimits, models, maintainerRoster, maintainerCounts] =
     await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
@@ -177,6 +181,8 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "schedule" ? getSchedule() : null,
     tab === "limits" ? getRateLimits() : null,
     tab === "models" ? getModelSettings() : null,
+    tab === "maintainers" ? listMaintainers({ includeRevoked: true }) : null,
+    tab === "maintainers" ? maintainerSummary() : null,
   ]);
 
   // Every tab except Ingestion is a paginated list.
@@ -242,6 +248,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
             // reader's report has a clock on it in a way a quarantined skill does not.
             label: flagCounts.open > 0 ? `Flags (${flagCounts.open})` : "Flags",
           },
+          { value: "maintainers", label: "Maintainers" },
           { value: "plans", label: "Plans" },
           {
             value: "takedowns",
@@ -437,6 +444,45 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
               createdAt: row.createdAt.toISOString(),
               stale: row.stale,
             }))}
+          />
+        ) : null}
+        {tab === "maintainers" && maintainerRoster && maintainerCounts ? (
+          <MaintainersPanel
+            rows={maintainerRoster.map((row) => ({
+              userId: row.userId,
+              name: row.name,
+              axis: row.axis,
+              category: row.category,
+              categoryLabel: row.categoryLabel,
+              note: row.note,
+              // Serialised at the boundary into a client component, like every panel here.
+              since: row.since.toISOString(),
+              revokedAt: row.revokedAt?.toISOString() ?? null,
+            }))}
+            options={{
+              function: FUNCTIONS.map((c) => ({ id: c.id, label: c.label })),
+              domain: DOMAINS.map((c) => ({ id: c.id, label: c.label })),
+            }}
+            summary={maintainerCounts}
+            /*
+             * Computed from the real vocabulary against the live roster, so a category added to
+             * `vocabulary.ts` shows up here as uncovered on the next render rather than waiting
+             * for somebody to notice. The same reason the FAQ imports its constants.
+             */
+            uncovered={[
+              ...FUNCTIONS.filter(
+                (c) =>
+                  !maintainerRoster.some(
+                    (row) => !row.revokedAt && row.axis === "function" && row.category === c.id,
+                  ),
+              ).map((c) => ({ axis: "function" as const, label: c.label })),
+              ...DOMAINS.filter(
+                (c) =>
+                  !maintainerRoster.some(
+                    (row) => !row.revokedAt && row.axis === "domain" && row.category === c.id,
+                  ),
+              ).map((c) => ({ axis: "domain" as const, label: c.label })),
+            ]}
           />
         ) : null}
         {tab === "plans" && planRoster ? (
