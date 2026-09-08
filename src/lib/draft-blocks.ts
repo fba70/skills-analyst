@@ -243,8 +243,18 @@ export function summariseChanges(changes: ReadonlyArray<DraftBlockChange>): stri
  * `generated` and `scaffolded` are both the platform acting and are still kept apart: one
  * cost a model call and produced prose, the other cost nothing and produced empty blocks, and
  * an author scanning their own history wants to know which.
+ *
+ * `interview` is a fifth because a block that arrived through an accepted suggestion has a
+ * provenance worth reading in the history: it came from something the author said out loud
+ * and then chose to keep, which is a different kind of content from a generated draft.
  */
-export const REVISION_REASONS = ["generated", "scaffolded", "edited", "restored"] as const;
+export const REVISION_REASONS = [
+  "generated",
+  "scaffolded",
+  "edited",
+  "restored",
+  "interview",
+] as const;
 
 export type RevisionReason = (typeof REVISION_REASONS)[number];
 
@@ -253,4 +263,5 @@ export const REVISION_REASON_LABEL: Record<RevisionReason, string> = {
   scaffolded: "Scaffolded from the archetype",
   edited: "Edited",
   restored: "Restored",
+  interview: "Accepted from an interview",
 };

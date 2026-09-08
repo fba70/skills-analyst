@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { isBlockType } from "@/lib/block-types";
 import { isDraftBlockForm, type DraftBlock, type DraftBlockInput } from "@/lib/draft-blocks";
+import { isCandidateDecision, isInterviewTechnique } from "@/lib/interview";
 import { libraryFragments, type LibraryResult } from "@/server/analytics/block-library";
 import { requireSession } from "@/server/dal/session";
 import { buildScaffold, type Scaffold } from "@/server/builder/scaffold";
@@ -451,6 +452,96 @@ export async function restoreRevisionAction(
     revalidatePath(`/build/${draftId}`);
     revalidatePath("/build");
     return { ok: true, data: { revision: result.revision } };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// Interview mode (Doc 6 RW.4, plan step C2b)
+// ---------------------------------------------------------------------------------------
+
+/**
+ * Start an interview on a draft.
+ *
+ * The turn itself is a route handler, because it streams; everything around it is an action,
+ * because everything around it returns a value. That split is the rule this codebase already
+ * has rather than a special case for this feature.
+ */
+export async function startInterviewAction(
+  draftId: string,
+  technique: string,
+): Promise<ActionResult<{ sessionId: string }>> {
+  try {
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
+    if (!orgId) return { ok: false, message: "No active workspace." };
+    if (!isInterviewTechnique(technique)) return { ok: false, message: "Unknown technique." };
+
+    const { startSession } = await import("@/server/interview/session");
+    const result = await startSession({
+      draftId,
+      orgId,
+      userId: session.user.id,
+      technique,
+    });
+    if (!result.ok) return { ok: false, message: result.message };
+
+    revalidatePath(`/build/${draftId}`);
+    return { ok: true, data: { sessionId: result.sessionId } };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Accept, edit-and-accept, or reject one suggested block (R5.1 and R5.4).
+ *
+ * One action for all three because they are one decision with three answers, and because the
+ * accept path has to append to the draft through the same writer everything else uses — a
+ * separate "accept" endpoint would be the second place that knows how a block reaches a draft.
+ */
+export async function decideCandidateAction(
+  candidateId: string,
+  decision: string,
+  editedText?: string,
+): Promise<ActionResult<{ draftBlockId: string | null }>> {
+  try {
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
+    if (!orgId) return { ok: false, message: "No active workspace." };
+    if (!isCandidateDecision(decision) || decision === "pending") {
+      return { ok: false, message: "Unknown decision." };
+    }
+
+    const { decideCandidate } = await import("@/server/interview/decide");
+    const result = await decideCandidate({
+      candidateId,
+      orgId,
+      userId: session.user.id,
+      decision,
+      editedText: typeof editedText === "string" ? editedText.slice(0, MAX_BLOCK_CHARS) : null,
+    });
+    if (!result.ok) return { ok: false, message: result.message };
+
+    revalidatePath("/build");
+    return { ok: true, data: { draftBlockId: result.draftBlockId } };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** Close an interview the author is finished with. */
+export async function endInterviewAction(sessionId: string): Promise<ActionResult> {
+  try {
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
+    if (!orgId) return { ok: false, message: "No active workspace." };
+
+    const { endSession } = await import("@/server/interview/session");
+    await endSession(sessionId, orgId, "author");
+    revalidatePath("/build");
+    return { ok: true, data: undefined };
   } catch (error) {
     return failure(error);
   }

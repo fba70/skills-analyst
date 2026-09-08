@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, ShieldOff } from "lucide-react";
 
 import { BlockEditor } from "@/components/builder/block-editor";
+import { Interview } from "@/components/builder/interview";
 import { RevisionHistory } from "@/components/builder/revision-history";
 import { DraftActions } from "@/components/builder/draft-actions";
 import { ActivationCostBadge } from "@/components/registry/activation-cost";
@@ -11,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getDraftBlocks, listDraftRevisions } from "@/server/builder/blocks";
+import { getSession, listSessions } from "@/server/interview/session";
 import { blockDeviations } from "@/server/builder/deviation";
 import { getDraft } from "@/server/builder/drafts";
 import { getSkillsByIds } from "@/server/dal/skills";
@@ -64,9 +66,28 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
    * page nobody was asking to change anything on.
    */
   const orgId = session.session.activeOrganizationId;
-  const [blocks, revisions] = orgId
-    ? await Promise.all([getDraftBlocks(draft.id, orgId), listDraftRevisions(draft.id, orgId)])
-    : [[], []];
+  const [blocks, revisions, sessions] = orgId
+    ? await Promise.all([
+        getDraftBlocks(draft.id, orgId),
+        listDraftRevisions(draft.id, orgId),
+        listSessions(draft.id, orgId),
+      ])
+    : [[], [], []];
+
+  /*
+   * The newest *active* interview, resumed in place (Doc 6 RW.4).
+   *
+   * Resumed rather than restarted, because the transcript is the expensive part: an author who
+   * reloads the page fifteen turns into describing an exception must not lose it, and the turns
+   * are already rows. An ended session is history and does not reopen — the technique buttons
+   * come back instead.
+   */
+  const activeSession = orgId
+    ? await (async () => {
+        const open = sessions.find((row) => row.status === "active");
+        return open ? getSession(open.id, orgId) : null;
+      })()
+    : null;
 
   return (
     <div className="grid min-w-0 gap-6">
@@ -203,6 +224,38 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
           </CardContent>
         </Card>
       ) : null}
+
+      {/*
+        The interview sits below the editor and above validation.
+
+        Below the editor because the draft is the thing being built and the conversation is a
+        way of feeding it — an accepted block appears up there, which is the confirmation that
+        answering did something. Above validation because validation is a verdict on what
+        exists, and this is how more of it comes to exist.
+      */}
+      <Interview
+        draftId={draft.id}
+        sessionId={activeSession?.id ?? null}
+        initialTurns={
+          activeSession
+            ? activeSession.turns.map((turn) =>
+                turn.role === "author"
+                  ? { role: "author" as const, text: turn.text }
+                  : {
+                      role: "assistant" as const,
+                      text: turn.text,
+                      candidates: turn.candidates.map((c) => ({
+                        id: c.id,
+                        type: c.type,
+                        text: c.editedText ?? c.text,
+                        decision: c.decision,
+                      })),
+                    },
+              )
+            : []
+        }
+        budget={activeSession?.budget ?? null}
+      />
 
       {/*
         History below validation, because that is the order of consequence again: validation

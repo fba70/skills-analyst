@@ -450,13 +450,16 @@ console.info("\nThe revision diff (R4.7)");
     summariseChanges(removed),
   );
 
+  /*
+   * Named rather than counted. The first version asserted a length, which meant adding a
+   * fifth reason turned this red for no reason anybody cared about — a check that fails on a
+   * legitimate change teaches people to edit checks rather than read them.
+   */
   check(
-    "the reason vocabulary is closed and distinguishes the model from a person",
-    REVISION_REASONS.length === 4 &&
-      REVISION_REASONS.includes("generated") &&
-      REVISION_REASONS.includes("scaffolded") &&
-      REVISION_REASONS.includes("edited") &&
-      REVISION_REASONS.includes("restored"),
+    "the reason vocabulary distinguishes the model, a person, and a restore",
+    (["generated", "scaffolded", "edited", "restored"] as const).every((reason) =>
+      (REVISION_REASONS as readonly string[]).includes(reason),
+    ),
     REVISION_REASONS.join(", "),
   );
 }

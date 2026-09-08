@@ -28,7 +28,7 @@
  * control that cannot take effect is worse than no control — the same reason the rate-limit
  * panel states out loud that its paid row is stored and not in force.
  */
-export const MODEL_TASKS = ["taxonomy", "builder", "consistency"] as const;
+export const MODEL_TASKS = ["taxonomy", "builder", "interview", "consistency"] as const;
 
 export type ModelTask = (typeof MODEL_TASKS)[number];
 
@@ -45,6 +45,15 @@ export const MODEL_DEFAULTS: ModelSettings = {
   taxonomy: "google/gemini-2.5-flash-lite",
   /** One call per authored skill, and the output *is* the product. */
   builder: "anthropic/claude-sonnet-5",
+  /**
+   * Interview mode (Doc 6 RW.4). The same model as authoring, and the same reasoning.
+   *
+   * A cheap model here fails in a way that is easy to miss and expensive to fix: an
+   * interview's output is the *questions*, and a weak question elicits nothing an author
+   * could not have typed into the form. There is no draft to inspect afterwards and see that
+   * it went badly — there is only knowledge that was never captured.
+   */
+  interview: "anthropic/claude-sonnet-5",
   /** R2.3's documentation-versus-code audit, over the ~7% of bundles carrying code. */
   consistency: "anthropic/claude-haiku-4.5",
 };
@@ -59,6 +68,11 @@ export const MODEL_TASK_META: Record<ModelTask, { label: string; blurb: string }
     label: "Skill authoring",
     blurb:
       "Writes a draft from the archetype and the author's notes. One call per skill, and the output is what the customer keeps.",
+  },
+  interview: {
+    label: "Interview mode",
+    blurb:
+      "Asks the questions that elicit knowledge a form cannot. Many calls per skill, each carrying the transcript so far — the one task where the conversation cap matters more than the model choice.",
   },
   consistency: {
     label: "Description consistency (R2.3)",

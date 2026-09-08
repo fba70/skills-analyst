@@ -182,6 +182,16 @@ export const takedownScope = pgEnum("takedown_scope", ["skill", "source"]);
 export const llmPurpose = pgEnum("llm_purpose", [
   /** The builder writing a draft (R4.1/R5.1). Org-scoped, counts against the org cap. */
   "builder",
+  /**
+   * A turn of Interview mode (Doc 6 RW.4). Org-scoped, against the same org cap as `builder`.
+   *
+   * Its own value rather than folded into `builder`, because the two spend in shapes an
+   * operator needs to tell apart: one generation is a single call of predictable size, and a
+   * conversation is N calls whose input grows every turn. Sharing a purpose would put both in
+   * one row of the spend breakdown and make "what does authoring cost" unanswerable at the
+   * only granularity where the answer differs.
+   */
+  "interview",
   /** R2.3 description-consistency on an org's own skill. Org-scoped. */
   "validation",
   /** Taxonomy classification over the public corpus. Platform budget. */

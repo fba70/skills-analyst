@@ -225,6 +225,20 @@
       "when": 1788862969268,
       "tag": "0031_sudden_sleeper",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1788863716987,
+      "tag": "0032_cloudy_midnight",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1788864593258,
+      "tag": "0033_moaning_silver_fox",
+      "breakpoints": true
     }
   ]
 }

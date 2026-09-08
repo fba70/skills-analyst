@@ -1,0 +1,1 @@
+ALTER TYPE "public"."llm_purpose" ADD VALUE 'interview' BEFORE 'validation';

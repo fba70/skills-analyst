@@ -57,8 +57,15 @@ function readMicros(key: string, fallbackDollars: number): number {
   return Math.round(dollars * 1_000_000);
 }
 
-/** Purposes billed to an organisation. The rest are platform work. */
-const ORG_PURPOSES = ["builder", "validation"] as const;
+/**
+ * Purposes billed to an organisation. The rest are platform work.
+ *
+ * `interview` joins `builder` here rather than getting a budget of its own: both are one
+ * workspace authoring one skill, and a separate cap would let a customer spend twice by
+ * switching surface. What it does get is its own *conversation* cap, one level down — see
+ * `billing/conversation.ts`.
+ */
+const ORG_PURPOSES = ["builder", "interview", "validation"] as const;
 export type LlmPurpose =
   | (typeof ORG_PURPOSES)[number]
   | "corpus_taxonomy"

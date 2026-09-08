@@ -240,9 +240,9 @@ where these numbers came from.
 | Embeddings | 47,854 of 47,855 canonical skills · pgvector 0.8.6, HNSW cosine, 1,536 dimensions · $0.08 |
 | Lifecycle | **new (A4)** — derived second axis; battle-tested unreachable by construction |
 | Entitlements | **new (A5)** — three plans; the trust surfaces cannot be gated at all |
-| Builder | live at `/build` · **a draft is typed blocks and the body is their render (C1)** · block editing, revisions and a no-model scaffold path (C1b, R4.6, R4.7) · block-level archetype deviations (R4.3) |
+| Builder | live at `/build` · **a draft is typed blocks and the body is their render (C1)** · block editing, revisions and a no-model scaffold path (C1b, R4.6, R4.7) · **Interview mode, five techniques, typed candidates accepted or rejected (C2, RW.4, R5.1, R5.4)** · block-level archetype deviations (R4.3) |
 | MCP | live at `/api/mcp` · six tools, token-gated, rate-limit scope now follows the plan |
-| Schema | 33 migrations (0000–0032) · 37 tables · 31 RLS policies |
+| Schema | 35 migrations (0000–0033) · 40 tables · 34 RLS policies |
 | Spend, cumulative | **$31.70** — $31.52 taxonomy, $0.10 builder, $0.08 embeddings. All metered. |
 
 **Ingestion, classification and every backfill run from a local terminal**, not from the
@@ -2169,6 +2169,141 @@ would be enforcing an untested mean.
 > draft.
 
 
+### The platform can hold a conversation now, and a conversation needed its own budget (M2)
+
+`src/lib/conversation.ts` · `src/server/billing/conversation.ts` · `src/server/llm/stream.ts`
+`pnpm verify:stream` (33 checks, free) · migration 0032
+
+All four existing model call sites are one-shot, and that is what made `assertWithinBudget`
+complete: the unit of work and the unit of spend were the same thing. An interview is twenty
+calls against the `$5` default org cap, each re-sending the transcript — so **cost grows with
+the square of the conversation**, and checked per call the first eighteen turns pass and the
+nineteenth refuses, which is the worst place to stop somebody halfway through explaining how
+they actually work.
+
+#### The spend decision, made rather than discovered
+
+The plan named three options. **Reservation** loses: holding micro-dollars before spending them
+needs a release path, and a conversation abandoned in a closed tab holds budget until something
+sweeps it — a sweep that fails takes money from a customer who never spent it. `spend.ts`
+already rejected reservation for one call as too much machinery for a bounded overshoot; the
+machinery gets worse here. **A turn cap alone** loses harder: turns are not money, and a
+transcript that grows every turn makes the tenth call several times the first. That is the
+`quality_score` banding mistake again — a gate measured with something that is not the gate.
+
+So: **a per-conversation cap in real money, checked per turn, and on screen from turn one.**
+Refusing mid-conversation is unavoidable in the worst case; what makes it acceptable is that
+the remaining budget travels with every turn, so it reads as a fuel gauge rather than a wall.
+A turn cap exists as well and is labelled as what it is — a bound on transcript growth, not a
+budget.
+
+- **No new table.** A conversation's spend is the rows its turns already wrote:
+  `sum(cost_micros) where subject_id = <session>`. `llm_usage` carries `subject_type` and
+  `subject_id` precisely so a charge traces back to its cause. A counter column would be a
+  second source of truth for a number the ledger already holds.
+- **The cap is the lesser of its own ceiling and what the org has left**, so it can never
+  advertise 50¢ to a workspace with 20¢ — a gauge that lies from turn one is worse than none.
+- **Three refusal reasons, not a boolean.** Out of money, out of conversation budget, out of
+  turns. Only the first is a billing problem and only the last two are fixed by starting again;
+  one flag would send an author round a loop that cannot end.
+- **`interview` is its own `llm_purpose`** rather than folded into `builder`, because one
+  generation and an N-turn conversation are shapes an operator needs to tell apart.
+
+#### What the seam is actually for, which is not what it was written for
+
+`streamMetered` was built expecting backpressure — nothing pulls, nothing finishes,
+`totalUsage` never settles, so metering that hung off the reader would miss every abandoned
+turn. **ai@7 does not behave that way.** It drains the model stream eagerly.
+
+> **The first fixture could not have found that out.** It used `simulateReadableStream`, whose
+> timer pushes chunks on its own, so it "reproduced" a hang that was the mock's behaviour rather
+> than the SDK's. Rebuilt against a genuinely pull-based source, the SDK pulled all six chunks
+> with no reader. A mock that self-drives cannot observe backpressure, and a check that cannot
+> observe the failure it is about is not evidence — the `aws4fetch` grep, one layer up.
+
+`consumeStream()` therefore stays as a **guard against a dependency changing**, and the comment
+says so rather than claiming a fix. `verify:stream` pins the behaviour, so an SDK upgrade that
+reintroduces backpressure goes red and names the line that has become critical. The property
+that matters either way — an abandoned turn still reaches the ledger — is asserted end to end
+against the real `llm_usage` table: read one chunk, walk away, and the row still lands with
+full token counts.
+
+The honest limit is stated too: this covers the process continuing to run. A runtime that tears
+the invocation down on disconnect can still cut metering off, which is why the route handler
+wraps the persistence in `after()`.
+
+`streamText` is called in **one place**, asserted against the source tree — a second call would
+be a call with no budget gate and no guaranteed metering, and it would look entirely ordinary.
+
+### Interview mode (Doc 6 RW.4, R5.1, R5.4)
+
+`src/lib/interview.ts` · `src/server/interview/` · `/api/interview/[sessionId]` · migration 0033
+`pnpm verify:interview` (19 checks, free — no provider is reached)
+
+A form captures what somebody can already articulate. The knowledge worth writing down is the
+other kind: the exception they always make, the thing they check first because of something
+that went wrong two years ago. Nobody types that into a box labelled "purpose", because it does
+not occur to them that it is unusual.
+
+**Every turn emits typed candidate blocks**, and that is what makes this part of the workbench
+rather than a chat window beside it. One structured call does both jobs — asks the next question
+and turns the last answer into blocks — streamed through `streamMeteredObject` so the question
+appears while the blocks are still being written. Two calls would have been twice the money and
+the second would have had to re-read the transcript to know what the first was driving at.
+
+**R5.1 and R5.4 are one motion.** Accepting a suggestion puts it on the draft; rejecting does
+not. There is no thumbs-up control anywhere, because a rating asked for its own sake is the
+control everybody ignores — here the feedback *is* the action the author already wanted to take,
+and ignoring it means not getting the block.
+
+- **Five prompts, not one interviewer with five moods.** Each names its own failure mode, which
+  is the part a shared instruction cannot carry: walkthrough drifts into summary, contrastive
+  probing into flattery, exception mining into hypotheticals. `verify:interview` asserts each
+  one does — and caught `worked-example` shipping without one.
+- **Targets bias, they do not restrict.** The turn schema accepts the whole block vocabulary,
+  because the most valuable thing an author says is routinely not what the question was after.
+- **Accepting writes through `setDraftBlocks`**, like every other change to a draft, and lands
+  in the revision history under its own reason. Nothing in the interview touches
+  `skill_drafts.body`.
+- **Appended, never placed.** The archetype's typical position is a median over a corpus, not a
+  statement about this document; C1b's reorder is one drag away and the author knows where it
+  goes.
+- **A rejected candidate is kept.** Doc 6 §7 expects some of this to be pruned on evidence, and
+  a technique whose candidates are always rejected is only prunable if the rejections exist.
+  Same reasoning as a rejected flag and a rejected takedown.
+- **`accepted` and `edited` stay apart.** Both put a block on the draft and they are opposite
+  signals about the *suggestion*; collapsing them would flatter the one number that says whether
+  this is working. The original text is kept beside the author's version, so how far a kept
+  suggestion had to move is measurable.
+- **Decided once**, or an accept appends the same block twice and every accept-rate query
+  double-counts.
+
+> **A route handler, and the third documented exception.** A server action returns a
+> serialisable value; this returns a stream. Same reason the download route and the MCP endpoint
+> are handlers. It imports no database module, no query builder and no driver — everything is in
+> `src/server/interview/**`. Budget refusals come back as **402 with the state attached**, not
+> 500, for the reason the rate limiter returns 429: a client that cannot tell "out of money"
+> from "broken" either retries forever or gives up on a soft failure.
+
+**Nothing feeds the miner.** Each decision writes a structured `events` row carrying the
+technique, the block type and how far an edit moved it — everything a later consumer needs, and
+consumed by nothing yet. Creation telemetry earned its influence over `mineArchetype` by
+accumulating enough signal to survive R6.5's trimming; this has none, and wiring a near-empty
+input into the thing that scaffolds every future draft is how a loop poisons itself.
+
+**The one part that waits on D1.** RW.4 says a captured worked example should emit an eval case.
+`skill_evals` does not exist yet, so it does not — but an accepted `example` block from a
+`worked-example` session is identifiable from its candidate row, so D1 can find them
+retroactively rather than needing them re-captured.
+
+> **It is also the honest test of the question the miner left open.** `anti-example` clears its
+> threshold in zero of thirteen categories and measures −5 in `review`, contradicting Doc 6 §2 —
+> but the detector fires on markers, so it may be measuring house style rather than absent
+> knowledge. Exception mining elicits failure-mode knowledge directly. If authors produce it
+> readily while the corpus measurement stays negative, **the detector is what is wrong**, and
+> the pruning decision can finally be made on evidence. That comparison needs sessions to have
+> happened; the data it needs is now being collected.
+
 ### A draft is typed blocks now, and the body is a render (plan step C1 / C1b)
 
 `src/lib/draft-blocks.ts` · `src/server/builder/blocks.ts` · migrations 0031–0032
@@ -3809,6 +3944,7 @@ pnpm verify:models                       # a model id is a setting, priced and a
 pnpm verify:search                       # index path and latency at corpus size; free
 pnpm verify:blocks | verify:lifecycle | verify:outcomes | verify:flags   # all free
 pnpm verify:draft-blocks                 # a draft is blocks, the body is a render; free
+pnpm verify:stream | verify:interview    # conversation budget, and RW.4; both free
 pnpm db:audit                            # is the derived data current? one command, free
 pnpm verify:blocks                       # block taxonomy and span invariants; free
 pnpm verify:tokens                       # activation cost, bands and honesty; free
