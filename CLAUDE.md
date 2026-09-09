@@ -2169,6 +2169,84 @@ would be enforcing an untested mean.
 > draft.
 
 
+### Distill mode, part one: 94% of what looks like the user speaking is `cat` output (RW.5, plan step C4)
+
+`src/lib/distill.ts` · `pnpm verify:distill` (20 checks, free — no database, no network)
+
+C4 is the large step of M5 and this is its first half: **reading a Claude Code transcript
+correctly, and deciding what is worth spending a model call on.** The metered half — turning a
+correction into typed candidate blocks through C2b's accept flow — is not built yet and is named
+at the end.
+
+#### The finding that shapes the whole step
+
+A Claude Code transcript is JSONL and the obvious parser is *keep every row whose `type` is
+`user` or `assistant`*. Measured against three real transcripts on this machine: **645 of 685
+`user` rows carry a `tool_result` block and 40 carry human speech.**
+
+The harness feeds every tool result back as a `user` message, which is right for the protocol and
+catastrophic for a distiller — it would attribute the contents of every file read during the
+session to the author, as things they said, and then send them to a model. The distinction turned
+out to be clean and was **verified rather than assumed**: a `user` row's content is either a
+string (a person typed it) or a list of `tool_result` blocks, never mixed, in 685 of 685 rows.
+
+`verify:distill` reproduces the naive reading first — it builds a transcript whose tool output is
+a `DATABASE_URL` with a password in it, asserts the naive parser lifts it out as a human turn, and
+only then asserts the real one does not.
+
+What else never survives parsing: `thinking` blocks (the model's reasoning is not the author's
+knowledge), `tool_use` arguments (file paths, commands, sometimes credentials), and the housekeeping
+rows — `mode`, `permission-mode`, `atis-latch`, `ai-title`, `file-history-*` — which outnumber
+everything else.
+
+#### Measured on real files, which is the only way to know the reduction is real
+
+| | rows in | kept | dropped | model calls |
+|---|---|---|---|---|
+| a 9.7 MB working session | 2,821 | 308 turns (38 human) | 645 tool results · 286 thinking · 1,882 housekeeping | **8** |
+
+Eight calls for a session that took a day. That is the cost control working, and it comes from two
+filters rather than one: parsing removes 89% of the file, and the correction cue removes most of
+what is left.
+
+#### Only a correction is worth a call
+
+The valuable turn is the one where the person pushes back — *no, we never deploy on a Friday* —
+because that is knowledge the agent did not have and the author did, which is the definition of
+what belongs in a skill. Cues are matched on **human turns only** (the knowledge being captured is
+the author's, not the model's) and on **whole words**, because a substring match fires `not` inside
+`cannot` and `notation`. Each window carries the turns before it, since *"no, the other one"* means
+nothing alone, and overlapping windows are merged rather than sent twice — R6.5's dedup argument
+applies to a distiller as much as to a vote.
+
+#### The transcript is never stored, and that is the privacy design
+
+Doc 6 asks for provenance back to the transcript. That is a turn uuid and a timestamp — **a
+coordinate into a file only the author holds.** We keep no copy, so the pointer is meaningful to
+them and useless to anybody else. It is the `skill_blocks` decision one step further: that table
+holds an offset instead of a passage and still needs the bundle; this holds a coordinate into a
+document the platform has never seen.
+
+Redaction runs before anything reaches a model, as a **second** line — the first is that tool
+output, where the overwhelming majority of secrets in a coding transcript live, never leaves the
+parser. What survives is prose a person typed, and people paste keys into prose. The tuning is
+asymmetric on purpose: over-redaction costs a candidate block, under-redaction sends a credential
+to a third party.
+
+#### What is not built yet
+
+The metered half. `distill_runs`, the model call over a correction window, and candidates joining
+C2b's accept flow. The schema decision is made and worth recording: **candidates will not get a
+second table.** `interview_candidates` requires both a session and a turn, so reusing it as-is
+would mean inventing fake interview sessions — the mistake `skill_drafts` warns about with fake
+sources, and it would corrupt "which technique produced accepted blocks", which is the metric R5.4
+reads. The answer is `skill_evals`' precedent: nullable parents with a check constraint, one
+candidate table, one decide path, two origins that stay distinguishable.
+
+Also deferred, and named by the plan in this order: **documents**, then **diff-to-skill**. JSONL
+first was the right call — it is the input with a shape worth discovering, and discovering it is
+what this half was.
+
 ### Improve an existing skill, and the fork that must not launder a licence (R5.6, plan step C6)
 
 `src/lib/improve.ts` · `src/lib/licence.ts` · `src/server/builder/improve.ts` · migration 0043
@@ -5107,6 +5185,7 @@ pnpm verify:relations                    # RK.3 the graph, and what it refuses t
 pnpm verify:relations --live             # 3 controls proving the detector fires — ~$0.002
 pnpm relations --status                  # stored edges; free
 pnpm relations --conflicts 20            # mine guardrail contradictions — COSTS MONEY
+pnpm verify:distill                      # RW.5 tool output is not the user speaking; free
 pnpm verify:improve                      # R5.6 a fork carries its licence; free, no network
 pnpm verify:scope                        # RW.10/RW.11 scope and disclosure; free, no network
 pnpm scope --status                      # coverage first, then the finding; free
