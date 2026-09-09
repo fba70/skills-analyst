@@ -2,6 +2,7 @@ import { createMcpHandler } from "mcp-handler";
 
 import { hasEntitlement } from "@/server/dal/entitlements";
 import { consume } from "@/server/mcp/rate-limit";
+import { recordMcpRefusal, withMcpPrincipal } from "@/server/mcp/usage";
 import { resolveToken, touchToken } from "@/server/mcp/tokens";
 import { registerFreeTools } from "@/server/mcp/tools";
 
@@ -165,13 +166,40 @@ async function guarded(request: Request): Promise<Response> {
     ? "mcpPaid"
     : "mcpFree";
   const decision = await consume(request, scope, principal.rateKey);
-  if (!decision.allowed) return tooManyRequests(decision);
+  if (!decision.allowed) {
+    /*
+     * A refusal is an `events` row rather than a counter (RC.3, plan step F1).
+     *
+     * The limiter runs before any tool is chosen, so there is nothing to count it against, and a
+     * sentinel in `mcp_usage.tool` would be a value the next `group by` believes. It is also the
+     * exceptional case, and detail on the rare thing is what `events` is for.
+     */
+    void recordMcpRefusal({
+      organizationId: principal.organizationId,
+      tokenId: principal.tokenId,
+      window: decision.window,
+      limit: decision.limit,
+      retryAfterSeconds: decision.retryAfterSeconds,
+    });
+    return tooManyRequests(decision);
+  }
 
   // After the limit, so a throttled caller does not keep its token looking busy — and not
   // awaited into the response path, because bookkeeping must never delay an answer.
   void touchToken(principal);
 
-  return handler(request);
+  /*
+   * The async scope the tool recorder reads its principal from.
+   *
+   * `send-failures.ts` documents why Better Auth's route could not use AsyncLocalStorage — that
+   * route belongs to the library, so there was nowhere to open one. This route is ours, the
+   * principal is resolved above, and every tool runs inside `handler`, so a real scope works and
+   * the module-level map that file had to settle for is not needed here.
+   */
+  return withMcpPrincipal(
+    { tokenId: principal.tokenId, organizationId: principal.organizationId },
+    () => handler(request),
+  );
 }
 
 export { guarded as GET, guarded as POST };

@@ -38,6 +38,7 @@ import { getModelSettings } from "@/server/settings/models";
 import { getRateLimits } from "@/server/settings/rate-limits";
 import { getSchedule, stageDue } from "@/server/settings/schedule";
 import { budgetState, spendBreakdown } from "@/server/billing/spend";
+import { mcpUsageSummary } from "@/server/mcp/usage";
 import { listTakedowns, takedownCounts } from "@/server/compliance/takedown";
 import { pipelineBacklog, recentRuns, type PipelineBacklog } from "@/server/pipeline/run";
 import { readHeartbeat } from "@/server/pipeline/heartbeat";
@@ -153,7 +154,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, flags, platformBudget, breakdown, metrics, activity, loopLog, linkRot, linkCoverage, schedule, rateLimits, models, maintainerRoster, maintainerCounts] =
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, flags, platformBudget, breakdown, mcpUsage, metrics, activity, loopLog, linkRot, linkCoverage, schedule, rateLimits, models, maintainerRoster, maintainerCounts] =
     await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
@@ -173,6 +174,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "flags" ? flagQueue("received") : null,
     tab === "spend" ? budgetState("corpus_taxonomy", null) : null,
     tab === "spend" ? spendBreakdown() : null,
+    tab === "spend" ? mcpUsageSummary() : null,
     tab === "loop" ? loopMetrics() : null,
     tab === "loop" ? archetypeActivity() : null,
     tab === "loop" ? loopEvents() : null,
@@ -369,7 +371,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
         ) : null}
 
         {tab === "spend" && platformBudget && breakdown ? (
-          <SpendPanel platform={platformBudget} breakdown={breakdown} />
+          <SpendPanel platform={platformBudget} breakdown={breakdown} mcp={mcpUsage} />
         ) : null}
 
         {tab === "takedowns" ? (

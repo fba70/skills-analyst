@@ -1,6 +1,8 @@
 import "server-only";
 
 import { z } from "zod";
+
+import { recordMcpCall } from "@/server/mcp/usage";
 import type { McpServer } from "@modelcontextprotocol/server";
 
 import { CAPABILITY_META } from "@/lib/capabilities";
@@ -65,7 +67,30 @@ const POSTURES = [
 ] as const;
 
 export function registerFreeTools(server: McpServer) {
-  server.registerTool(
+  /*
+   * Every tool is registered through this wrapper rather than directly (RC.3, plan step F1).
+   *
+   * One place, six tools, and no per-tool bookkeeping a seventh could be added without. The
+   * recorder reads the principal from an async scope the route guard opened, never throws, and
+   * counts an error apart from a call — our outage is not the caller's usage.
+   */
+  const register: McpServer["registerTool"] = ((
+    name: string,
+    config: unknown,
+    callback: (...args: unknown[]) => Promise<unknown>,
+  ) =>
+    server.registerTool(name as never, config as never, (async (...args: unknown[]) => {
+      try {
+        const result = await (callback as (...a: unknown[]) => Promise<unknown>)(...args);
+        void recordMcpCall(name, "ok");
+        return result;
+      } catch (error) {
+        void recordMcpCall(name, "error");
+        throw error;
+      }
+    }) as never)) as unknown as McpServer["registerTool"];
+
+  register(
     "search_skills",
     {
       title: "Search the skill registry",
@@ -169,7 +194,7 @@ export function registerFreeTools(server: McpServer) {
     },
   );
 
-  server.registerTool(
+  register(
     "get_skill",
     {
       title: "Get one skill with its verdicts and provenance",
@@ -256,7 +281,7 @@ export function registerFreeTools(server: McpServer) {
     },
   );
 
-  server.registerTool(
+  register(
     "download_skill",
     {
       title: "Get the download URL for a skill bundle",
@@ -343,7 +368,7 @@ export function registerFreeTools(server: McpServer) {
     },
   );
 
-  server.registerTool(
+  register(
     "list_archetypes",
     {
       title: "List mined structural archetypes",
@@ -370,7 +395,7 @@ export function registerFreeTools(server: McpServer) {
     },
   );
 
-  server.registerTool(
+  register(
     "get_archetype",
     {
       title: "Get one category's archetype",
@@ -411,7 +436,7 @@ export function registerFreeTools(server: McpServer) {
     },
   );
 
-  server.registerTool(
+  register(
     "corpus_stats",
     {
       title: "Corpus size, freshness and licence mix",

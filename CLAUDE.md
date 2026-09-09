@@ -2169,6 +2169,74 @@ would be enforcing an untested mean.
 > draft.
 
 
+### MCP request accounting: a rollup, because a per-request log would answer a question we removed on purpose (RC.3, plan step F1)
+
+`src/server/mcp/usage.ts` · migration 0046 · Settings → **Spend** · `pnpm verify:mcp-usage` (free)
+
+RC.3 has been half done since RC.2 landed. Every *model* call is metered in `llm_usage`, and
+**MCP makes no model calls** — so the one surface built for machines had no usage record at all.
+What existed was a rate-limit window that resets and a `last_used_at` that overwrites, neither of
+which can be read back.
+
+#### The schema decision, and it does not turn on storage
+
+The plan framed it as a trade: one row per request is a real audit trail and a lot of rows; a
+daily rollup is cheap and cannot answer *"what did this key do on Tuesday"*. Rows are not what
+decided it.
+
+**A per-request log keyed by token would let us reconstruct what a customer searched for.** That
+is the precise question `search_queries` was built to be unable to answer — no `org_id` column to
+join, a daily-rotating digest instead of an identity, and a comment saying the absence *is* the
+safety property. Adding a table that answers it through a side door would undo that decision
+without anybody deciding.
+
+So the unit is `(token, day, tool)` and the payload is counts. It answers what the commercial and
+support cases actually ask — how much is this key using, which tools, since when — and it cannot
+say which skill was fetched at 14:32. **The panel says so**, in the panel, rather than leaving it
+to be discovered.
+
+#### Refusals are an `events` row, not a counter
+
+The limiter runs in the route guard, **before** a tool is chosen, so a refusal has nothing to be
+counted against and a sentinel in the `tool` column would be a value the next `group by` believes.
+It is also the exceptional case and worth detail — which window, which limit, when it lifts — and
+detail on the rare thing is what `events` is for. **Successes are countable; failures are
+investigable.**
+
+#### AsyncLocalStorage, and here it is actually available
+
+`send-failures.ts` documents at length why it had to settle for a module-level keyed map: Better
+Auth owns that route, so there was nowhere to open a scope, and the file carries a warning that
+nothing may ever read it from a different request.
+
+**This route is ours.** `guarded` resolves the principal, then wraps `handler(request)` in a real
+async scope, and every tool runs inside it. The MCP handler is a module-level constant built once
+for all requests, which is why the principal cannot simply be an argument to `registerFreeTools` —
+and why the scope is the right shape rather than a convenience.
+
+Recording is wired **once**, by wrapping `registerTool` rather than each of the six handlers, so a
+seventh tool cannot be added without it. An error is counted apart from a call: our outage is not
+the caller's usage.
+
+> **The recorder swallows its own failures, so the suite writes through it and reads the row
+> back.** A reader must not get a 500 because an accounting upsert hit a cold compute — the
+> heartbeat's posture — and this project has paid for that once: `recordUsage` swallowed an RLS
+> refusal, builder spend went unmetered for a milestone, and the only evidence was a log line
+> nobody read. A hand-written insert would prove the table works and nothing about whether the
+> function meant to fill it does. The suite also calls the recorder **outside** any scope and
+> requires it to write nothing, because a default organisation there would attribute one
+> workspace's usage to another.
+
+> **And the scanner read the prose again — third time.** The check for *"the route touches no
+> database module"* matched the route's own header comment promising exactly that. `verify:relations`
+> hit this hunting `= any(${array})` and `verify:improve` hit it hunting duplicate licence lists.
+> Comments are stripped before scanning now. A scanner that reads prose shouts loudest where the
+> problem is least.
+
+`mcp_usage` carries the split policy `mcp_tokens` and `llm_usage` already use — SELECT open for
+the operator panel, INSERT and UPDATE org-scoped — and **no DELETE policy**, for the reason the
+ledger has none: an application that can erase its own usage record has no usage record.
+
 ### Shared blocks are synced, never substituted — because live resolution rewrites somebody's document (RK.4, plan step E6)
 
 `src/lib/shared-blocks.ts` · `src/server/builder/shared.ts` · migration 0045
@@ -5296,6 +5364,7 @@ pnpm relations --status                  # stored edges; free
 pnpm relations --conflicts 20            # mine guardrail contradictions — COSTS MONEY
 pnpm verify:distill                      # RW.5 tool output is not the user speaking; free
 pnpm verify:shared                       # RK.4 a convention is synced, never substituted; free
+pnpm verify:mcp-usage                    # RC.3 the agent surface is accounted for; free
 pnpm verify:improve                      # R5.6 a fork carries its licence; free, no network
 pnpm verify:scope                        # RW.10/RW.11 scope and disclosure; free, no network
 pnpm scope --status                      # coverage first, then the finding; free

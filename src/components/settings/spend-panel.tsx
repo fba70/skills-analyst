@@ -15,9 +15,25 @@ import type { BudgetState } from "@/server/billing/spend";
 export function SpendPanel({
   platform,
   breakdown,
+  mcp,
 }: {
   platform: BudgetState;
   breakdown: Array<{ purpose: string; calls: number; costMicros: number }>;
+  /**
+   * MCP request accounting (RC.3's other half, plan step F1).
+   *
+   * It sits on this panel rather than a tab of its own because it is the same question the rest
+   * of the panel answers — *what is being used* — asked of the one surface the spend ledger
+   * cannot see, because MCP makes no model calls and therefore costs nothing to meter.
+   */
+  mcp: {
+    calls: number;
+    errors: number;
+    tokens: number;
+    tools: number;
+    since: string | null;
+    throttled: number;
+  } | null;
 }) {
   const orgTotal = breakdown
     .filter((row) => row.purpose === "builder" || row.purpose === "validation")
@@ -105,6 +121,60 @@ export function SpendPanel({
           ) : null}
         </CardContent>
       </Card>
+
+      {/*
+        RC.3's other half (plan step F1).
+
+        The ledger above prices model calls; MCP makes none, so it has always been invisible here.
+        This is what the agent surface actually did — and the sentence about what it cannot say is
+        as much a part of the panel as the numbers, because somebody will eventually ask.
+      */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Agent surface (MCP)</CardTitle>
+          <CardDescription>
+            MCP makes no model calls, so it costs nothing and the ledger above cannot see it. This
+            is the request record instead — counted per token, per tool, per day.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          {!mcp || mcp.calls === 0 ? (
+            <p className="text-muted-foreground text-sm">
+              {mcp === null
+                ? "Not loaded."
+                : "No tool calls recorded yet. Recording began with the accounting table, so a token used before then has no history — that is a gap in the record, not a quiet token."}
+            </p>
+          ) : (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <Figure label="Tool calls" value={mcp.calls} />
+                <Figure label="Tokens active" value={mcp.tokens} />
+                <Figure label="Tools used" value={mcp.tools} />
+                <Figure label="Errors" value={mcp.errors} />
+              </div>
+              <p className="text-muted-foreground border-t pt-3 text-xs">
+                Since {mcp.since ?? "—"} · {mcp.throttled.toLocaleString()} request
+                {mcp.throttled === 1 ? "" : "s"} refused by the rate limiter, recorded as events
+                rather than counted here.{" "}
+                <strong>
+                  This record cannot say what was searched for or which skill was fetched
+                </strong>{" "}
+                — a per-request log keyed by token would answer that, which is the question the
+                search-query table is deliberately built to be unable to answer.
+              </p>
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function Figure({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="grid gap-0.5">
+      <span className="text-2xl font-semibold tabular-nums">{value.toLocaleString()}</span>
+      <span className="text-muted-foreground text-xs">{label}</span>
     </div>
   );
 }
