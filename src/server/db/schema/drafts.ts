@@ -276,6 +276,25 @@ export const draftBlocks = pgTable(
     /** The author's markdown. For a heading, the label alone, without its `#` marks. */
     text: text("text").notNull(),
 
+    /**
+     * The shared convention this block was pulled from (RK.4, plan step E6). Null for ordinary
+     * blocks, which is nearly all of them.
+     *
+     * The block keeps **its own copy of the text** beside this pointer, deliberately, and that is
+     * the opposite of how every other pointer in this schema resolves. Two reasons, in
+     * `src/lib/shared-blocks.ts` at length: the body is a render of these rows and must not depend
+     * on a second table, and live substitution rewrites somebody's document in the middle of
+     * sentences they wrote with nothing in any history saying so.
+     *
+     * `set null` on delete rather than cascade — losing the convention must never delete the
+     * author's paragraph. In practice a shared block is retired rather than deleted.
+     */
+    sharedBlockId: uuid("shared_block_id").references(() => sharedBlocks.id, {
+      onDelete: "set null",
+    }),
+    /** Which version of it was pulled. Behind the shared block's own version means an update waits. */
+    sharedBlockVersion: integer("shared_block_version"),
+
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -466,6 +485,75 @@ export const draftResources = pgTable(
      * There is no such thing as a public draft, so there is no such thing as a public draft
      * file, and a request with no session sees nothing rather than seeing "the public ones".
      */
+    pgPolicy("org_scope", {
+      for: "all",
+      to: "app_runtime",
+      using: sql`org_id = current_setting('app.org_id', true)`,
+      withCheck: sql`org_id = current_setting('app.org_id', true)`,
+    }),
+  ],
+);
+
+/**
+ * Organisation convention blocks (Doc 6 RK.4, plan step E6) — Team.
+ *
+ * ## Versioned, because the version is what makes a dependent legible
+ *
+ * `version` bumps on every text change, and a draft block records which one it took. That single
+ * integer is the whole update mechanism: `block.shared_block_version < shared.version` means an
+ * update is waiting, and it is answerable without diffing text or storing a history of it.
+ *
+ * ## Retired, not deleted
+ *
+ * A convention that fifty drafts point at cannot simply go away — the pointer would null and the
+ * authors would never learn why their block stopped tracking anything. `retired_at` keeps the row
+ * readable, keeps every dependent's copy intact, and stops it being added to anything new. Same
+ * decision as a withdrawn maintainer standing and a rejected flag: the record is the point.
+ *
+ * ## Org-scoped with no public escape, and never near an archetype
+ *
+ * *"Our incident-severity definitions"* is exactly the private organisational knowledge RC.5 and
+ * OQ-C2 forbid feeding public archetypes even in aggregate. The policy has no `org_id is null`
+ * branch, like `skill_drafts`, because there is no such thing as a public convention — and
+ * `mineArchetype` reads `builder_signals`, which carries a section role and a boolean and has
+ * never been able to reach this table.
+ */
+export const sharedBlocks = pgTable(
+  "shared_blocks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+
+    /** What somebody types to find it. Unique per organisation, case-folded. */
+    name: text("name").notNull(),
+    /** One of `BLOCK_TYPES`. Never null — an untyped convention cannot be compared to anything. */
+    type: text("type").notNull(),
+    text: text("text").notNull(),
+    /** Why this convention exists, for the person deciding whether to use it. */
+    note: text("note"),
+
+    /** Bumped on every text change. A dependent behind this number has an update waiting. */
+    version: integer("version").notNull().default(1),
+
+    retiredAt: timestamp("retired_at", { withTimezone: true }),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /**
+     * One convention per name per workspace, folded.
+     *
+     * Case-insensitive for the reason the repository-identity indexes are: two rows differing
+     * only in capitalisation are one convention and a bug, and the person who typed the second
+     * would never find out.
+     */
+    uniqueIndex("shared_blocks_name_uq").on(t.orgId, sql`lower(${t.name})`),
+    index("shared_blocks_org_idx").on(t.orgId, t.retiredAt),
+
     pgPolicy("org_scope", {
       for: "all",
       to: "app_runtime",

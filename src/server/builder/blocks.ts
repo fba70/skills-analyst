@@ -145,6 +145,8 @@ export async function getDraftBlocks(draftId: string, orgId: string): Promise<Dr
       depth: row.depth,
       type: isBlockType(row.type) ? row.type : null,
       text: row.text,
+      sharedBlockId: row.sharedBlockId,
+      sharedBlockVersion: row.sharedBlockVersion,
     }));
   });
 }
@@ -249,6 +251,9 @@ export async function setDraftBlocks(
           depth: block.form === "heading" ? clampDepth(block.depth) : null,
           type: block.form === "heading" ? null : block.type,
           text: block.text,
+          /* Provenance travels with the row; a heading is never a transclusion. */
+          sharedBlockId: block.form === "heading" ? null : (block.sharedBlockId ?? null),
+          sharedBlockVersion: block.form === "heading" ? null : (block.sharedBlockVersion ?? null),
         })),
       );
     }
@@ -448,6 +453,8 @@ type NormalisedBlock = {
   depth: number | null;
   type: BlockType | null;
   text: string;
+  sharedBlockId: string | null;
+  sharedBlockVersion: number | null;
 };
 
 function normalise(block: DraftBlockInput): NormalisedBlock {
@@ -455,5 +462,13 @@ function normalise(block: DraftBlockInput): NormalisedBlock {
   const type: BlockType | null =
     form === "heading" ? null : isBlockType(block.type) ? block.type : null;
   const text = form === "heading" ? block.text.trim() : block.text.replace(/[ \t\r\n]+$/, "");
-  return { id: block.id, form, depth: form === "heading" ? clampDepth(block.depth) : null, type, text };
+  return {
+    id: block.id,
+    form,
+    depth: form === "heading" ? clampDepth(block.depth) : null,
+    type,
+    text,
+    sharedBlockId: block.sharedBlockId ?? null,
+    sharedBlockVersion: block.sharedBlockVersion ?? null,
+  };
 }

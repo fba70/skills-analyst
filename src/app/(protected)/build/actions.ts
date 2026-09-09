@@ -1008,3 +1008,148 @@ export async function distillTranscriptAction(
     return failure(error);
   }
 }
+
+/* ------------------------------- shared blocks (RK.4, plan step E6) — Team ---- */
+
+/**
+ * Every convention action is Team-gated in the same place, so there is one gate rather than five.
+ *
+ * `requireEntitlement` rather than `has`: unlike the eval panel, which shows a free author what
+ * they are missing, a write here would create org state a downgraded workspace could not manage.
+ */
+async function requireSharedBlocks(): Promise<
+  { ok: true; orgId: string; userId: string } | { ok: false; message: string }
+> {
+  const session = await requireSession();
+  const orgId = session.session.activeOrganizationId;
+  if (!orgId) return { ok: false, message: "No active workspace." };
+  const { requireEntitlement } = await import("@/server/dal/entitlements");
+  await requireEntitlement(orgId, "shared-blocks");
+  return { ok: true, orgId, userId: session.user.id };
+}
+
+export async function createSharedBlockAction(
+  name: string,
+  type: string,
+  text: string,
+  note: string,
+): Promise<ActionResult<{ id: string }>> {
+  try {
+    const gate = await requireSharedBlocks();
+    if (!gate.ok) return gate;
+    const { createSharedBlock } = await import("@/server/builder/shared");
+    const { SHARED_BLOCK_REFUSAL_MESSAGE } = await import("@/lib/shared-blocks");
+    const outcome = await createSharedBlock({
+      orgId: gate.orgId,
+      userId: gate.userId,
+      name,
+      type,
+      text,
+      note,
+    });
+    if (!outcome.ok) return { ok: false, message: SHARED_BLOCK_REFUSAL_MESSAGE[outcome.refusal] };
+    revalidatePath("/build");
+    return { ok: true, data: outcome.data };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Edit a convention. Bumps its version and puts every dependent behind — and touches no draft.
+ *
+ * The result reports how many drafts are now behind, because that number is the point of the
+ * feature and the one an editor should see before and after: *"this changes a convention forty
+ * drafts use"* is a different decision from *"this changes one"*.
+ */
+export async function updateSharedBlockAction(
+  id: string,
+  text: string,
+  note: string,
+): Promise<ActionResult<{ version: number; dependents: number }>> {
+  try {
+    const gate = await requireSharedBlocks();
+    if (!gate.ok) return gate;
+    const { updateSharedBlock } = await import("@/server/builder/shared");
+    const { SHARED_BLOCK_REFUSAL_MESSAGE } = await import("@/lib/shared-blocks");
+    const outcome = await updateSharedBlock({ orgId: gate.orgId, userId: gate.userId, id, text, note });
+    if (!outcome.ok) return { ok: false, message: SHARED_BLOCK_REFUSAL_MESSAGE[outcome.refusal] };
+    revalidatePath("/build");
+    return { ok: true, data: outcome.data };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function retireSharedBlockAction(
+  id: string,
+): Promise<ActionResult<{ message: string }>> {
+  try {
+    const gate = await requireSharedBlocks();
+    if (!gate.ok) return gate;
+    const { retireSharedBlock } = await import("@/server/builder/shared");
+    const { SHARED_BLOCK_REFUSAL_MESSAGE } = await import("@/lib/shared-blocks");
+    const outcome = await retireSharedBlock({ orgId: gate.orgId, userId: gate.userId, id });
+    if (!outcome.ok) return { ok: false, message: SHARED_BLOCK_REFUSAL_MESSAGE[outcome.refusal] };
+    revalidatePath("/build");
+    return {
+      ok: true,
+      data: {
+        message: `Retired. ${outcome.data.dependents} draft(s) keep their copy — nothing was rewritten.`,
+      },
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function transcludeSharedBlockAction(
+  draftId: string,
+  sharedBlockId: string,
+): Promise<ActionResult<{ message: string }>> {
+  try {
+    const gate = await requireSharedBlocks();
+    if (!gate.ok) return gate;
+    const { transcludeSharedBlock } = await import("@/server/builder/shared");
+    const { SHARED_BLOCK_REFUSAL_MESSAGE } = await import("@/lib/shared-blocks");
+    const outcome = await transcludeSharedBlock({
+      orgId: gate.orgId,
+      userId: gate.userId,
+      draftId,
+      sharedBlockId,
+    });
+    if (!outcome.ok) return { ok: false, message: SHARED_BLOCK_REFUSAL_MESSAGE[outcome.refusal] };
+    revalidatePath(`/build/${draftId}`);
+    return { ok: true, data: { message: "Added to the draft." } };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** Take every pending convention update on this draft, in one revision. */
+export async function syncTransclusionsAction(
+  draftId: string,
+): Promise<ActionResult<{ message: string }>> {
+  try {
+    const gate = await requireSharedBlocks();
+    if (!gate.ok) return gate;
+    const { syncDraftTransclusions } = await import("@/server/builder/shared");
+    const outcome = await syncDraftTransclusions({
+      orgId: gate.orgId,
+      userId: gate.userId,
+      draftId,
+    });
+    revalidatePath(`/build/${draftId}`);
+    return {
+      ok: true,
+      data: {
+        message:
+          outcome.updated === 0
+            ? "Nothing to update."
+            : `${outcome.updated} convention(s) updated, in one revision you can restore from.`,
+      },
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}

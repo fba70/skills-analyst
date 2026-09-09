@@ -60,6 +60,9 @@ export function isDraftBlockForm(value: unknown): value is DraftBlockForm {
 
 export type DraftBlock = {
   id: string;
+  /** Set when this block came from an organisation convention (RK.4). */
+  sharedBlockId?: string | null;
+  sharedBlockVersion?: number | null;
   /** Position in the document, 0-based and contiguous. */
   order: number;
   form: DraftBlockForm;
@@ -85,6 +88,16 @@ export type DraftBlockInput = {
   depth?: number | null;
   type?: BlockType | null;
   text: string;
+  /**
+   * The shared convention this block was pulled from (RK.4, plan step E6).
+   *
+   * Carried through the writer rather than set by a second one, so a transclusion is an ordinary
+   * block with a provenance rather than a special case every caller has to know about. The text
+   * is still the block's own — see `src/lib/shared-blocks.ts` on why it is synced, not
+   * substituted.
+   */
+  sharedBlockId?: string | null;
+  sharedBlockVersion?: number | null;
 };
 
 export const MIN_HEADING_DEPTH = 1;
@@ -260,6 +273,8 @@ export const REVISION_REASONS = [
   "interview",
   /** A block accepted from a Distill run over a transcript (RW.5, plan step C4). */
   "distilled",
+  /** An organisation convention pulled in, or a pending update taken (RK.4, plan step E6). */
+  "shared",
   "optimised",
 ] as const;
 
@@ -272,5 +287,6 @@ export const REVISION_REASON_LABEL: Record<RevisionReason, string> = {
   restored: "Restored",
   interview: "Accepted from an interview",
   distilled: "Distilled from a transcript",
+  shared: "Shared convention added or updated",
   optimised: "Compressed by the optimiser",
 };

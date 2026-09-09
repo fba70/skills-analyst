@@ -2169,6 +2169,74 @@ would be enforcing an untested mean.
 > draft.
 
 
+### Shared blocks are synced, never substituted — because live resolution rewrites somebody's document (RK.4, plan step E6)
+
+`src/lib/shared-blocks.ts` · `src/server/builder/shared.ts` · migration 0045
+`pnpm verify:shared` (12 pure checks + a stored probe, free) · Team
+
+*"Org-level convention blocks — 'our code style', 'our incident-severity definitions' — defined
+once, referenced by many skills, updated in one place with dependent-skill re-validation."* The
+enterprise argument is that fifty internal skills become maintainable instead of fifty copies of
+drift.
+
+#### This is the one pointer in the codebase that does not resolve live, and the exception is the design
+
+Archetype exemplars, supersession, endorsements, the block library, C6's fork attribution — every
+other pointer here resolves live, and this codebase has a section for each explaining why. So the
+obvious build is a draft holding a reference, a render reading the current text, and one edit
+updating forty documents at once.
+
+**It is wrong here twice over.**
+
+`skill_drafts.body` is a *render of `draft_blocks`* with exactly one writer. A block whose text
+lives in another table makes the render depend on that table, so the body and the blocks beside it
+can disagree with nothing erroring — the invariant C1 exists to hold.
+
+And worse: live substitution **rewrites somebody's document without their knowledge.** A colleague
+edits a convention at 11am, forty drafts change in the middle of sentences their authors wrote,
+and no revision history says so. This codebase has a name for that shape and three sections about
+the times it happened.
+
+So a transcluded block **carries its own copy and the version it came from**. When the convention
+moves, dependents go *behind* rather than changing: the update is offered, the author takes it,
+and it lands in the revision history under its own reason like every other change to a draft.
+Single source of truth for the **convention**; the author still owns their **document**.
+
+> `verify:shared` asserts exactly that, against the real tables: it pulls a convention into a
+> draft, edits the convention, and requires the draft's text to be **byte-identical** afterwards —
+> then requires the update to be *offered*, because a mechanism that changes nothing and says
+> nothing would be no feature at all. Then it takes the update and checks the revision row says
+> `shared`.
+
+#### Published skills are never touched, and RK.4's re-validation is a list
+
+A published skill is bytes at a content hash a verdict covers. Re-resolving a transclusion into it
+would change what the verdict describes while the verdict went on claiming to describe it. So
+`staleDependents` answers *which published skills came from drafts that are now behind*, and
+re-publishing stays the author's deliberate act — the line `reinstateTakedown` already holds about
+not restoring content it cannot honestly restore.
+
+#### Smaller decisions worth keeping
+
+- **A no-op edit does not bump the version.** Saving the form unchanged would otherwise put forty
+  dependents behind and ask forty people to review a change nobody made, which is the fastest way
+  to teach them to ignore the notice.
+- **Retired, not deleted.** Deleting would null forty pointers and leave forty authors with a
+  block that silently stopped tracking anything and no way to find out why. Same call as a
+  withdrawn maintainer standing.
+- **Dependents are counted as distinct *drafts*, not blocks.** A draft using one convention twice
+  is one dependent, and counting rows would tell an editor that twice as much work depends on
+  their change as really does.
+- **The name is folded.** Two conventions differing only in capitalisation are one convention and
+  a bug — the repository-identity fold, one layer up.
+- **An untyped convention is refused**, though `null` stays valid for an author's own prose.
+  `block-types.ts` keeps it open so a workbench never refuses to hold a paragraph; a convention is
+  not that, because somebody chose to publish it and an untyped one cannot be compared against an
+  archetype's grammar.
+- **The module never writes `draft_blocks` directly** — a transclusion is an ordinary block with a
+  provenance, written by `setDraftBlocks` like everything else. Asserted by source scan, because
+  a second writer produces a body that does not match its own blocks with nothing erroring.
+
 ### Distill mode: 94% of what looks like the user speaking is `cat` output (RW.5, plan step C4)
 
 `src/lib/distill.ts` · `src/server/distill/run.ts` · migration 0044
@@ -5227,6 +5295,7 @@ pnpm verify:relations --live             # 3 controls proving the detector fires
 pnpm relations --status                  # stored edges; free
 pnpm relations --conflicts 20            # mine guardrail contradictions — COSTS MONEY
 pnpm verify:distill                      # RW.5 tool output is not the user speaking; free
+pnpm verify:shared                       # RK.4 a convention is synced, never substituted; free
 pnpm verify:improve                      # R5.6 a fork carries its licence; free, no network
 pnpm verify:scope                        # RW.10/RW.11 scope and disclosure; free, no network
 pnpm scope --status                      # coverage first, then the finding; free

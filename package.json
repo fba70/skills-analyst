@@ -73,6 +73,7 @@
     "verify:distill": "tsx --conditions=react-server scripts/verify-distill.mts",
     "verify:improve": "tsx --conditions=react-server scripts/verify-improve.mts",
     "verify:scope": "tsx --conditions=react-server scripts/verify-scope.mts",
+    "verify:shared": "tsx --conditions=react-server scripts/verify-shared.mts",
     "verify:demand": "tsx --conditions=react-server scripts/verify-demand.mts",
     "verify:freshness": "tsx --conditions=react-server scripts/verify-freshness.mts",
     "verify:impact": "tsx --conditions=react-server scripts/verify-impact.mts",
