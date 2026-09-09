@@ -251,5 +251,119 @@ if (found.length === 0) {
   );
 }
 
+console.info("\nThe stored half keeps no transcript");
+
+const { Client } = await import("pg");
+const c = new Client({ connectionString: process.env.DATABASE_URL_UNPOOLED });
+let connected = false;
+try {
+  await c.connect();
+  connected = true;
+} catch {
+  console.info("  skip  no database connection — the pure checks above are complete");
+}
+
+if (connected) {
+  const { rows: exists } = await c.query<{ present: boolean }>(
+    `select to_regclass('public.distill_runs') is not null as present`,
+  );
+  if (!exists[0].present) {
+    console.info("  skip  table absent — the migration is not applied yet");
+  } else {
+    /*
+     * The property the whole privacy design rests on, asserted against `information_schema`
+     * rather than against today's data — clean data says nothing about the next migration, which
+     * is the line `verify:blocks` already holds for `skill_blocks`.
+     */
+    const { rows: columns } = await c.query<{ column_name: string; data_type: string }>(
+      `select column_name, data_type from information_schema.columns where table_name = 'distill_runs'`,
+    );
+    const textish = columns.filter((col) => col.data_type === "text").map((col) => col.column_name);
+    check(
+      "a distill run has no column a transcript could be stored in",
+      textish.every((name) =>
+        ["org_id", "created_by", "label", "distill_version", "model"].includes(name),
+      ),
+      textish.join(", "),
+    );
+    check(
+      "it does record what it read, so a parser regression would be visible",
+      ["turns_read", "tool_results_dropped", "windows_sent"].every((name) =>
+        columns.some((col) => col.column_name === name),
+      ),
+      "a run whose tool_results_dropped fell to zero would be one feeding files to a model",
+    );
+
+    /*
+     * Exactly one origin, attempted rather than assumed.
+     *
+     * `verify:dedup` makes the same argument: clean data proves nothing about whether it can get
+     * dirty again, so the check performs the insert that must fail and requires the failure.
+     */
+    const { rows: org } = await c.query<{ id: string }>(`select id from organization limit 1`);
+    if (org.length === 0) {
+      console.info("  skip  no organisation to write a probe against");
+    } else {
+      await c.query("begin");
+      try {
+        let bothNullRefused = false;
+        try {
+          await c.query(
+            `insert into interview_candidates (org_id, type, text) values ($1, 'guardrail', 'probe')`,
+            [org[0].id],
+          );
+        } catch {
+          bothNullRefused = true;
+        }
+        check(
+          "a candidate with no origin at all is refused by the database",
+          bothNullRefused,
+          "both null is an orphan no accept path can resolve a draft for",
+        );
+      } finally {
+        await c.query("rollback");
+      }
+    }
+
+    const { rows: mixed } = await c.query<{ n: string }>(
+      `select count(*)::text as n from interview_candidates
+        where distill_run_id is not null and (session_id is not null or turn_id is not null)`,
+    );
+    check(
+      "no stored candidate claims both origins",
+      mixed[0].n === "0",
+      "one counted twice would make the interview and distill accept rates disagree with their sum",
+    );
+  }
+  await c.end();
+}
+
+console.info("\nThe model call is priced and gated");
+
+{
+  const { MODEL_DEFAULTS } = await import("../src/lib/models");
+  const { rateFor, UNKNOWN_MODEL_RATE } = await import("../src/lib/llm-pricing");
+  const { PLAN_FEATURES } = await import("../src/lib/plans");
+  const { REVISION_REASONS } = await import("../src/lib/draft-blocks");
+
+  const id = MODEL_DEFAULTS.distill;
+  check(
+    "the distill model has a real price entry",
+    rateFor(id).inputPerMTok !== UNKNOWN_MODEL_RATE.inputPerMTok,
+    id,
+  );
+  check(
+    "distill is Pro and above, never free",
+    !PLAN_FEATURES.free.includes("distill") &&
+      PLAN_FEATURES.pro.includes("distill") &&
+      PLAN_FEATURES.team.includes("distill"),
+  );
+  check(
+    "an accepted distillation is distinguishable in the revision history",
+    (REVISION_REASONS as readonly string[]).includes("distilled"),
+    "`interview` on a distillation would make the two indistinguishable where an author looks",
+  );
+}
+
 console.info(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail > 0 ? 1 : 0);

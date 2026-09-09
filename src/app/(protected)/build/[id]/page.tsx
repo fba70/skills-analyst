@@ -5,6 +5,7 @@ import { ArrowLeft, ShieldOff } from "lucide-react";
 
 import { BlockEditor } from "@/components/builder/block-editor";
 import { EvalPanel } from "@/components/builder/eval-panel";
+import { DistillPanel } from "@/components/builder/distill-panel";
 import { Interview } from "@/components/builder/interview";
 import { MatrixPanel } from "@/components/builder/matrix-panel";
 import { OptimiserPanel } from "@/components/builder/optimiser-panel";
@@ -20,6 +21,8 @@ import { contentHashOf, evalParentFor, evalStates } from "@/server/evals/store";
 import { getSession, listSessions } from "@/server/interview/session";
 import { blockDeviations } from "@/server/builder/deviation";
 import { getDraft } from "@/server/builder/drafts";
+import { listDistillRuns } from "@/server/distill/run";
+import { hasEntitlement } from "@/server/dal/entitlements";
 import { getSkillsByIds } from "@/server/dal/skills";
 import { requireSession } from "@/server/dal/session";
 import { estimateTokens } from "@/lib/tokens";
@@ -72,11 +75,14 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
    * page nobody was asking to change anything on.
    */
   const orgId = session.session.activeOrganizationId;
-  const [blocks, revisions, sessions, evalCases] = orgId
+  const [blocks, revisions, sessions, distillRunRows, distillEntitled, evalCases] = orgId
     ? await Promise.all([
         getDraftBlocks(draft.id, orgId),
         listDraftRevisions(draft.id, orgId),
         listSessions(draft.id, orgId),
+        listDistillRuns(draft.id, orgId),
+        /* `hasEntitlement`, not `require`: a free author is not doing anything wrong. */
+        hasEntitlement(orgId, "distill"),
         /*
          * The parent moves on publish — `publishDraft` re-points every case onto the skill — so
          * asking for `{ draftId }` after publication finds nothing and the panel reads as data
@@ -84,7 +90,7 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
          */
         evalStates(evalParentFor(draft), orgId),
       ])
-    : [[], [], [], []];
+    : [[], [], [], [], false, []];
 
   /*
    * `hasEntitlement`, not `requireEntitlement`. A free-tier author is not doing anything wrong
@@ -337,6 +343,35 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         an author scrolls to deliberately rather than reads on the way past. An accepted block
         appears back up in the editor, which is the confirmation that answering did something.
       */}
+      {/*
+        Below Interview, and the pairing is the point.
+
+        Interview asks for knowledge the author has not written down; Distill takes it from work
+        that already happened. They produce the same candidate rows and share one accept path, so
+        an author who tries both is not learning two interfaces — and the second is the one that
+        costs nothing to attempt on a session that already exists.
+      */}
+      <DistillPanel
+        draftId={draft.id}
+        entitled={distillEntitled as boolean}
+        runs={(distillRunRows as Awaited<ReturnType<typeof listDistillRuns>>).map((run) => ({
+          id: run.id,
+          label: run.label,
+          createdAt: run.createdAt.toISOString(),
+          turnsRead: run.turnsRead,
+          humanTurns: run.humanTurns,
+          toolResultsDropped: run.toolResultsDropped,
+          windowsFound: run.windowsFound,
+          windowsSent: run.windowsSent,
+          candidates: run.candidates.map((candidate) => ({
+            id: candidate.id,
+            type: candidate.type,
+            text: candidate.text,
+            decision: candidate.decision,
+          })),
+        }))}
+      />
+
       <Interview
         draftId={draft.id}
         sessionId={activeSession?.id ?? null}

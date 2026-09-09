@@ -200,9 +200,20 @@ console.info("\nAccepting writes through the one writer");
     "and nothing in the interview writes skill_drafts.body",
     !/skillDrafts[\s\S]{0,400}body:/.test(decide) && !/skillDrafts[\s\S]{0,400}body:/.test(turnSource),
   );
+  /*
+   * Two reasons since C4, and asserting both is the point rather than a concession.
+   *
+   * `decideCandidate` is shared with Distill (RW.5), which was the whole reason for widening one
+   * candidate table instead of adding a second — but a shared accept path could easily have
+   * shared a *label*, and then an author looking at their revision history could not tell a
+   * question they answered from a correction lifted out of a transcript. The check used to match
+   * the literal `reason: "interview"`; it now requires the branch and both vocabulary entries.
+   */
   check(
-    "an accept lands in the revision history under its own reason",
-    /reason: "interview"/.test(decide) && (REVISION_REASONS as readonly string[]).includes("interview"),
+    "an accept lands in the revision history under its own reason, and a distillation under a different one",
+    /reason: loaded\.technique \? "interview" : "distilled"/.test(decide) &&
+      (REVISION_REASONS as readonly string[]).includes("interview") &&
+      (REVISION_REASONS as readonly string[]).includes("distilled"),
   );
   /*
    * Appended, never inserted at the archetype's typical position. That position is a median

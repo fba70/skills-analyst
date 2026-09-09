@@ -9,6 +9,7 @@ import {
   events,
   interviewCandidates,
   interviewSessions,
+  distillRuns,
 } from "@/server/db/schema";
 import { getDraftBlocks, setDraftBlocks } from "@/server/builder/blocks";
 
@@ -59,17 +60,31 @@ export async function decideCandidate(input: {
         evalPrompt: interviewCandidates.evalPrompt,
         evalExpectation: interviewCandidates.evalExpectation,
         decision: interviewCandidates.decision,
-        draftId: interviewSessions.draftId,
+        /*
+         * Either origin resolves a draft, and the joins are LEFT since C4 (plan step C4).
+         *
+         * A candidate now comes from an interview session *or* a distill run — the check
+         * constraint guarantees exactly one — so the draft is whichever join matched. Keeping one
+         * decide path was the point of not giving Distill its own candidate table: two would be
+         * two chances to forget the revision-history note, the eval case, or the feedback event
+         * below.
+         */
+        sessionDraftId: interviewSessions.draftId,
+        distillDraftId: distillRuns.draftId,
         technique: interviewSessions.technique,
       })
       .from(interviewCandidates)
-      .innerJoin(interviewSessions, eq(interviewSessions.id, interviewCandidates.sessionId))
+      .leftJoin(interviewSessions, eq(interviewSessions.id, interviewCandidates.sessionId))
+      .leftJoin(distillRuns, eq(distillRuns.id, interviewCandidates.distillRunId))
       .where(eq(interviewCandidates.id, input.candidateId))
       .limit(1);
     return row ?? null;
   });
 
   if (!loaded) return { ok: false, message: "Suggestion not found." };
+  const draftId = loaded.sessionDraftId ?? loaded.distillDraftId;
+  /* The check constraint makes this unreachable; a null here would mean the constraint is gone. */
+  if (!draftId) return { ok: false, message: "That suggestion has no draft." };
   /*
    * Decided once. A second decision would double-count in every accept-rate query and, on an
    * accept, would append the same block twice — the same "recorded then applied again" shape
@@ -96,9 +111,9 @@ export async function decideCandidate(input: {
      * builder acting on evidence it does not have. C1b's reorder is one drag away, and the
      * author knows where it goes.
      */
-    const existing = await getDraftBlocks(loaded.draftId, input.orgId);
+    const existing = await getDraftBlocks(draftId, input.orgId);
     const result = await setDraftBlocks(
-      loaded.draftId,
+      draftId,
       input.orgId,
       [
         ...existing.map((block) => ({
@@ -111,8 +126,14 @@ export async function decideCandidate(input: {
         { form: "content" as const, depth: null, type: loaded.type, text },
       ],
       {
-        reason: "interview",
-        note: `${loaded.technique} · ${loaded.type}`,
+        /*
+         * A distilled block is not an interview answer, and the revision history says which.
+         * `optimised` is the closest existing reason and would be a lie; `interview` on a
+         * distillation would make the two indistinguishable in the one place an author looks to
+         * ask where a paragraph came from.
+         */
+        reason: loaded.technique ? "interview" : "distilled",
+        note: `${loaded.technique ?? "distill"} · ${loaded.type}`,
         createdBy: input.userId,
       },
     );
@@ -153,7 +174,7 @@ export async function decideCandidate(input: {
       payload: {
         technique: loaded.technique,
         blockType: loaded.type,
-        draftId: loaded.draftId,
+        draftId,
         /*
          * How far a kept suggestion had to move. A better measure of whether the assistant is
          * helping than a bare accept count, and free to record because both versions are on
@@ -199,7 +220,7 @@ export async function decideCandidate(input: {
     try {
       const { createEval } = await import("@/server/evals/store");
       await createEval({
-        draftId: loaded.draftId,
+        draftId,
         orgId: input.orgId,
         userId: input.userId,
         kind: "golden-task",

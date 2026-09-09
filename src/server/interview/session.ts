@@ -158,6 +158,12 @@ export async function getSession(
   const byTurn = new Map<string, InterviewCandidateRow[]>();
   for (const row of loaded.candidates) {
     if (!isBlockType(row.type)) continue;
+    /*
+     * `turn_id` is nullable since C4, because a distill candidate has no turn. This query is
+     * scoped to one interview session, so every row here has one — skipping rather than asserting
+     * keeps the grouping honest if that ever stops being true.
+     */
+    if (row.turnId === null) continue;
     const list = byTurn.get(row.turnId) ?? [];
     list.push({
       id: row.id,

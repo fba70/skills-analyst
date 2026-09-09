@@ -70,7 +70,7 @@
     "links": "tsx --conditions=react-server scripts/links.mts",
     "verify:maintainers": "tsx --conditions=react-server scripts/verify-maintainers.mts",
     "verify:relations": "tsx --conditions=react-server scripts/verify-relations.mts",
-    "verify:distill": "tsx scripts/verify-distill.mts",
+    "verify:distill": "tsx --conditions=react-server scripts/verify-distill.mts",
     "verify:improve": "tsx --conditions=react-server scripts/verify-improve.mts",
     "verify:scope": "tsx --conditions=react-server scripts/verify-scope.mts",
     "verify:demand": "tsx --conditions=react-server scripts/verify-demand.mts",

@@ -32,6 +32,8 @@ export const MODEL_TASKS = [
   "taxonomy",
   "builder",
   "interview",
+  /** RW.5 Distill: one call per correction window over a transcript. */
+  "distill",
   "evalAgent",
   "evalAgentB",
   "evalJudge",
@@ -63,6 +65,16 @@ export const MODEL_DEFAULTS: ModelSettings = {
    * it went badly — there is only knowledge that was never captured.
    */
   interview: "anthropic/claude-sonnet-5",
+  /**
+   * Distill (Doc 6 RW.5) — one call per correction window.
+   *
+   * Cheaper than authoring, and the reason is the shape of the task rather than its value. The
+   * excerpt is short, the instruction is narrow, and **returning nothing is a correct and common
+   * answer** — most corrections are about one filename and carry no durable rule. That is a
+   * classification-shaped job, which is where the small model is genuinely right, and the author
+   * sees every candidate before it reaches the draft.
+   */
+  distill: "google/gemini-2.5-flash-lite",
   /**
    * The agent under test in a golden task (Doc 6 RW.6).
    *
@@ -119,6 +131,11 @@ export const MODEL_TASK_META: Record<ModelTask, { label: string; blurb: string }
     label: "Interview mode",
     blurb:
       "Asks the questions that elicit knowledge a form cannot. Many calls per skill, each carrying the transcript so far — the one task where the conversation cap matters more than the model choice.",
+  },
+  distill: {
+    label: "Distill mode",
+    blurb:
+      "Reads one corrected exchange from a working session and states the durable rule behind it. Many short calls per transcript, most of which correctly return nothing.",
   },
   evalAgent: {
     label: "Eval — the agent under test",

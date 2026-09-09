@@ -258,6 +258,8 @@ export const REVISION_REASONS = [
   "edited",
   "restored",
   "interview",
+  /** A block accepted from a Distill run over a transcript (RW.5, plan step C4). */
+  "distilled",
   "optimised",
 ] as const;
 
@@ -269,5 +271,6 @@ export const REVISION_REASON_LABEL: Record<RevisionReason, string> = {
   edited: "Edited",
   restored: "Restored",
   interview: "Accepted from an interview",
+  distilled: "Distilled from a transcript",
   optimised: "Compressed by the optimiser",
 };

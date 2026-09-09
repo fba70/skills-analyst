@@ -954,3 +954,57 @@ export async function offloadBlockAction(
     return failure(error);
   }
 }
+
+/**
+ * Distill a Claude Code transcript into candidate blocks (RW.5, plan step C4).
+ *
+ * **Pro, gated by A5.** The one place in this file where the entitlement is the point rather than
+ * a formality: this is the perfect-builder value Doc 6 prices the tier on.
+ *
+ * The transcript arrives as text in a `FormData` and is **never written anywhere** — read, parsed,
+ * the corrections extracted, dropped. What persists is a `distill_runs` row of counts and the
+ * candidates themselves, each pointing at a turn uuid in a file only the author holds.
+ *
+ * A server action rather than a route handler, and the size is why it is worth saying: a
+ * transcript can be megabytes, and this returns a value to our own bundle rather than bytes over
+ * a wire protocol, which is exactly the line the download route and the MCP endpoint sit on the
+ * other side of.
+ */
+export async function distillTranscriptAction(
+  draftId: string,
+  transcript: string,
+  label: string,
+): Promise<ActionResult<{ candidates: number; turnsRead: number; windowsSent: number }>> {
+  try {
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
+    if (!orgId) return { ok: false, message: "No active workspace." };
+
+    const { requireEntitlement } = await import("@/server/dal/entitlements");
+    await requireEntitlement(orgId, "distill");
+
+    if (transcript.trim().length === 0) return { ok: false, message: "That file is empty." };
+
+    const { distillTranscript } = await import("@/server/distill/run");
+    const outcome = await distillTranscript({
+      orgId,
+      userId: session.user.id,
+      draftId,
+      transcript,
+      label,
+    });
+    if (!outcome.ok) return { ok: false, message: outcome.message };
+
+    revalidatePath(`/build/${draftId}`);
+    return {
+      ok: true,
+      data: {
+        candidates: outcome.report.candidates,
+        turnsRead: outcome.report.turnsRead,
+        windowsSent: outcome.report.windowsSent,
+      },
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}

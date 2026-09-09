@@ -1,6 +1,8 @@
 import { sql } from "drizzle-orm";
 import {
+  check,
   index,
+  integer,
   pgPolicy,
   pgTable,
   smallint,
@@ -136,13 +138,23 @@ export const interviewCandidates = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
-    sessionId: uuid("session_id")
-      .notNull()
-      .references(() => interviewSessions.id, { onDelete: "cascade" }),
-    /** The assistant turn that proposed it. */
-    turnId: uuid("turn_id")
-      .notNull()
-      .references(() => interviewTurns.id, { onDelete: "cascade" }),
+    /**
+     * The interview that proposed it, or null when a **distill run** did (RW.5, plan step C4).
+     *
+     * Nullable rather than a second candidate table, and the choice is worth stating. Distill and
+     * Interview produce the same thing — a typed block awaiting a decision — and giving them two
+     * tables would give them two `decideCandidate`s, which is how one of them quietly stops
+     * appending to the revision history or stops writing an eval case.
+     *
+     * The alternative considered and rejected was reusing this table as-is by inventing an
+     * `interview_session` per distill run. That is the fake-source mistake `skill_drafts` warns
+     * about, and it would corrupt *"which technique produced accepted blocks"* — the R5.4 metric
+     * this table exists to make answerable.
+     */
+    sessionId: uuid("session_id").references(() => interviewSessions.id, { onDelete: "cascade" }),
+    /** The assistant turn that proposed it. Null for a distill candidate, which has no turns. */
+    turnId: uuid("turn_id").references(() => interviewTurns.id, { onDelete: "cascade" }),
+    distillRunId: uuid("distill_run_id").references(() => distillRuns.id, { onDelete: "cascade" }),
 
     /** One of `BLOCK_TYPES`. Never null here: an untyped suggestion is not a suggestion. */
     type: text("type").notNull(),
@@ -188,7 +200,86 @@ export const interviewCandidates = pgTable(
   },
   (t) => [
     index("interview_candidates_session_idx").on(t.sessionId, t.createdAt),
+    index("interview_candidates_distill_idx").on(t.distillRunId, t.createdAt),
     index("interview_candidates_decision_idx").on(t.decision, t.type),
+
+    /**
+     * Exactly one origin, enforced by the database — the rule `skill_evals` already holds.
+     *
+     * Both null is an orphan no accept path can resolve a draft for; both set is a candidate that
+     * would be counted once as interview output and once as distill output, which makes the two
+     * accept rates disagree with their own sum.
+     */
+    check(
+      "interview_candidates_one_origin",
+      sql`(session_id is null) <> (distill_run_id is null)`,
+    ),
+    pgPolicy("org_scope", {
+      for: "all",
+      to: "app_runtime",
+      using: sql`org_id = current_setting('app.org_id', true)`,
+      withCheck: sql`org_id = current_setting('app.org_id', true)`,
+    }),
+  ],
+);
+
+/**
+ * One pass of Distill over one transcript (Doc 6 RW.5, plan step C4).
+ *
+ * ## The transcript is not here, and that is the design
+ *
+ * There is no `content` column and there must never be one. Doc 6 treats a transcript with the
+ * private-corpus posture, and the strongest form of that is not storing it: what is kept is a
+ * **count** of what was read and a **coordinate** — the turn uuid on each candidate — into a file
+ * only the author holds. The platform can say *"eight corrections, from turns 41 and 63"* and
+ * cannot say what was in them.
+ *
+ * That is `skill_blocks` one step further. That table holds an offset instead of a passage and
+ * still needs the bundle to resolve it; this holds a pointer into a document the platform has
+ * never seen and could not resolve if it wanted to.
+ *
+ * ## Counts, because a run has to be legible without its input
+ *
+ * `turns_read`, `tool_results_dropped` and `windows_sent` are what makes a run auditable after
+ * the fact: an operator asking why one import produced three candidates and another forty can
+ * answer it from the row. They are also the numbers that would expose a parser regression — a run
+ * whose `tool_results_dropped` fell to zero would be one that started feeding file contents to a
+ * model, and nothing else on the row would look wrong.
+ */
+export const distillRuns = pgTable(
+  "distill_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    draftId: uuid("draft_id")
+      .notNull()
+      .references(() => skillDrafts.id, { onDelete: "cascade" }),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+
+    /** The author's own label for the transcript. Never the file's contents, never its path. */
+    label: text("label"),
+    /** `DISTILL_VERSION`. Which extractor decided, for R7.2 and as the re-run selector. */
+    distillVersion: text("distill_version").notNull(),
+    model: text("model"),
+
+    /* --- what was read, never what was in it --- */
+    turnsRead: smallint("turns_read").notNull().default(0),
+    humanTurns: smallint("human_turns").notNull().default(0),
+    /** The number whose falling to zero would mean the parser had started leaking tool output. */
+    toolResultsDropped: integer("tool_results_dropped").notNull().default(0),
+    windowsFound: smallint("windows_found").notNull().default(0),
+    windowsSent: smallint("windows_sent").notNull().default(0),
+    redactions: smallint("redactions").notNull().default(0),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("distill_runs_draft_idx").on(t.draftId, t.createdAt),
+
+    /** The draft's own policy: there is no such thing as a public draft or a public distillation. */
     pgPolicy("org_scope", {
       for: "all",
       to: "app_runtime",

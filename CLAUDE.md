@@ -2169,14 +2169,15 @@ would be enforcing an untested mean.
 > draft.
 
 
-### Distill mode, part one: 94% of what looks like the user speaking is `cat` output (RW.5, plan step C4)
+### Distill mode: 94% of what looks like the user speaking is `cat` output (RW.5, plan step C4)
 
-`src/lib/distill.ts` · `pnpm verify:distill` (20 checks, free — no database, no network)
+`src/lib/distill.ts` · `src/server/distill/run.ts` · migration 0044
+`pnpm verify:distill` (23 checks, free) · Pro, gated by A5
 
-C4 is the large step of M5 and this is its first half: **reading a Claude Code transcript
-correctly, and deciding what is worth spending a model call on.** The metered half — turning a
-correction into typed candidate blocks through C2b's accept flow — is not built yet and is named
-at the end.
+C4 is the large step of M5: **reading a Claude Code transcript correctly, deciding what is worth
+spending a model call on, and turning a correction into typed candidate blocks through C2b's
+accept flow.** Interview mode asks for knowledge the author has not written down; Distill takes it
+from work that already happened.
 
 #### The finding that shapes the whole step
 
@@ -2233,19 +2234,59 @@ parser. What survives is prose a person typed, and people paste keys into prose.
 asymmetric on purpose: over-redaction costs a candidate block, under-redaction sends a credential
 to a third party.
 
-#### What is not built yet
+#### The metered half: one candidate table, not two
 
-The metered half. `distill_runs`, the model call over a correction window, and candidates joining
-C2b's accept flow. The schema decision is made and worth recording: **candidates will not get a
-second table.** `interview_candidates` requires both a session and a turn, so reusing it as-is
-would mean inventing fake interview sessions — the mistake `skill_drafts` warns about with fake
-sources, and it would corrupt "which technique produced accepted blocks", which is the metric R5.4
-reads. The answer is `skill_evals`' precedent: nullable parents with a check constraint, one
-candidate table, one decide path, two origins that stay distinguishable.
+`src/server/distill/run.ts` · migration 0044 · Settings → Models → **Distill mode**
 
-Also deferred, and named by the plan in this order: **documents**, then **diff-to-skill**. JSONL
-first was the right call — it is the input with a shape worth discovering, and discovering it is
-what this half was.
+Candidates land in `interview_candidates` with a `distill_run_id` instead of a session, and
+`decideCandidate` resolves the draft from whichever origin matched. **Two candidate tables would
+have been two accept paths**, and the second would eventually forget the revision-history note,
+the eval case, or R5.4's feedback event.
+
+The alternative — reusing the table as-is by inventing an `interview_session` per distill run —
+is the fake-source mistake `skill_drafts` warns about, and it would corrupt *"which technique
+produced accepted blocks"*, the one metric that table exists to answer. So `session_id` and
+`turn_id` became nullable, `distill_run_id` arrived beside them, and a check constraint holds
+**exactly one origin** — `skill_evals`' own precedent, in the same words.
+
+A distilled block gets its own revision reason. `interview` on a distillation would make the two
+indistinguishable in the one place an author looks to ask where a paragraph came from.
+
+#### `distill_runs` has no column a transcript could live in
+
+Deliberately, and `verify:distill` asserts it against `information_schema` rather than against
+today's data. What the row holds is **counts**: turns read, tool results dropped, corrections
+found, corrections sent, redactions. Those are what make a run legible after the fact — an
+operator asking why one import produced three candidates and another forty answers it from the
+row — and `tool_results_dropped` is the number that would move first if the parser ever started
+reading file contents as speech.
+
+The output schema has no field a transcript excerpt could be returned in, which is the half of
+*patterns, not verbatim text* that a prompt cannot enforce on its own. The model is asked for the
+**rule** behind a correction, in the author's voice, and told that returning nothing is a correct
+and common answer — most corrections are about one filename.
+
+#### Two budget decisions that go the opposite way from their neighbours
+
+**Checked once before the run, then again per call.** Everywhere else the check is per call,
+because everywhere else a call is the unit of work. A run of forty calls checking only itself
+would blow RC.2's one-call overshoot bound forty times over — and one that refused mid-run and
+discarded what it had produced would lose an author's work to protect a cap. So the loop **stops
+and keeps**, and the report says how far it got.
+
+**Flash-Lite, not Sonnet**, against the pattern set by `builder` and `interview`. The excerpt is
+short, the instruction is narrow, and *returning nothing* is the commonest correct answer — that
+is a classification-shaped job, which is where the small model is genuinely right, and the author
+sees every candidate before it reaches the draft.
+
+> **A run that stopped early used to claim it had not.** `windows_sent` was written as
+> `sending.length` before the loop ran, so a run cut short by the budget would report forty calls
+> it never made — in the one column an operator would use to explain a bill. Corrected to the real
+> count after the loop.
+
+Still deferred, in the plan's own order: **documents**, then **diff-to-skill**. JSONL first was
+the right call — it is the input with a shape worth discovering, and discovering it is what the
+first half was.
 
 ### Improve an existing skill, and the fork that must not launder a licence (R5.6, plan step C6)
 
