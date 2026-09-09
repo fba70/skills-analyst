@@ -31,6 +31,17 @@ export type McpPrincipal = { tokenId: string; organizationId: string };
 
 const store = new AsyncLocalStorage<McpPrincipal>();
 
+/**
+ * The principal for the request currently being served, or null outside one.
+ *
+ * Read by the write tool as well as the recorder, which is what lets the MCP handler stay a
+ * single module-level constant: a tool that writes into one workspace needs to know which, and
+ * the alternative was rebuilding the whole handler per request to close over it.
+ */
+export function currentMcpPrincipal(): McpPrincipal | null {
+  return store.getStore() ?? null;
+}
+
 /** Open the scope for one request. Called by the route guard, around the handler. */
 export function withMcpPrincipal<T>(principal: McpPrincipal, fn: () => Promise<T>): Promise<T> {
   return store.run(principal, fn);

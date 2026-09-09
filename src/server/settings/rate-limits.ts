@@ -43,6 +43,8 @@ export type RateLimitSettings = {
   mcpFree: ScopeLimits;
   /** Authenticated, entitled callers. Reachable since RC.1 landed. */
   mcpPaid: ScopeLimits;
+  /** Agent-side skill creation over MCP (RM.3). Tighter than any human write scope. */
+  mcpWrite: ScopeLimits;
   /**
    * Anonymous **writes**: flagging a skill, submitting a repository, filing a notice
    * (R2.5, R1.8, R7.5).
@@ -79,6 +81,18 @@ export const RATE_LIMIT_DEFAULTS: RateLimitSettings = {
    * one retry and an unbounded write costs a curator their queue.
    */
   publicWrite: { enabled: true, perMinute: 5, perHour: 30 },
+  /**
+   * Agent-side skill creation (RM.3, plan step F3). Tight, and tighter than a human's writes.
+   *
+   * A person filing flags is bounded by typing; an agent in a loop is bounded by nothing, and the
+   * thing on the other side of this scope creates **drafts a human then has to read**. Ten an
+   * hour is a working session's worth of authoring and nowhere near a runaway.
+   *
+   * Separate from `mcpPaid` rather than folded into it, because the read scopes are deliberately
+   * loose — a false refusal on a read teaches everyone to distrust the limiter — and a write
+   * scope wants the opposite bias, exactly as `publicWrite` does against the MCP reads.
+   */
+  mcpWrite: { enabled: true, perMinute: 3, perHour: 10 },
 };
 
 const KEY = "rate-limits";
@@ -98,6 +112,7 @@ export async function getRateLimits(): Promise<RateLimitSettings> {
     mcpFree: { ...RATE_LIMIT_DEFAULTS.mcpFree, ...(stored.mcpFree ?? {}) },
     mcpPaid: { ...RATE_LIMIT_DEFAULTS.mcpPaid, ...(stored.mcpPaid ?? {}) },
     publicWrite: { ...RATE_LIMIT_DEFAULTS.publicWrite, ...(stored.publicWrite ?? {}) },
+    mcpWrite: { ...RATE_LIMIT_DEFAULTS.mcpWrite, ...(stored.mcpWrite ?? {}) },
   };
 }
 
@@ -145,6 +160,7 @@ export async function setRateLimits(
     mcpFree: sanitiseScope(next.mcpFree),
     mcpPaid: sanitiseScope(next.mcpPaid),
     publicWrite: sanitiseScope(next.publicWrite),
+    mcpWrite: sanitiseScope(next.mcpWrite),
   };
 
   await db.transaction(async (tx) => {

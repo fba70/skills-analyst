@@ -2169,6 +2169,80 @@ would be enforcing an untested mean.
 > draft.
 
 
+### An agent can create a skill, and cannot publish one (RM.3, plan step F3) — Pro
+
+`src/server/mcp/create.ts` · `create_skill` on `/api/mcp` · `pnpm verify:mcp-create` (20 checks, free)
+
+The `mcp-create-skill` entitlement has been live and unused since A5, waiting on two things: a
+paywall to hang it on, and **C1**. A skill written from inside an agent session has to arrive as
+typed blocks, or it would be the one authoring path producing a body string and every Compose
+surface would need a special case for it. The plan's dependency was right.
+
+#### The boundary is the feature
+
+`create_skill` returns a draft and a URL. **It never publishes.** Publishing runs the validators,
+writes corpus rows and makes bytes downloadable — an agent doing that unattended is one prompt
+away from putting a stranger's document into a workspace's registry.
+
+That is B2's line, one surface along: **recording and deciding are separate actions**, and a
+person does the second. It is not a hedge about capability; it is what makes the feature safe
+enough to sell. `verify:mcp-create` asserts it against the *source*, because it is a property of
+what the code can reach rather than of what today's data contains.
+
+#### The validator runs on arrival and its findings go back in the response
+
+The same `validateDraftBody` the builder runs (R4.5) — the same analyzers, including the secret
+scan and the injection scan. An agent that wrote a credential into a skill learns so **in the tool
+result**, where it can fix it in the next turn. The same information reaching a human on Thursday
+is too late to be useful to the only party that could have acted on it for free.
+
+#### Writes get their own rate-limit scope, biased the other way
+
+`mcpWrite` is **3 a minute, 10 an hour** against `mcpPaid`'s 600 and 20,000. The read scopes are
+loose on purpose — a false refusal there teaches everyone to distrust the limiter — and this
+bounds an agent in a loop creating **drafts a human then has to read**. Same inversion
+`publicWrite` makes against the MCP reads, for the same reason.
+
+> Adding the scope turned up a small latent hazard: the scope union was written out by hand in two
+> signatures, so `mcpWrite` compiled everywhere except the one place that had to know about it. It
+> is `keyof RateLimitSettings` now, and a new scope is a type error at every call site rather than
+> at none.
+
+#### Two refusals that are answers rather than errors
+
+**An unentitled caller gets a sentence.** `hasEntitlement`, not `require` — a JSON-RPC failure an
+agent cannot parse is a dead end, while *"this is on the Pro plan, and a person can author the
+same skill at /build"* is something it can relay to whoever asked.
+
+**The tool is listed for everyone**, not hidden from the free tier. A tool that vanishes teaches an
+agent the platform cannot do this at all — the same choice the Plans panel makes by showing
+features it does not have.
+
+And an **unrecognised block type becomes untyped content**, not a rejected call. `block-types.ts`
+keeps `null` a first-class answer so a workbench never refuses to hold a paragraph; refusing a
+whole call over one mislabelled block would be Doc 6 §7's over-structuring arriving through a new
+door, enforced on a machine that cannot ask what went wrong.
+
+#### Attribution, and the handler that stayed a single constant
+
+An MCP principal carries a token and an organisation, never a user — the token *is* the identity.
+`created_by` therefore records whoever created the token, which is a real account (what the
+foreign key wants, as F2 learned the hard way) and the truest available statement of who
+authorised an agent to write here.
+
+> **The first version built a second MCP handler per request** so the write tool could close over
+> the workspace, because the read handler is a module-level constant shared by every caller and
+> must never hold one. It worked and was wasteful — and F1 had already opened an async scope
+> carrying exactly that principal for the usage recorder. The tool reads it from there, the
+> handler stays built once, and there is no mutable global for one workspace's draft to leak
+> through.
+>
+> **And F1's own suite caught F3 breaking F1, in the same session.** `create_skill` was registered
+> with a direct `server.registerTool`, so the one tool most worth accounting for was the only one
+> not counted. `verify:mcp-usage` asserts the tool **count**, not merely that a wrapper exists —
+> a check of the second kind would have stayed green. The wrapper is now `countedRegister`,
+> shared by both registrars, and the number in the check is 7.
+
 ### Billing webhooks, and the half of the plan's own note that was wrong (RC.4, plan step F2)
 
 `src/lib/billing.ts` · `src/server/billing/webhook.ts` · `src/app/api/billing/webhook/` · migration 0047
@@ -5442,6 +5516,7 @@ pnpm verify:distill                      # RW.5 tool output is not the user spea
 pnpm verify:shared                       # RK.4 a convention is synced, never substituted; free
 pnpm verify:mcp-usage                    # RC.3 the agent surface is accounted for; free
 pnpm verify:billing                      # RC.4 a late delivery cannot downgrade a customer; free
+pnpm verify:mcp-create                   # RM.3 an agent creates a draft, never publishes; free
 pnpm verify:improve                      # R5.6 a fork carries its licence; free, no network
 pnpm verify:scope                        # RW.10/RW.11 scope and disclosure; free, no network
 pnpm scope --status                      # coverage first, then the finding; free

@@ -4,7 +4,20 @@ import { sql } from "drizzle-orm";
 
 import { db } from "@/server/db";
 import { rateLimitBuckets } from "@/server/db/schema";
-import { getRateLimits, type ScopeLimits } from "@/server/settings/rate-limits";
+import {
+  getRateLimits,
+  type RateLimitSettings,
+  type ScopeLimits,
+} from "@/server/settings/rate-limits";
+
+/**
+ * The named limiter scopes, derived from the settings rather than spelled out again.
+ *
+ * The union was written out by hand in two signatures, so adding `mcpWrite` compiled everywhere
+ * except the one place that had to know. Keyed off `RateLimitSettings`, a new scope is now a type
+ * error at every call site rather than at none.
+ */
+export type RateLimitScope = keyof RateLimitSettings;
 
 /**
  * The limit on the MCP endpoint (Doc 2 R8.8).
@@ -125,7 +138,7 @@ async function bump(key: string, scope: string, start: Date): Promise<number> {
  * moved somewhere it can.
  */
 export function fallbackDecision(
-  scopeName: "mcpFree" | "mcpPaid" | "publicWrite",
+  scopeName: RateLimitScope,
 ): RateDecision {
   if (scopeName !== "publicWrite") return { allowed: true };
   return {
@@ -142,7 +155,7 @@ export function fallbackDecision(
 
 export async function consume(
   request: Request,
-  scopeName: "mcpFree" | "mcpPaid" | "publicWrite" = "mcpFree",
+  scopeName: RateLimitScope = "mcpFree",
   identity?: string,
 ): Promise<RateDecision> {
   let limits: ScopeLimits;

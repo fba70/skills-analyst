@@ -4,7 +4,7 @@ import { hasEntitlement } from "@/server/dal/entitlements";
 import { consume } from "@/server/mcp/rate-limit";
 import { recordMcpRefusal, withMcpPrincipal } from "@/server/mcp/usage";
 import { resolveToken, touchToken } from "@/server/mcp/tokens";
-import { registerFreeTools } from "@/server/mcp/tools";
+import { registerFreeTools, registerWriteTools } from "@/server/mcp/tools";
 
 /**
  * The MCP endpoint (Doc 2 R8.8, free scope).
@@ -54,6 +54,16 @@ import { registerFreeTools } from "@/server/mcp/tools";
 const handler = createMcpHandler(
   (server) => {
     registerFreeTools(server);
+    /*
+     * The write tool is registered here too, and reads its principal from the request's async
+     * scope rather than from a closure (RM.3, plan step F3).
+     *
+     * The first version built a second handler per request so the tool could close over the
+     * workspace. That works and is wasteful — and the scope the usage recorder already opens
+     * carries exactly the same thing, so the handler stays a single module-level constant and
+     * there is no mutable global for one workspace's draft to leak through.
+     */
+    registerWriteTools(server);
   },
   {
     serverInfo: { name: "skills-foundry", version: "1.0.0" },

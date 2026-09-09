@@ -39,10 +39,18 @@ function check(name: string, ok: boolean, detail = ""): void {
 console.info("\nRecording is wired once, not per tool");
 
 const tools = readFileSync(join(process.cwd(), "src/server/mcp/tools.ts"), "utf8");
+/*
+ * Counted rather than asserted, and F3 is why.
+ *
+ * A check that only asked *does the wrapper exist* would have stayed green when `create_skill`
+ * was added with a direct `server.registerTool` — leaving the one tool most worth accounting for
+ * as the only one not counted. The number is the check.
+ */
+const registered = tools.split("\n  register(").length - 1;
 check(
   "every tool registers through the counting wrapper",
-  tools.split("\n  register(").length - 1 === 6 && !/\n  server\.registerTool\(/.test(tools),
-  `${tools.split("\n  register(").length - 1} tools`,
+  registered === 7 && !/\n  server\.registerTool\(/.test(tools),
+  `${registered} tools, and no direct registration outside the wrapper`,
 );
 check(
   "a tool that throws is counted as an error rather than as a call",

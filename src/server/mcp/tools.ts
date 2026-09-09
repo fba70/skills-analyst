@@ -2,7 +2,9 @@ import "server-only";
 
 import { z } from "zod";
 
-import { recordMcpCall } from "@/server/mcp/usage";
+import { currentMcpPrincipal, recordMcpCall } from "@/server/mcp/usage";
+import type { CreateSkillInput } from "@/server/mcp/create";
+import { BLOCK_TYPES } from "@/lib/block-types";
 import type { McpServer } from "@modelcontextprotocol/server";
 
 import { CAPABILITY_META } from "@/lib/capabilities";
@@ -66,15 +68,20 @@ const POSTURES = [
   "unresolved",
 ] as const;
 
-export function registerFreeTools(server: McpServer) {
-  /*
-   * Every tool is registered through this wrapper rather than directly (RC.3, plan step F1).
-   *
-   * One place, six tools, and no per-tool bookkeeping a seventh could be added without. The
-   * recorder reads the principal from an async scope the route guard opened, never throws, and
-   * counts an error apart from a call — our outage is not the caller's usage.
-   */
-  const register: McpServer["registerTool"] = ((
+/**
+ * Registration that counts (RC.3, plan step F1) — the only way a tool is added.
+ *
+ * Shared by the read and write registrars, and extracted the moment there were two: F3 added
+ * `create_skill` with a direct `server.registerTool` and **the one tool that most needed
+ * accounting was the one not being counted**. `verify:mcp-usage` caught it in the same session,
+ * which is the whole reason that check counts tools rather than merely asserting the wrapper
+ * exists.
+ *
+ * The recorder reads its principal from the async scope the route guard opened, never throws, and
+ * counts an error apart from a call — our outage is not the caller's usage.
+ */
+function countedRegister(server: McpServer): McpServer["registerTool"] {
+  return ((
     name: string,
     config: unknown,
     callback: (...args: unknown[]) => Promise<unknown>,
@@ -88,7 +95,11 @@ export function registerFreeTools(server: McpServer) {
         void recordMcpCall(name, "error");
         throw error;
       }
-    }) as never)) as unknown as McpServer["registerTool"];
+  }) as never)) as unknown as McpServer["registerTool"];
+}
+
+export function registerFreeTools(server: McpServer) {
+  const register = countedRegister(server);
 
   register(
     "search_skills",
@@ -499,4 +510,130 @@ function originOf(ctx: unknown): string {
     }
   }
   return process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+}
+
+
+/**
+ * The one write tool (Doc 2 RM.3, plan step F3) — Pro, and on its own rate-limit scope.
+ *
+ * Registered for every caller rather than only for entitled ones, and that is deliberate: a tool
+ * that vanishes from the list for a free workspace teaches an agent that the platform cannot do
+ * this at all. It is listed, it is described as Pro, and it refuses with a sentence naming the
+ * plan — the same choice the Plans panel makes by showing features it does not have rather than
+ * hiding them.
+ *
+ * Every refusal here is a *tool result*, not a thrown error. An agent reads text; a JSON-RPC
+ * failure it cannot parse is a dead end, while "this needs the Pro plan" is something it can tell
+ * the person who asked.
+ */
+export function registerWriteTools(server: McpServer) {
+  /* The same counting wrapper the read tools use. A write is the call most worth recording. */
+  const register = countedRegister(server);
+
+  register(
+    "create_skill",
+    {
+      title: "Create a skill draft",
+      description:
+        "Create a validated skill draft in your workspace from inside this session. Returns a " +
+        "URL a person opens to review and publish it — this tool never publishes. Read the " +
+        "target shape first with get_archetype and pass typed `blocks`; `body` is accepted for " +
+        "prose. Pro plan.",
+      inputSchema: z.object({
+        name: z.string().min(3).max(120),
+        purpose: z.string().min(1).max(500).describe("One line: what the skill is for."),
+        function_category: z
+          .enum(FUNCTION_IDS as [string, ...string[]])
+          .describe("From list_archetypes. Structure is mined on this axis."),
+        domain_category: z.enum(DOMAIN_IDS as [string, ...string[]]).optional(),
+        blocks: z
+          .array(
+            z.object({
+              heading: z.string().max(120).optional().describe("Starts a section before this block."),
+              type: z
+                .enum(BLOCK_TYPES as unknown as [string, ...string[]])
+                .optional()
+                .describe("Omit if none fits — untyped prose is valid content, not an error."),
+              text: z.string().max(4_000),
+            }),
+          )
+          .max(40)
+          .optional(),
+        body: z.string().max(60_000).optional().describe("Markdown. Typed into blocks on arrival."),
+      }).shape,
+    },
+    async (args) => {
+      /*
+       * The principal comes from the request's async scope, not from a closure.
+       *
+       * The handler is one module-level constant shared by every caller, so a tool that writes
+       * into one workspace cannot close over which — that is the cross-request hazard
+       * `send-failures.ts` spends a file warning about. The scope the usage recorder already
+       * opens carries it, and reading it here means the handler stays built once.
+       */
+      const principal = currentMcpPrincipal();
+      if (!principal) {
+        return text("This tool needs an authenticated token.");
+      }
+
+      const { hasEntitlement } = await import("@/server/dal/entitlements");
+      if (!(await hasEntitlement(principal.organizationId, "mcp-create-skill"))) {
+        return text(
+          "Creating skills from an agent session is on the Pro plan. Everything readable here " +
+            "stays free, and a person can author the same skill at /build.",
+        );
+      }
+
+      /*
+       * The write scope, charged separately from the read one.
+       *
+       * A read limit is loose because a false refusal teaches distrust; this bounds an agent in a
+       * loop creating drafts a human then has to read, so it is three a minute and ten an hour.
+       */
+      const { consume } = await import("@/server/mcp/rate-limit");
+      const decision = await consume(
+        new Request("https://internal/mcp-write"),
+        "mcpWrite",
+        `token:${principal.tokenId}`,
+      );
+      if (!decision.allowed) return text(decision.message);
+
+      const { createSkillFromAgent } = await import("@/server/mcp/create");
+      const result = await createSkillFromAgent({
+        tokenId: principal.tokenId,
+        organizationId: principal.organizationId,
+        name: args.name as string,
+        purpose: args.purpose as string,
+        category: args.function_category as string,
+        domain: (args.domain_category as string | undefined) ?? null,
+        blocks: args.blocks as CreateSkillInput["blocks"],
+        body: (args.body as string | undefined) ?? null,
+      });
+
+      if (!result.ok) return text(result.error);
+
+      /*
+       * The validator's findings travel back, and a blocked draft says so plainly.
+       *
+       * An agent that wrote a credential into a skill can fix it in the next turn. The same
+       * information reaching a human on Thursday is too late to be useful to the party that
+       * could have acted on it for free.
+       */
+      const lines = [
+        `Draft created: ${result.url}`,
+        `${result.blocks} block(s) · quality ${result.quality ?? "—"}/100`,
+        result.blocked
+          ? "BLOCKED by validation — fix the findings below and create it again, or a person will have to."
+          : "Nothing blocking. A person reviews and publishes it; this tool does not.",
+      ];
+      for (const finding of result.findings) {
+        lines.push(`  ${finding.severity} · ${finding.analyzer}: ${finding.message}`);
+      }
+      return text(lines.join("\n"));
+    },
+  );
+}
+
+function text(message: string) {
+  return { content: [{ type: "text" as const, text: message }] };
 }
