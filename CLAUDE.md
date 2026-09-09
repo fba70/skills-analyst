@@ -2169,6 +2169,82 @@ would be enforcing an untested mean.
 > draft.
 
 
+### Billing webhooks, and the half of the plan's own note that was wrong (RC.4, plan step F2)
+
+`src/lib/billing.ts` · `src/server/billing/webhook.ts` · `src/app/api/billing/webhook/` · migration 0047
+`pnpm verify:billing` (13 pure checks + a stored probe, free)
+
+The plan said this was small: *"`setPlan` is already the idempotent write a webhook would call,
+and its upsert already tolerates late and duplicate delivery. A route, a signature check and a
+provider."*
+
+**True of a duplicate. False of a late one, and that is the whole step.**
+
+Providers retry until they get a 2xx, and retries arrive out of order. A
+`customer.subscription.deleted` delayed ninety seconds, landing after the `updated` that upgraded
+somebody, **downgrades a paying customer** — and an upsert cannot see it, because in isolation
+both writes are equally valid. So every delivery carries the provider's own timestamp, and one
+older than the last applied change for that workspace is recorded and refused. `verify:billing`
+constructs exactly that sequence and asserts the customer is still on their plan afterwards.
+
+#### No new dependency, on a security-critical path
+
+Verifying a webhook signature is an HMAC over `timestamp.body` and a constant-time compare —
+twenty lines of `node:crypto`. Taking a provider SDK to do it means taking its release cadence on
+the code that decides whether a stranger may change what customers pay, and hard rule 2 exists so
+that trade is made deliberately rather than by reflex. It also keeps the verifier isolated: a
+second provider is a second `verifySignature`, not a rewrite.
+
+Four refusals, each a real attack rather than a formality — wrong secret, altered body, replay
+outside the window, and **no secret configured at all**, which refuses for the reason
+`CRON_SECRET` does: a deployment that forgot to set it is one where an unauthenticated endpoint
+changes what people are paying for. The suite signs a genuinely valid delivery first, so the
+refusals are proven to be refusals of something the verifier would otherwise accept.
+
+#### An unknown plan must under-act, which is the mirror of an unknown model
+
+`UNKNOWN_MODEL_RATE` is the most expensive rate known, because a budget that silently ignores a
+model it cannot price is not a budget. A subscription whose price carries no `metadata.plan` goes
+the **other** way: it yields null and the delivery is `ignored`, never `free`. Defaulting to free
+would cancel a customer's plan because somebody forgot a field in a dashboard.
+
+The plan is read from the price's own metadata rather than a price-id map in our config, so the
+commercial truth lives in one place — beside the money — instead of two, the second of which goes
+stale the first time somebody adds a currency or an annual tier.
+
+#### A refusal is still a 200, and every one of them is a row
+
+Providers retry on any non-2xx. Answering 4xx to a delivery that is *correctly* doing nothing —
+unknown customer, no rule for that event type, out of order — turns one ignorable event into an
+infinite retry loop and eventually a disabled endpoint. **The status code is for the retry policy,
+not for us**; the outcome is in the body and in a `billing_events` row. 400 is reserved for a
+delivery that did not verify, the only case where retrying is genuinely pointless.
+
+Every outcome is recorded, including the refusals, because an endpoint that only writes when it
+succeeds is one where *"we never received it"* and *"we received it and did nothing"* look
+identical — the heartbeat's argument, applied to money. The one exception is an **unverified**
+delivery: the endpoint is public, so a row per attempt would let a stranger fill the table, and a
+row we cannot attribute to a provider is not evidence of anything.
+
+#### What is deliberately not built
+
+**A checkout flow, and a provider account.** This is the receiving half. Choosing and provisioning
+a payment provider is a business decision with keys and a dashboard behind it, and until a
+checkout exists nothing tells us which workspace a customer id belongs to — so an unrecognised
+customer is `unmapped` and an admin links it. That gap is named on the panel rather than left to
+be discovered when a payment silently changes nothing.
+
+> **The project's own hook caught this file being written, and it was right.** `no-db-in-api.sh`
+> refused the route because its header comment *named* the forbidden modules while promising it
+> did not import them. That is the fourth time today a scanner matched prose about a rule instead
+> of a breach of it — `verify:relations`, `verify:improve`, `verify:mcp-usage`, and now the hook.
+> The comment is reworded; the guard was not worked around.
+
+`setPlan` gained an optional `actorType` so the audit row can say `system` / `billing.webhook`.
+A webhook has no user behind it, and recording one would make the log confidently wrong about who
+changed a customer's plan — the same reason the public flag intake writes `system` rather than
+inventing an account.
+
 ### MCP request accounting: a rollup, because a per-request log would answer a question we removed on purpose (RC.3, plan step F1)
 
 `src/server/mcp/usage.ts` · migration 0046 · Settings → **Spend** · `pnpm verify:mcp-usage` (free)
@@ -5365,6 +5441,7 @@ pnpm relations --conflicts 20            # mine guardrail contradictions — COS
 pnpm verify:distill                      # RW.5 tool output is not the user speaking; free
 pnpm verify:shared                       # RK.4 a convention is synced, never substituted; free
 pnpm verify:mcp-usage                    # RC.3 the agent surface is accounted for; free
+pnpm verify:billing                      # RC.4 a late delivery cannot downgrade a customer; free
 pnpm verify:improve                      # R5.6 a fork carries its licence; free, no network
 pnpm verify:scope                        # RW.10/RW.11 scope and disclosure; free, no network
 pnpm scope --status                      # coverage first, then the finding; free

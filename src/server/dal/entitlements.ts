@@ -169,6 +169,14 @@ export type SetPlanInput = {
   note?: string | null;
   validUntil?: Date | null;
   actorId: string;
+  /**
+   * Who the actor is, for the audit row. Defaults to `user`, which every caller was until RC.4.
+   *
+   * A billing webhook has no user behind it, and recording one would make the log confidently
+   * wrong about who changed a customer's plan — the same reason the flag intake writes `system`
+   * with `public.flag` rather than inventing an account.
+   */
+  actorType?: "user" | "system" | "analyzer" | "api_key";
 };
 
 /**
@@ -181,6 +189,22 @@ export type SetPlanInput = {
  * RC.4 will drive this from a billing webhook and needs nothing new: the webhook resolves an
  * organisation, calls this, and the idempotency it requires falls out of the upsert.
  */
+/**
+ * Who to record in `granted_by`, which is a foreign key to a real account.
+ *
+ * A webhook, a CLI or an analyzer has no user behind it, and writing its name here is refused by
+ * the key — **which is the key doing its job.** `verify:models` already paid for this exact
+ * lesson: its actor was the string `"verify-script"` and `platform_settings.updated_by` correctly
+ * rejected it, because a change has to be attributable to somebody who exists.
+ *
+ * So the column holds a user or nothing, and the *audit row* carries the real actor — `system` /
+ * `billing.webhook` — where there is no key to satisfy and every kind of actor can be named
+ * honestly. Two fields, two jobs: one is a reference, the other is a record.
+ */
+function grantedBy(input: SetPlanInput): string | null {
+  return (input.actorType ?? "user") === "user" ? input.actorId : null;
+}
+
 export async function setPlan(input: SetPlanInput): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!isPlan(input.plan)) return { ok: false, error: `Not a plan: ${String(input.plan)}` };
   if (input.validUntil && input.validUntil.getTime() <= Date.now()) {
@@ -204,7 +228,7 @@ export async function setPlan(input: SetPlanInput): Promise<{ ok: true } | { ok:
         organizationId: input.organizationId,
         plan: input.plan,
         note: input.note ?? null,
-        grantedBy: input.actorId,
+        grantedBy: grantedBy(input),
         validUntil: input.validUntil ?? null,
       })
       .onConflictDoUpdate({
@@ -212,7 +236,7 @@ export async function setPlan(input: SetPlanInput): Promise<{ ok: true } | { ok:
         set: {
           plan: input.plan,
           note: input.note ?? null,
-          grantedBy: input.actorId,
+          grantedBy: grantedBy(input),
           validUntil: input.validUntil ?? null,
           updatedAt: new Date(),
         },
@@ -220,7 +244,7 @@ export async function setPlan(input: SetPlanInput): Promise<{ ok: true } | { ok:
 
     await tx.insert(events).values({
       orgId: input.organizationId,
-      actorType: "user",
+      actorType: input.actorType ?? "user",
       actorId: input.actorId,
       kind: "entitlement.changed",
       subjectType: "organization",

@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   index,
+  uniqueIndex,
   integer,
   jsonb,
   pgPolicy,
@@ -8,6 +9,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uuid,
 } from "drizzle-orm/pg-core";
 
 import { organization, user } from "./auth";
@@ -187,10 +189,33 @@ export const orgEntitlements = pgTable(
      * expire, which is the ordinary paid case.
      */
     validUntil: timestamp("valid_until", { withTimezone: true }),
+
+    /**
+     * The payment provider's customer id (RC.4, plan step F2).
+     *
+     * A5's own note said a billing customer id belongs here rather than on Better Auth's
+     * `organization` table, and this is it. Nullable and unset for every workspace an admin
+     * granted a plan to by hand, which is all of them today — a webhook for an unrecognised
+     * customer is recorded as `unmapped` rather than guessed at.
+     */
+    billingCustomerId: text("billing_customer_id"),
+    /** Which provider that id belongs to. Two providers would give one id two meanings. */
+    billingProvider: text("billing_provider"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  () => [
+  (t) => [
+    /**
+     * One workspace per billing customer, per provider.
+     *
+     * Without it a mis-typed link could point two workspaces at one customer, and a webhook would
+     * then upgrade whichever the query happened to return first — a permissions-shaped bug wearing
+     * a data-entry mistake's clothes. Partial, because almost every row is null today.
+     */
+    uniqueIndex("org_entitlements_billing_customer_uq")
+      .on(t.billingProvider, t.billingCustomerId)
+      .where(sql`${t.billingCustomerId} is not null`),
+
     /**
      * The schema's **third split policy**, and it is safe for the same reason as the other two.
      *
@@ -230,6 +255,82 @@ export const orgEntitlements = pgTable(
       to: "app_runtime",
       using: sql`organization_id = current_setting('app.org_id', true)`,
       withCheck: sql`organization_id = current_setting('app.org_id', true)`,
+    }),
+  ],
+);
+
+/**
+ * Every webhook delivery, including the ones that changed nothing (Doc 2 RC.4, plan step F2).
+ *
+ * ## The idempotency key is a row, not a hope
+ *
+ * `(provider, event_id)` is unique, so a retry is an insert that conflicts rather than a second
+ * plan change. Providers retry until they get a 2xx, so duplicates are the **normal** case — a
+ * design that treats them as a fault would treat most of its traffic as a fault.
+ *
+ * ## Refusals are rows too, and that is the point
+ *
+ * `stale`, `unmapped`, `ignored` and `invalid` are all recorded. A webhook endpoint that only
+ * writes when it succeeds is one where *"we never got the event"* and *"we got it and did
+ * nothing"* look identical from the outside — the same distinction the heartbeat exists to draw
+ * between a run that is slow and a run that is stuck.
+ *
+ * ## No column holds the payload
+ *
+ * A subscription body carries names, email addresses and card metadata. What is kept is the
+ * event id, its type, its timestamp, the customer id and what we decided — enough to answer
+ * *"why is this workspace on this plan"* and not enough to be a copy of somebody's billing
+ * record. Same safe-because-of-the-column-list argument as `mcp_usage`.
+ */
+export const billingEvents = pgTable(
+  "billing_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    provider: text("provider").notNull(),
+    /** The provider's own event id. Half the idempotency key. */
+    eventId: text("event_id").notNull(),
+    eventType: text("event_type").notNull(),
+
+    /**
+     * The provider's timestamp, not ours.
+     *
+     * Ordering has to be decided by when the event *happened*, because the whole failure this
+     * guards against is deliveries arriving in a different order from the one they occurred in.
+     */
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+
+    customerId: text("customer_id"),
+    /** Null when no workspace is linked to that customer — the `unmapped` outcome. */
+    organizationId: text("organization_id").references(() => organization.id, {
+      onDelete: "set null",
+    }),
+
+    /** One of `WEBHOOK_OUTCOMES`. */
+    outcome: text("outcome").notNull(),
+    /** The plan it set, when it set one. */
+    appliedPlan: text("applied_plan"),
+
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /** The idempotency key. A retry conflicts here rather than changing a plan twice. */
+    uniqueIndex("billing_events_uq").on(t.provider, t.eventId),
+    /** The ordering check: the newest applied change for one workspace. */
+    index("billing_events_org_idx").on(t.organizationId, t.occurredAt),
+
+    /**
+     * Open to `app_runtime`, because this is an operator record with no tenant reader.
+     *
+     * Safe because of the column list — an event id, a type, two timestamps, a customer id and a
+     * decision. A workspace never reads it; the Plans panel does, across all of them. Add a
+     * column carrying the payload and this policy becomes wrong.
+     */
+    pgPolicy("all_access", {
+      for: "all",
+      to: "app_runtime",
+      using: sql`true`,
+      withCheck: sql`true`,
     }),
   ],
 );

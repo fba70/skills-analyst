@@ -57,6 +57,7 @@
     "verify:mcp-usage": "tsx --conditions=react-server scripts/verify-mcp-usage.mts",
     "verify:models": "tsx --conditions=react-server scripts/verify-models.mts",
     "verify:archetypes": "tsx --conditions=react-server scripts/verify-archetypes.mts",
+    "verify:billing": "tsx --conditions=react-server scripts/verify-billing.mts",
     "verify:blocks": "tsx --conditions=react-server scripts/verify-blocks.mts",
     "verify:draft-blocks": "tsx --conditions=react-server scripts/verify-draft-blocks.mts",
     "verify:stream": "tsx --conditions=react-server scripts/verify-stream.mts",
