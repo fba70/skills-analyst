@@ -388,12 +388,38 @@ async function candidateRows(
  * Returns null rather than throwing on a missing object. A fragment that cannot be read is
  * an availability problem and must not take out the panel around it; the caller renders it
  * as `unavailable`, which is the honest label.
+ *
+ * **Exported for the scope analyser (RW.10, plan step C5), and that is the point.** It also
+ * needs a block's text from its offsets, and a second copy of this function would be a second
+ * source of truth for where a body starts — the exact bug the paragraph above records. One
+ * definition, two callers.
  */
-async function readFragment(
+export async function readFragment(
   contentHash: string,
   markerPath: string | null,
   startChar: number,
   endChar: number,
+): Promise<string | null> {
+  const body = await readMarkerBody(contentHash, markerPath);
+  if (body === null) return null;
+  const text = body.slice(startChar, endChar).trim();
+  return text.length > 0 ? text : null;
+}
+
+/**
+ * The marker file's body, with frontmatter split off — the base every offset indexes into.
+ *
+ * Separated from `readFragment` because the scope analyser (RW.10, plan step C5) needs **every**
+ * block of one document, and calling the fragment reader per block would fetch the same object
+ * from an EU bucket thirty-six times. That is not a hypothetical inefficiency: it is the exact
+ * shape of the bug `concurrency.ts` exists to record, where the derived stages pulled each
+ * bundle back one at a time and a pass took fifty minutes instead of ten.
+ *
+ * One fetch, one split, N slices — and still exactly one definition of where a body starts.
+ */
+export async function readMarkerBody(
+  contentHash: string,
+  markerPath: string | null,
 ): Promise<string | null> {
   if (!markerPath) return null;
   try {
@@ -414,9 +440,7 @@ async function readFragment(
      * a regex with its own newline handling, and it never throws, returning any YAML error
      * as a field instead. There is exactly one definition of where a body starts.
      */
-    const { body } = splitFrontmatter(buffer.toString("utf8"));
-    const text = body.slice(startChar, endChar).trim();
-    return text.length > 0 ? text : null;
+    return splitFrontmatter(buffer.toString("utf8")).body;
   } catch {
     return null;
   }

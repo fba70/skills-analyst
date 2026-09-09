@@ -20,6 +20,7 @@ export * from "./freshness";
 export * from "./demand";
 export * from "./relations";
 export * from "./maintainers";
+export * from "./scope";
 export * from "./telemetry";
 export * from "./spend";
 export * from "./settings";

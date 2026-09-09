@@ -2169,6 +2169,218 @@ would be enforcing an untested mean.
 > draft.
 
 
+### The scope analyser, and the confound that would have told half the corpus to cut itself up (RW.10 / RW.11, plan step C5)
+
+`src/lib/scope.ts` · `src/server/analytics/scope.ts` · migration 0042
+`pnpm scope --status | --run N | --skill <slug>` · `pnpm verify:scope` (35 checks, free)
+
+Two questions about a document's shape that no existing surface asks. The analyzers ask whether a
+skill is well-formed, the archetype whether its structure matches what the corpus rewards, A3 what
+it costs to load. None of them asks *is this one skill or three*, or *does this detail belong in
+the body*.
+
+**RW.10** clusters a skill's blocks and looks for a seam. **RW.11** proposes moving long,
+peripheral blocks into `references/` behind a pointer — progressive disclosure, which the miner
+already measures at +12 to +26 lift.
+
+#### Cluster any document's blocks and you get two clusters. The question is what they are clusters *of*
+
+Guardrails read like other guardrails and procedures read like other procedures, so the strongest
+seam in a bag of block embeddings is frequently **block type** rather than subject. A split along
+that seam is not *this is two skills*, it is *this skill has rules and steps*, which is true of
+nearly every good skill in the corpus — and shipping it as a decomposition proposal would have
+told a large part of the registry to cut itself in half.
+
+`typeAlignment` measures each cluster's dominant-type share. Above `MAX_TYPE_PURITY` the verdict is
+**`type-aligned`** and no split is proposed. `verify:scope` builds that exact document — same
+geometry as a real two-subject one, but the groups *are* the types — **asserts the naive reading
+still calls it a confident split**, and only then asserts the analyser refuses it. Reproduce the
+failure, then assert the fix.
+
+The mirror image needed the same care: 59% of corpus blocks carry no type, and counting
+*unclassified* as a type would have made purity high everywhere and refused every real finding.
+`typeAlignment` returns null when either half is mostly untyped, and that document is judged on
+separation alone.
+
+#### The verdict has to be reproducible, so the clustering cannot be random
+
+Two-means from a random seed gives a different answer on a re-run of the same document — so *is
+this two skills* would depend on when you asked, and a stored verdict would be unreproducible for
+R7.2. The seeds are the **two most dissimilar blocks**, which is deterministic and, on a document
+that genuinely has two subjects, almost always one from each. The suite runs the same input twice
+and requires an identical report.
+
+#### `MIN_SPLIT_SEPARATION` is a guess, and the code says so
+
+0.22, derived from the only adjacent measurement there is — B3 put genuinely different skill
+summaries 0.3–0.5 apart in the A6 index, and block text should be narrower because every passage
+in one document shares its vocabulary. Conservative on purpose: a false negative here is invisible
+and a false positive asks an author to do real work for nothing.
+
+**Calibrating it is the reason the plan says to run this over corpus skills before it reaches a
+draft.** So there is a CLI and a stored verdict and **no builder panel yet**, which is a decision
+rather than an omission. Until the candidates have been read and the number moved,
+`split-candidate` is a prompt to read the document rather than a finding about it.
+
+#### The maths is a leaf module, and that is what makes it checkable
+
+Every function is pure — vectors in, numbers out, no imports. So the suite constructs a document
+that is obviously two subjects, one that is obviously one, and one whose split is an artefact, and
+asserts the metric separates them **with no corpus, no API key and no fixture that might have
+stopped reproducing its case**. 27 of the 35 checks need neither database nor network — the rest
+execute the two raw queries and read the stored rows. Same reason `quality.ts` and `tokens.ts` are
+leaves.
+
+#### Disclosure refuses to hollow out a document
+
+Three conditions, and dropping any one breaks it:
+
+- **the body is already over the validator's own `DISCLOSURE_HINT_BYTES`.** Imported, never a
+  second opinion about "too big" — a restructurer with its own threshold eventually tells an
+  author their skill is fine while `structural-lint` flags it as an oversized monolith. Below the
+  hint nothing is proposed at all, because a linter that fires on everything is one nobody leaves
+  switched on.
+- **the block is long enough to be worth a pointer.** A `references/` directory of one-paragraph
+  files is worse than a slightly longer document.
+- **the block is peripheral**, by cosine to the document's own centre. A long block at the heart
+  of the subject *is* the skill, and moving it out would hollow the document while reporting a
+  token saving — D4's "the saving-only rule is a document shredder", one level down.
+
+And `NEVER_OFFLOAD` is absolute: a trigger, guardrail, stance or tool contract stays in the body
+whatever its length or position. **An agent that has to follow a pointer to discover a prohibition
+has already had the chance to break it.**
+
+#### A second embedder, and no second vector table
+
+A6's vectors are one per skill over name, summary and labels — the claim, not the document.
+`embeddings.ts` predicted this caller in as many words: body-level similarity needs *"a second
+embedder over blocks, a different unit with its own composition, not a wider window on this one"*.
+`BLOCK_EMBEDDER_VERSION` is that composition, and it reuses `embedBatch` — same model, same price
+entry, same budget check, same ledger row.
+
+**The vectors are computed, used and dropped.** Storing 1.6 million block vectors to keep one
+verdict per document is about ten gigabytes for a number that fits in a `real`, and it would put a
+second, incomparable population of embeddings beside A6's. Re-analysing a skill costs a fraction of
+a cent, which is the right trade while the metric is still being tuned — and tuning it is the whole
+point. What is stored is the verdict, keyed on `(skill_version_id, analyser_version)` so a
+threshold change cannot silently re-label a corpus that was never re-measured.
+
+`skill_scope` holds **no body text**: a cluster is block ids, so a proposed split resolves live
+through the same licence gate the block library uses and a withdrawn skill stops being quotable at
+once. `verify:scope` asserts that against `information_schema`, the line `verify:blocks` already
+holds for `skill_blocks`.
+
+> **One bug fixed before it could be measured, and it is an old one wearing new clothes.** The
+> first version called `readFragment` per block — which fetches the bundle object each time, so
+> analysing one 36-block skill would have made **36 round trips to an EU bucket for the same
+> file**. That is exactly what `concurrency.ts` exists to record about the derived stages taking
+> fifty minutes instead of ten. `readMarkerBody` now does one fetch and one split, and
+> `readFragment` is a slice over it — so there is still exactly one definition of where a body
+> starts, which is the other bug that file already paid for.
+
+**Cost, measured on the first run and not before it.** 200 skills examined cost **$0.0043** —
+1,778 tokens per *judged* skill, 1,085 per skill *examined* once the 38% that are too short to
+judge are counted in. The whole public corpus is therefore about **$1.04**, not the $0.77 the
+pre-run estimate gave: the estimate assumed 800 tokens a skill and blocks are longer than that.
+Same correction the embeddings status line needed when it assumed 60 tokens against a real 84 —
+the projection is worth stating and worth replacing with a division the moment there is something
+to divide. Never scheduled: it spends, and a job that spends is a job nobody can leave switched on.
+
+#### The first corpus run says the metric is not usable yet, which is what running it was for
+
+200 skills, 122 judged, **$0.0043**:
+
+```
+cohesive          59   48%
+split-candidate   62   51%
+type-aligned       1    1%
+too few analysable blocks   76      unreadable  2
+```
+
+**51% split candidates is not a finding about the corpus.** A seam that is everywhere is not a
+seam, and the honest reading is that 0.22 was a guess with nothing behind it — every observed
+separation landed between 0.22 and 0.48, so the threshold sat inside the mass of the distribution
+rather than beside it. Exactly the situation the constant's own comment predicted, arriving one
+command later.
+
+Two more things the run exposed that no fixture could have:
+
+- **The type-confound guard is inert on most real documents.** 14 of the first 20 candidates
+  report no purity at all, because `typeAlignment` returns null when a cluster is mostly
+  unclassified — and 58% of corpus blocks carry no type. One `type-aligned` verdict in 63 splits.
+  The guard is right and it fires on roughly the third of documents whose blocks are mostly
+  typed; on the rest, separation is judged alone. That is a stated limitation now rather than an
+  assumption.
+- **38% of a random sample has too few analysable blocks to judge.** Reported apart from the
+  verdicts and never added to them, because *"we could not judge this"* and *"this is one
+  coherent skill"* are opposite facts.
+
+`pnpm scope --calibrate N` is the control that was missing. It glues two **unrelated** skills'
+blocks into one synthetic document and measures that seam — the strongest two-skill signal there
+is, and therefore the upper bound a real two-subject document should sit below. Each skill is
+embedded once and used in both populations, so the control costs no more than the sample. Where
+the two distributions stop overlapping is where the threshold belongs; if they never stop
+overlapping, RW.10 cannot be built on this measurement, and that is worth knowing before it
+reaches an author rather than after.
+
+`pnpm scope --status` now **refuses to present a split share above 25% without saying so**, naming
+the calibration command. Same refusal as `archetypes --blocks` printing coverage and the unmet
+threshold instead of eleven rows of zeros: the command whose job is to decide whether a feature
+gets built must not hand back a confident wrong answer.
+
+> **Two bugs on the way to that run, both mine, and the second is the one worth keeping.** The
+> selector joined `skills` on `v.current_version_id` — a column that lives on `skills`, not on
+> `skill_versions`. It typechecks, because a `sql` template is a string, and it died on the first
+> live execution.
+>
+> Nothing could have caught it. The suite's stored-rows half skipped while the table did not
+> exist, and even afterwards it asserted on the schema and on the data and **never executed the
+> selector**. So the selector is now an exported `pendingScopeVersions` that `verify:scope` calls,
+> along with `scopeSummary` — both free, one returning ids and the other counts, so there was
+> never a reason to leave them unrun. A check that cannot observe the failure is not evidence.
+>
+> The smaller one: the fix's own comment put a column name in backticks *inside* the `sql`
+> template, which terminates it. CLAUDE.md already records that trap from the taxonomy queries.
+
+#### And then the control answered, so the threshold is measured rather than guessed
+
+`pnpm scope --calibrate 60`, **$0.0014**:
+
+| population | p10 | p50 | p90 | max |
+|---|---|---|---|---|
+| one real corpus document | 0.186 | 0.346 | 0.456 | 0.483 |
+| two unrelated skills, glued together | 0.332 | **0.474** | 0.675 | 0.722 |
+
+**The two populations separate.** A real document's p90 sits *below* the glued median, and only
+**4%** of real documents reach it. So `MIN_SPLIT_SEPARATION` is now the glued median — 0.474, up
+from a guessed 0.22 — and a document above it is at least as separated as half of all documents
+that genuinely are two skills. `SCOPE_ANALYSER_VERSION` goes to **1.1.0**, which makes the 122 rows
+written at 1.0.0 stale by construction and hands them straight back to the selector. Nothing to
+clean: that is the property having the version in the unique key buys.
+
+**The recall cost is real, is chosen, and is stated on the surface.** At 0.474 this misses roughly
+half of true two-subject documents — everything below the glued median. The two errors are not
+symmetric: a missed split is invisible, and a false one asks an author to cut up a document that
+was fine. So the verdict blurb says outright that a `cohesive` result is not a guarantee of one
+subject, because the threshold is set to miss rather than to accuse.
+
+Two honest limits on the number:
+
+- **Thin evidence.** n=28 single documents and n=17 pairs, because 38% of a random sample has too
+  few analysable blocks and lopsided splits report no separation at all. Worth re-running larger
+  before anything leans on it harder than a CLI does.
+- **The glued pair is an upper bound, not a sample of real two-skill documents.** Two strangers'
+  documents share no author, no voice and no vocabulary; a real two-subject skill was written by
+  one person about two jobs that felt related enough to combine, so its seam is necessarily
+  softer. Reading 0.474 as "half of all real two-subject skills" is therefore optimistic, and the
+  true recall is lower than that.
+
+**And the confound guard covers one document in seven.** 86% of the calibration sample had at
+least one cluster mostly unclassified, so `typeAlignment` correctly returned null and separation
+was judged alone. The guard is right where it applies. It is not a general defence, and saying so
+is better than carrying an assumption that the confound is handled everywhere — a better block
+detector would widen it, which is one more reason `anti-example`'s open question matters.
+
 ### The first trust signal that is a person, and the first authority that is not an admin (RK.6, plan step E5)
 
 `src/lib/maintainers.ts` · `src/server/curation/maintainers.ts` · migration 0041
@@ -4761,6 +4973,11 @@ pnpm verify:relations                    # RK.3 the graph, and what it refuses t
 pnpm verify:relations --live             # 3 controls proving the detector fires — ~$0.002
 pnpm relations --status                  # stored edges; free
 pnpm relations --conflicts 20            # mine guardrail contradictions — COSTS MONEY
+pnpm verify:scope                        # RW.10/RW.11 scope and disclosure; free, no network
+pnpm scope --status                      # coverage first, then the finding; free
+pnpm scope --run 200                     # analyse a slice — COSTS MONEY (~a cent)
+pnpm scope --skill <slug>                # one document, printed — COSTS A FRACTION OF A CENT
+pnpm scope --calibrate 60                # give separation two reference points — ~$0.002
 pnpm verify:maintainers                  # RK.6 endorsement counts only while standing does; free
 pnpm maintainers --status                # who maintains what, and which categories have nobody
 pnpm maintainers --grant <email> function review --by <you@example.com>
