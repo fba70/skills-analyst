@@ -13,7 +13,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 import { organization, user } from "./auth";
-import { skills } from "./corpus";
+import { skills, skillVersions } from "./corpus";
 import { draftStatus, skillDialect } from "./enums";
 
 /**
@@ -119,6 +119,42 @@ export const skillDrafts = pgTable(
     generatedAt: timestamp("generated_at", { withTimezone: true }),
     /** Set when the model refused (R5.5) or the call failed. Shown to the author. */
     failureReason: text("failure_reason"),
+
+    /* --------------------------------------------- imported (R5.6, plan step C6) */
+
+    /**
+     * Where this draft's starting document came from: `owned`, `forked` or `uploaded`.
+     *
+     * Null for a draft written here from a scaffold, which is every draft before C6. Absence is
+     * the honest default rather than a fourth vocabulary value meaning "not imported" — a column
+     * that is null when nothing happened cannot be misread as a claim.
+     */
+    importSource: text("import_source"),
+
+    /**
+     * The upstream version, for **live** resolution only.
+     *
+     * Its current name, and whether it has since been withdrawn, are things a reader should see
+     * as they are now — the archetype-exemplar rule. `set null` on delete, because losing the
+     * pointer must not delete the draft, and because the obligation does not live here.
+     */
+    importedFromVersionId: uuid("imported_from_version_id").references(() => skillVersions.id, {
+      onDelete: "set null",
+    }),
+
+    /**
+     * The licence obligation, **frozen** at import. An `Attribution` from `src/lib/improve.ts`.
+     *
+     * Duplicated out of the join columns on purpose, exactly as `takedowns` duplicates
+     * `(source_url, skill_path)`: the record has to work when the rows it was recorded against
+     * are gone. An attribution that vanishes because an upstream row was deleted is the failure
+     * mode with legal consequences, and it is the one a live join would produce.
+     *
+     * Read by `publishDraft`, which inherits the posture and licence from it rather than writing
+     * `authored` with a null licence — which is what the pre-C6 path would have done to a fork,
+     * and would have been a lie.
+     */
+    importAttribution: jsonb("import_attribution"),
 
     /**
      * The skill this draft became (R6.1).
@@ -367,6 +403,73 @@ export const draftRevisions = pgTable(
     pgPolicy("org_append", {
       for: "insert",
       to: "app_runtime",
+      withCheck: sql`org_id = current_setting('app.org_id', true)`,
+    }),
+  ],
+);
+
+/**
+ * The files a draft holds beside its marker (R5.6, plan step C6).
+ *
+ * ## Why a draft needed to learn about files at all
+ *
+ * A draft was one document, and that was right while every draft started from a scaffold. C6
+ * starts from a skill that already exists, and a real skill is a **bundle** — `references/`,
+ * `scripts/`, sometimes more. Importing one and keeping only the marker would silently discard
+ * the half the archetype rewards most: the miner measures *links to its own bundled files* at
+ * +23 and *offloads detail into `references/`* at +12 to +26.
+ *
+ * It also unblocks the half of C5 that could not be built. RW.11 computes which blocks should
+ * move into `references/` and had nowhere to write them; this is the somewhere.
+ *
+ * ## Text in a column, not bytes in a bucket
+ *
+ * Object storage is where *published* bundles live, content-addressed at the hash a verdict
+ * covers. A draft is none of that: it is mutable, private, measured in kilobytes, and deleted
+ * when its author deletes it. Putting it in R2 would buy an orphaned-object lifecycle and a
+ * second place tenant data lives, in exchange for nothing — so it is a `text` column under the
+ * same org-scoped policy as the draft itself, with `MAX_RESOURCE_BYTES` keeping that honest.
+ *
+ * Binary is refused rather than mangled: `looksBinary` checks the bytes rather than the
+ * extension, because an extension is a guess about a filename and a NUL byte is a fact.
+ */
+export const draftResources = pgTable(
+  "draft_resources",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    /** NOT NULL and no `IS NULL` escape in the policy, exactly as on the draft itself. */
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+
+    draftId: uuid("draft_id")
+      .notNull()
+      .references(() => skillDrafts.id, { onDelete: "cascade" }),
+
+    /** Relative, normalised by `safeResourcePath`. Never absolute, never climbing out. */
+    path: text("path").notNull(),
+    content: text("content").notNull(),
+    byteSize: integer("byte_size").notNull().default(0),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /** One file per path per draft. The upsert target for an edit and for a re-import. */
+    uniqueIndex("draft_resources_uq").on(t.draftId, t.path),
+    index("draft_resources_draft_idx").on(t.draftId),
+
+    /**
+     * The `skill_drafts` policy verbatim, including its strictness.
+     *
+     * There is no such thing as a public draft, so there is no such thing as a public draft
+     * file, and a request with no session sees nothing rather than seeing "the public ones".
+     */
+    pgPolicy("org_scope", {
+      for: "all",
+      to: "app_runtime",
+      using: sql`org_id = current_setting('app.org_id', true)`,
       withCheck: sql`org_id = current_setting('app.org_id', true)`,
     }),
   ],

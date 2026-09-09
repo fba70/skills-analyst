@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { BuilderWizard } from "@/components/builder/wizard";
+import { ImportPanel } from "@/components/builder/import-panel";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { builderCategories } from "@/server/builder/scaffold";
@@ -108,6 +109,15 @@ export default async function BuildPage() {
       ) : null}
 
       <BuilderWizard categories={categories} />
+
+      {/*
+        Below the wizard, not beside it.
+
+        Writing a new skill is what most people come here for, and R5.6 serves the smaller case
+        of somebody who already has a document. Putting the two side by side would present them
+        as equal choices and make the first screen a decision rather than a start.
+      */}
+      <ImportPanel categories={categories} />
     </div>
   );
 }

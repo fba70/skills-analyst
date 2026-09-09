@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 
 import { zipSync, type Zippable } from "fflate";
 
+import { REDISTRIBUTABLE } from "@/lib/licence";
 import { getBundleFile, getManifest, type RedistributionPosture } from "@/server/storage";
 
 /**
@@ -48,11 +49,10 @@ import { getBundleFile, getManifest, type RedistributionPosture } from "@/server
 /** The earliest timestamp the ZIP format can represent. See the `mtime` note below. */
 const ZIP_EPOCH = Date.UTC(1980, 0, 1);
 
-/** Postures whose bytes we are permitted to hand over. */
-const EXPORTABLE: ReadonlySet<RedistributionPosture> = new Set([
-  "mirror_allowed",
-  "attribution_required",
-]);
+/** Postures whose bytes we are permitted to hand over. Defined once, in `src/lib/licence.ts`. */
+const EXPORTABLE: ReadonlySet<RedistributionPosture> = new Set(
+  REDISTRIBUTABLE as readonly RedistributionPosture[],
+);
 
 export type ExportRefusal = {
   ok: false;

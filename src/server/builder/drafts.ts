@@ -6,6 +6,7 @@ import { events, skillDrafts } from "@/server/db/schema";
 import { db } from "@/server/db";
 import { withExplicitOrgScope, withOrgScope } from "@/server/dal/scope";
 import { labelFor } from "@/server/taxonomy/vocabulary";
+import type { Attribution } from "@/lib/improve";
 
 import { importDraftBody } from "./blocks";
 import { buildScaffold } from "./scaffold";
@@ -49,6 +50,16 @@ export type DraftDetail = DraftSummary & {
   /** Set once the draft has become a skill (R6.1). Never cleared. */
   publishedSkillId: string | null;
   publishedAt: Date | null;
+  /* --- imported (R5.6, plan step C6) --- */
+  /** `owned`, `forked`, `uploaded`, or null for a draft written here from a scaffold. */
+  importSource: string | null;
+  /** The upstream version, for live display only. The obligation is frozen below. */
+  importedFromVersionId: string | null;
+  /**
+   * The frozen licence obligation. Read by `publishDraft`, which inherits the posture and the
+   * licence from it rather than writing `authored` over somebody else's work.
+   */
+  importAttribution: Attribution | null;
 };
 
 export type { DraftValidation } from "./validate-body";
@@ -110,6 +121,9 @@ export async function getDraft(id: string, orgId?: string): Promise<DraftDetail 
       validation: (row.validation ?? null) as DraftValidation | null,
       publishedSkillId: row.publishedSkillId,
       publishedAt: row.publishedAt,
+      importSource: row.importSource,
+      importedFromVersionId: row.importedFromVersionId,
+      importAttribution: (row.importAttribution ?? null) as Attribution | null,
       qualityScore: row.qualityScore,
       updatedAt: row.updatedAt,
     };

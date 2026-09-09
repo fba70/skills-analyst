@@ -204,5 +204,23 @@ console.info("\nEvery script package.json advertises");
   );
 }
 
+/*
+ * When every failure is a file that exists and was never added, say so once and name the fix.
+ *
+ * This suite has correctly reported the same thing twice in two milestones, and both times the
+ * answer was `git add -A` — the work was finished and unstaged. A diagnosis a reader has to
+ * translate into a command is a diagnosis they translate wrongly at least once, so it prints the
+ * command. It is deliberately conditional: if anything is missing outright, staging is *not* the
+ * fix and suggesting it would send somebody to commit a broken tree.
+ */
+const everythingIsUnstaged =
+  fail > 0 && missing.length > 0 && missing.every((m) => m.onDisk);
+if (everythingIsUnstaged) {
+  console.info(
+    "\n  Every unresolved import is a file that exists and git has never seen.\n" +
+      "  That is unstaged work, not a broken tree:\n\n    git add -A\n",
+  );
+}
+
 console.info(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail > 0 ? 1 : 0);

@@ -23,6 +23,7 @@ import { getDraft } from "@/server/builder/drafts";
 import { getSkillsByIds } from "@/server/dal/skills";
 import { requireSession } from "@/server/dal/session";
 import { estimateTokens } from "@/lib/tokens";
+import { attributionLine, IMPORT_SOURCE_META, isImportSource } from "@/lib/improve";
 import { labelFor } from "@/server/taxonomy/vocabulary";
 
 export const metadata: Metadata = { title: "Draft" };
@@ -158,6 +159,33 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
           <p className="text-muted-foreground max-w-3xl">{draft.summary}</p>
         ) : null}
       </header>
+
+      {/*
+        The obligation, where the work is happening (R5.6, plan step C6).
+
+        A fork carries its upstream's licence and credit into anything published from it, and the
+        author needs that in front of them while they edit rather than as a surprise on the
+        publish screen. `attributionLine` is the single definition of the credit — the same one
+        the publish path carries into the archive's ATTRIBUTION.txt — so the draft page and the
+        download cannot phrase one legal fact two ways.
+      */}
+      {draft.importAttribution && isImportSource(draft.importSource) ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">
+              {IMPORT_SOURCE_META[draft.importSource].label}
+            </CardTitle>
+            <CardDescription>{IMPORT_SOURCE_META[draft.importSource].blurb}</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-1 text-sm">
+            <p className="text-muted-foreground">{attributionLine(draft.importAttribution)}</p>
+            <p className="text-muted-foreground text-xs">
+              Publishing from this draft inherits the {draft.importAttribution.posture.replace(/_/g, " ")}{" "}
+              posture, so every download of your version carries the credit too.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {draft.status === "failed" ? (
         <Card className="border-destructive/40">

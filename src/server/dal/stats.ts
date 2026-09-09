@@ -2,6 +2,7 @@ import "server-only";
 
 import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 
+import { REDISTRIBUTABLE } from "@/lib/licence";
 import { archetypes, skills, skillVersions, sources } from "@/server/db/schema";
 import { withOrgScope, withPublicScope } from "@/server/dal/scope";
 import { FUNCTIONS } from "@/server/taxonomy/vocabulary";
@@ -59,8 +60,13 @@ export type PlatformStats = {
   hoursSinceSync: number | null;
 };
 
-/** Postures whose bytes may be handed over. Mirrors `skills/export.ts`. */
-const SERVABLE = ["mirror_allowed", "attribution_required"] as const;
+/**
+ * Postures whose bytes may be handed over.
+ *
+ * Its own comment used to say "Mirrors `skills/export.ts`" — an admitted second copy of a rule
+ * about what may legally be copied. There is one now, in `src/lib/licence.ts`.
+ */
+const SERVABLE = REDISTRIBUTABLE;
 
 export async function platformStats(): Promise<PlatformStats> {
   return withPublicScope(async (tx) => {

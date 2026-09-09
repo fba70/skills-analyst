@@ -14,6 +14,7 @@ import {
   type BundleFile,
   type StorageTier,
 } from "./keys";
+import { isRedistributable } from "@/lib/licence";
 
 export {
   bundlePrefix,
@@ -47,9 +48,15 @@ export type RedistributionPosture =
   | "metadata_only"
   | "unresolved";
 
-/** Only these two permit copying. Unresolved is treated as "no" until proven otherwise. */
+/**
+ * Only these two permit copying. Unresolved is treated as "no" until proven otherwise.
+ *
+ * Delegates to `src/lib/licence.ts` rather than spelling the pair out again: this was one of the
+ * three independent copies of that list, and three definitions of what may legally be copied is
+ * a drift nobody's type checker would report.
+ */
 export function mayMirror(posture: RedistributionPosture): boolean {
-  return posture === "mirror_allowed" || posture === "attribution_required";
+  return isRedistributable(posture);
 }
 
 export type StoreBundleInput = {

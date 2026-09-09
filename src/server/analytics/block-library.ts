@@ -3,6 +3,7 @@ import "server-only";
 import { sql } from "drizzle-orm";
 
 import { isBlockType, type BlockType } from "@/lib/block-types";
+import { REDISTRIBUTABLE } from "@/lib/licence";
 import { CURATED_LIST } from "@/server/analytics/archetype";
 import { EXTRACTOR_VERSION } from "@/server/analytics/structure";
 import { db } from "@/server/db";
@@ -150,7 +151,8 @@ export type LibraryResult = {
  * skill the download route refuses — a licence divergence, which is a legal problem rather
  * than a bug.
  */
-const QUOTABLE = ["mirror_allowed", "attribution_required"] as const;
+/* One definition of what may be copied, in `src/lib/licence.ts`. This used to be a second. */
+const QUOTABLE = REDISTRIBUTABLE;
 
 /** The same set as a runtime array, for the licence check in node. */
 const QUOTABLE_LIST: string[] = [...QUOTABLE];

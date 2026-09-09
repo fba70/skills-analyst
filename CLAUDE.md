@@ -2169,6 +2169,127 @@ would be enforcing an untested mean.
 > draft.
 
 
+### Improve an existing skill, and the fork that must not launder a licence (R5.6, plan step C6)
+
+`src/lib/improve.ts` · `src/lib/licence.ts` · `src/server/builder/improve.ts` · migration 0043
+`/build` → Improve an existing skill · `pnpm verify:improve` (28 checks, free)
+
+The first entry into the builder that does not begin with a blank page, and the first step that
+serves somebody who did not author here. Once a document is typed blocks in a draft, **every**
+Compose surface applies to it unchanged — deviation marks (R4.3), the block library (RW.3), the
+scope analyser (C5), the eval lab (D1). Nothing here re-implements any of them, which is C1's
+keystone paying off exactly as the plan said it would.
+
+So the step is almost entirely import, and import is almost entirely **licence**.
+
+#### Three sources, and only one is free of the hard question
+
+| | |
+|---|---|
+| **owned** | published from your own workspace. Your bytes, your workspace, nothing to ask. |
+| **uploaded** | a document you hand us. Yours by assertion; we cannot check and do not pretend to. |
+| **forked** | somebody else's registry skill. This is the one with teeth. |
+
+**Which one it is is decided by the data, never by the caller.** The org id on the skill row is
+the fact. A parameter saying "this is mine" would be a parameter that could declare away the
+licence gate, which is the whole mechanism.
+
+#### A fork is the block library's refusal at whole-document scale
+
+`block-library.ts` has no copy button because pasting a stranger's paragraph *"launders an
+attribution-required fragment into a document with no attribution"*. A fork is that for a whole
+document, and the temptation is larger because the result looks like ordinary authoring. Three
+rules carry it:
+
+1. **Only a redistributable posture may be forked.** `metadata_only` and `unresolved` have no
+   grant and no stored bytes — the same gate the download route returns 451 for.
+2. **The obligation is frozen onto the draft**, not resolved by a join. `takedowns` duplicates
+   `(source_url, skill_path)` out of its join columns for precisely this reason: the record has to
+   work when the rows it was recorded against are gone. A licence obligation that vanishes because
+   an upstream row was deleted is the failure mode with legal consequences. The upstream's
+   *display* — current name, whether it has since been withdrawn — still resolves live, like an
+   archetype exemplar. **Frozen obligation, live presentation.**
+3. **Publishing a fork inherits the upstream posture, licence and licence source.** The pre-C6
+   path wrote `redistribution: "mirror_allowed"`, `licenseSource: "authored"`, `licenseSpdx: null`
+   unconditionally — over an imported Apache-2.0 skill that would have been the platform stripping
+   an obligation through its own builder.
+
+> **The third rule cost nothing to enforce and that is the point.** `exportSkill` already writes
+> `ATTRIBUTION.txt` into the archive for an `attribution_required` posture. Carrying the posture
+> forward therefore carries the credit into every download of the fork, with no new code — the
+> requirement satisfied by propagating a fact rather than by remembering to add a feature.
+>
+> The upstream's own `license_source` is carried **verbatim** rather than gaining an `inherited`
+> enum value. The licence really was determined that way, by that step of the six-step chain, and
+> a new value would claim a different provenance for the same fact.
+
+#### A draft learned to hold files, which closed the half of C5 that could not be built
+
+`draft_resources`. A draft was one document, which was right while every draft started from a
+scaffold — but a real skill is a **bundle**, and importing one while keeping only the marker would
+silently discard the half the archetype rewards most: the miner measures *links to its own bundled
+files* at +23 and *offloads detail into `references/`* at +12 to +26.
+
+It is also where RW.11's actuator writes. C5 could compute which blocks should move into
+`references/` and had nowhere to put them; `offloadBlockToReference` now moves one and leaves a
+`reference-pointer` **in its place** rather than appending it — a reader who arrives where the
+detail used to be should find the signpost there, not three sections later. It goes through
+`setDraftBlocks`, so the body keeps its single writer and the move lands in the revision history,
+which is why C1b made restore append rather than truncate.
+
+**Text in a column, not bytes in a bucket.** Object storage is for *published* bundles,
+content-addressed at the hash a verdict covers. A draft is mutable, private, measured in
+kilobytes, and deleted when its author deletes it — putting it in R2 would buy an orphaned-object
+lifecycle and a second home for tenant data in exchange for nothing. `MAX_RESOURCE_BYTES` keeps
+that trade honest, and binary is refused rather than mangled: `looksBinary` reads the bytes,
+because an extension is a guess about a filename and a NUL byte is a fact.
+
+> A path cannot climb out of the bundle. An uploaded archive is a far more direct route to
+> directory traversal than the git symlinks the connector already declines to follow, and
+> `safeResourcePath` refuses `..`, absolute paths, dotfiles and NULs, folding backslashes so a
+> Windows archive cannot smuggle one past.
+
+#### One definition of what may be copied, and the scan that found five more
+
+`REDISTRIBUTABLE` now lives in `src/lib/licence.ts` and everything imports it. Before this step it
+had **three** independent definitions — `mayMirror` in storage, `QUOTABLE` in the block library,
+and one written for this importer.
+
+Three copies of a rule about *what may legally be copied* is worse than three copies of most
+things: they cannot drift in a way a type checker notices, they are read by people making
+decisions about somebody else's rights, and the day one gains a posture the others do not is the
+day the platform copies bytes one of its own modules would have refused.
+
+> **`verify:improve` scans the tree for a fourth, and on its first run found four more I did not
+> know about** — `SERVABLE` in the download card, `SERVABLE` in `dal/stats.ts` (whose own comment
+> admitted *"Mirrors `skills/export.ts`"*), `EXPORTABLE` in the export path, and a literal in
+> `verify:blocks`. Six of one rule, in a codebase that already had a section about this failure.
+>
+> **And the scanner's first version was too crude, for the second time in this repo.** It flagged
+> `POSTURE_KEYS` in the licence badge and `POSTURES` in the MCP tool schema — the **four**-posture
+> display vocabulary, a different rule entirely. Two of six hits were false, exactly as the
+> `= any(${array})` scanner's first version matched the *warnings* about the trap it hunts. A pair
+> followed shortly by `metadata_only` is a vocabulary, not a copy.
+
+#### Smaller decisions worth keeping
+
+- **`purpose` is not filled from the imported description.** It is what somebody typed into the
+  builder, and nobody typed anything here — putting the upstream author's words in this author's
+  mouth on the one field R6.2 reads as intent would corrupt the loop's input.
+- **A binary asset in a corpus bundle is skipped; one in an upload is refused.** The uploader chose
+  their files and deserves to be told; somebody forking a skill did not choose the image inside it.
+- **The importer never writes `skill_drafts.body`** — it goes through `importDraftBody`, the same
+  path a generation takes. Asserted here as well as in `verify:draft-blocks`, because a module
+  holding a whole document is the most tempting place in the codebase to add a second writer.
+- **The panel says what forking costs before the button, not after.** Somebody who would not
+  accept the licence terms should find out while stopping is still free.
+
+> **This makes migration 0043 a hard dependency of the builder.** `getDraft` selects
+> `import_source`, so `verify:publish` fails with *column "import_source" does not exist* until it
+> is applied. Migration-before-code is the normal order and a loud failure is the right way round
+> — the same note 0029, 0034 and 0035 each carry — but it is worth knowing before wondering why a
+> green suite turned red.
+
 ### The scope analyser, and the confound that would have told half the corpus to cut itself up (RW.10 / RW.11, plan step C5)
 
 `src/lib/scope.ts` · `src/server/analytics/scope.ts` · migration 0042
@@ -2374,6 +2495,19 @@ Two honest limits on the number:
   one person about two jobs that felt related enough to combine, so its seam is necessarily
   softer. Reading 0.474 as "half of all real two-subject skills" is therefore optimistic, and the
   true recall is lower than that.
+
+**The re-run confirmed it, which is why the prediction was stated first.** 200 skills at 1.1.0,
+$0.0045: **111 cohesive, 4 split candidates, 1 type-aligned** — 3% against the 4% the calibration
+predicted, from 51% at the guessed threshold. A number that moved from half the corpus to a
+twenty-fifth of it, in the direction and to the size the control said it would, is the strongest
+evidence available that the metric is measuring something.
+
+The four survivors are worth naming, because three of them are suspicious in a useful way:
+`to-prd-2` (0.507), `to-prd-3` (0.515), `to-spec-8` (0.504) and `lead-enrichment-sixtyfour`
+(0.608). The first three are one family sitting a hair above the threshold, which is either a real
+pattern — a *convert to PRD* skill covering two conversion jobs — or one template repeated, and
+this corpus has taught us to suspect the second. The fourth is clear of the threshold on its own.
+Reading them is the next calibration input, not a task this analyser can do for itself.
 
 **And the confound guard covers one document in seven.** 86% of the calibration sample had at
 least one cluster mostly unclassified, so `typeAlignment` correctly returned null and separation
@@ -4973,6 +5107,7 @@ pnpm verify:relations                    # RK.3 the graph, and what it refuses t
 pnpm verify:relations --live             # 3 controls proving the detector fires — ~$0.002
 pnpm relations --status                  # stored edges; free
 pnpm relations --conflicts 20            # mine guardrail contradictions — COSTS MONEY
+pnpm verify:improve                      # R5.6 a fork carries its licence; free, no network
 pnpm verify:scope                        # RW.10/RW.11 scope and disclosure; free, no network
 pnpm scope --status                      # coverage first, then the finding; free
 pnpm scope --run 200                     # analyse a slice — COSTS MONEY (~a cent)

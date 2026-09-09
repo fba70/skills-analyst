@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Download, ExternalLink, FileLock2 } from "lucide-react";
 
+import { REDISTRIBUTABLE } from "@/lib/licence";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ExplainLink } from "@/components/registry/explain";
@@ -27,7 +28,8 @@ export type DownloadCardProps = {
   fileCount: number | null;
 };
 
-const SERVABLE = new Set(["mirror_allowed", "attribution_required"]);
+/* One definition of what may be copied, in `src/lib/licence.ts`. This used to be a fourth. */
+const SERVABLE = new Set<string>(REDISTRIBUTABLE);
 
 export function DownloadCard({
   slug,

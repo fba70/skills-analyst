@@ -2,6 +2,7 @@ import "dotenv/config";
 
 import { Client } from "pg";
 
+import { REDISTRIBUTABLE } from "../src/lib/licence";
 import { BLOCK_KINDS, BLOCK_TYPES, BLOCK_TYPE_META } from "../src/lib/block-types";
 import {
   BLOCK_RULES,
@@ -702,7 +703,7 @@ console.info("\nThe library resolves a coordinate back to the extractor's own te
         const leaked = result.fragments.filter(
           (f) =>
             f.text !== null &&
-            !["mirror_allowed", "attribution_required"].includes(f.attribution.redistribution),
+            !(REDISTRIBUTABLE as readonly string[]).includes(f.attribution.redistribution),
         );
         check(
           "no fragment carries text its licence does not permit copying",

@@ -11,6 +11,7 @@ import { events, skillDrafts, skills, skillVersions, sources } from "@/server/db
  * make this whole path session-bound for no reason. `withExplicitOrgScope` stays
  * `server-only` and is never reachable from a `"use server"` action.
  */
+import { db } from "@/server/db";
 import { withExplicitOrgScope } from "@/server/dal/scope";
 import { storeBundle } from "@/server/storage";
 import { getAppUrl } from "@/lib/app-url";
@@ -191,13 +192,61 @@ async function applyPublish(
     draft.dialect as DialectId,
   );
 
+  /*
+   * The draft's own files travel with it (R5.6, plan step C6).
+   *
+   * A draft was one document until C6, so this was `[file]`. An imported skill is a **bundle** —
+   * `references/`, `scripts/` — and publishing only its marker would silently discard the half
+   * the archetype rewards most: the miner measures *links to its own bundled files* at +23.
+   * `storeBundle` already took an array, so this is the change it was shaped for.
+   */
+  const { listDraftResources } = await import("@/server/builder/improve");
+  const resources = await listDraftResources(draft.id, orgId);
+  const bundleFiles = [
+    file,
+    ...resources.map((resource) => ({
+      path: resource.path,
+      /* `BundleFile.content` is a Buffer; the digest hashes bytes, not a decoded string. */
+      content: Buffer.from(resource.content, "utf8"),
+    })),
+  ];
+
+  /*
+   * A fork inherits its upstream's licence, and that is the whole of C6's third rule.
+   *
+   * Writing `mirror_allowed` + `licenseSource: "authored"` + `licenseSpdx: null` over an imported
+   * Apache-2.0 skill would be **laundering** — the platform stripping an obligation through its
+   * own builder, on the exact axis the download route returns 451 to protect and the block
+   * library refuses a copy button over.
+   *
+   * Inheriting is also what makes the obligation work with no new code: `exportSkill` already
+   * writes `ATTRIBUTION.txt` for an `attribution_required` posture, so carrying the posture
+   * forward carries the credit into every archive.
+   *
+   * The upstream's own `license_source` is carried verbatim rather than gaining an `inherited`
+   * enum value: the licence really was determined that way, by that step of the chain, and a new
+   * value would claim a different provenance for the same fact.
+   */
+  const attribution = draft.importAttribution;
+  const upstream = attribution
+    ? await db
+        .select({
+          licenseSource: skillVersions.licenseSource,
+          licenseEvidence: skillVersions.licenseEvidence,
+        })
+        .from(skillVersions)
+        .where(eq(skillVersions.id, draft.importedFromVersionId ?? ""))
+        .limit(1)
+        .then((rows) => rows[0] ?? null)
+    : null;
+
   const stored = await storeBundle({
-    files: [file],
+    files: bundleFiles,
     tier: "public",
     // The author's own bytes in the author's own workspace. Not `unresolved`, which means
     // "we could not tell" and would forbid storing the thing we just helped write.
-    redistribution: "mirror_allowed",
-    licenseSpdx: null,
+    redistribution: attribution ? attribution.posture : "mirror_allowed",
+    licenseSpdx: attribution?.licenseSpdx ?? null,
   });
 
   const sourceId = await builderSourceId(orgId);
@@ -250,14 +299,37 @@ async function applyPublish(
           sourceUrl: `${getAppUrl()}/build/${draft.id}`,
           path: file.path,
           commitSha: stored.contentHash,
-          files: [file.path],
+          files: bundleFiles.map((entry) => entry.path),
+          /*
+           * Where a forked draft came from, beside the frozen obligation the licence columns
+           * carry. Absent on an ordinary draft rather than set to a placeholder — a null field
+           * is a fact and an empty one invites a reader to wonder what was lost.
+           */
+          ...(attribution
+            ? {
+                importedFrom: {
+                  slug: attribution.slug,
+                  name: attribution.name,
+                  sourceUrl: attribution.sourceUrl,
+                  licenseSpdx: attribution.licenseSpdx,
+                  importedAt: attribution.importedAt,
+                  versionId: draft.importedFromVersionId,
+                },
+                authoredHere: false,
+              }
+            : {}),
           fileHashes: stored.fileHashes,
           fetchedAt: new Date().toISOString(),
         },
-        licenseSpdx: null,
-        licenseSource: "authored",
-        licenseEvidence: null,
-        redistribution: "mirror_allowed",
+        licenseSpdx: attribution?.licenseSpdx ?? null,
+        /*
+         * The upstream's own answer, carried verbatim. `unresolved` when the row has gone —
+         * honest, because a licence we can no longer point at a source for is exactly that,
+         * and the frozen SPDX beside it still carries the obligation.
+         */
+        licenseSource: attribution ? (upstream?.licenseSource ?? "unresolved") : "authored",
+        licenseEvidence: attribution ? (upstream?.licenseEvidence ?? null) : null,
+        redistribution: attribution ? attribution.posture : "mirror_allowed",
         upstreamRef: null,
         // `pending` is the point. The validator picks it up exactly as it picks up a skill
         // that was fetched from GitHub a second ago.

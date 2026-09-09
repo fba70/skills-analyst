@@ -878,3 +878,79 @@ export async function unmetDemandAction(
     return failure(error);
   }
 }
+
+/**
+ * Import an existing skill into a draft (R5.6, plan step C6).
+ *
+ * The refusal vocabulary is returned as a message rather than a code, because every one of the
+ * eight reasons needs a different sentence and two of them are about a licence: a reader told
+ * "import failed" retries, and a reader told the licence forbids copying links out instead.
+ *
+ * **Whether this is your own skill or a fork is decided by the data, never by the caller.** The
+ * org id on the skill row is the fact; a parameter would be a parameter that could declare away
+ * the licence gate.
+ */
+export async function importSkillAction(
+  slug: string,
+  category: string,
+): Promise<ActionResult<{ draftId: string; source: string; resources: number }>> {
+  try {
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
+    if (!orgId) return { ok: false, message: "No active workspace." };
+    if (!slug.trim()) return { ok: false, message: "Name the skill to import." };
+
+    const { isValidCategory } = await import("@/server/taxonomy/vocabulary");
+    if (!isValidCategory("function", category)) {
+      return { ok: false, message: "Choose a function category." };
+    }
+
+    const { importSkillForImprovement } = await import("@/server/builder/improve");
+    const { IMPORT_REFUSAL_MESSAGE } = await import("@/lib/improve");
+    const outcome = await importSkillForImprovement({
+      orgId,
+      userId: session.user.id,
+      slug: slug.trim().replace(/^.*\/skills\//, ""),
+      category,
+    });
+
+    if (!outcome.ok) return { ok: false, message: IMPORT_REFUSAL_MESSAGE[outcome.refusal] };
+
+    revalidatePath("/build");
+    return {
+      ok: true,
+      data: { draftId: outcome.draftId, source: outcome.source, resources: outcome.resources },
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Move one block into `references/` and leave a pointer (RW.11, plan steps C5 and C6).
+ *
+ * C5 computed this proposal and had nowhere to write it, because a draft was one document. It is
+ * here rather than beside the scope analyser for that reason: the actuator needed `draft_resources`,
+ * which is C6's schema.
+ */
+export async function offloadBlockAction(
+  draftId: string,
+  blockId: string,
+): Promise<ActionResult<{ path: string }>> {
+  try {
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
+    if (!orgId) return { ok: false, message: "No active workspace." };
+
+    const { offloadBlockToReference } = await import("@/server/builder/improve");
+    const outcome = await offloadBlockToReference(draftId, orgId, blockId);
+    if (!outcome.ok || !outcome.path) {
+      return { ok: false, message: outcome.message ?? "Could not move that block." };
+    }
+
+    revalidatePath(`/build/${draftId}`);
+    return { ok: true, data: { path: outcome.path } };
+  } catch (error) {
+    return failure(error);
+  }
+}
