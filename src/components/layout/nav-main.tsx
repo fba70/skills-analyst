@@ -8,6 +8,7 @@ import {
   Library,
   Settings2,
   Search,
+  Archive,
   Shapes,
   ShieldCheck,
   Sparkles,
@@ -42,6 +43,9 @@ const items: NavItem[] = [
   // Directly after the archetypes it builds from — the two are one idea, and the ordering
   // is the argument: read what works, then make one.
   { title: "Build a skill", href: "/build", icon: Sparkles },
+  // Directly after the builder, because a capture programme is a reason to open it — the
+  // topics on a campaign each become a draft, and the page exists to say which still have not.
+  { title: "Expertise capture", href: "/capture", icon: Archive },
   // Last in the group: a reference is what you reach for from one of the pages above, not
   // a destination anyone opens first.
   { title: "FAQ", href: "/faq", icon: BookOpen },

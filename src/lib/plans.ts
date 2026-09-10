@@ -62,6 +62,15 @@ export const FEATURES = [
   "impact-analytics",
   /** R1.9 private tenant sources and an org-scoped corpus. Team. */
   "private-corpus",
+  /**
+   * RK.8 facilitated expertise-capture programmes. Team.
+   *
+   * Doc 6 calls this **Enterprise**, and there is no enterprise tier — `PLANS` has three and
+   * `team` is the top of them. Adding a fourth is a pricing decision with a page and a contract
+   * behind it, not a code change, so this sits on the highest tier that exists and the mismatch
+   * is written down rather than resolved by inventing a plan nobody has agreed to sell.
+   */
+  "capture-campaigns",
 ] as const;
 
 export type Feature = (typeof FEATURES)[number];
@@ -143,6 +152,7 @@ export const PLAN_FEATURES: Record<Plan, readonly Feature[]> = {
     "version-history",
     "shared-blocks",
     "impact-analytics",
+    "capture-campaigns",
     "private-corpus",
   ],
 };
@@ -189,6 +199,11 @@ export const FEATURE_META: Record<Feature, { label: string; blurb: string }> = {
   "impact-analytics": {
     label: "Impact analytics",
     blurb: "Which of your skills actually get used, and what they cost.",
+  },
+  "capture-campaigns": {
+    label: "Expertise capture",
+    blurb:
+      "A facilitated programme: a named list of what has to be captured before somebody rotates off, and Interview and Distill run against it.",
   },
   "private-corpus": {
     label: "Private corpus",

@@ -2169,6 +2169,77 @@ would be enforcing an untested mean.
 > draft.
 
 
+### Expertise capture: the value is the denominator (RK.8, plan step E7) — Team
+
+`src/lib/campaigns.ts` · `src/server/campaigns/run.ts` · `/capture` · migration 0049
+`pnpm verify:campaigns` (9 pure checks + a stored probe, free)
+
+*"Before a senior engineer rotates off, run Interview and Distill against their domain in
+facilitated sessions; output is a reviewed skill portfolio."* Organisational-memory insurance.
+
+**This step was deferred and then asked for, and the concern that deferred it stands**: its shape
+is a guess until a real programme runs against it. It is recorded in `specs/plan.md` rather than
+argued twice.
+
+#### "Nothing new underneath it" is the specification, not a caveat
+
+Interview elicits what somebody has not written down. Distill takes it from work that already
+happened. Both produce typed candidate blocks through one accept path. A campaign **captures
+nothing** — `verify:campaigns` asserts the module reaches no model, no embedder and no block
+writer at all.
+
+What it adds is the thing neither has: an answer to *are we finished*.
+
+#### A progress bar needs a denominator, and the denominator is a human artefact
+
+The tempting build is a bag of drafts with a count. That counts what happened and cannot say
+whether it was enough — a rate with no sample size, which this codebase marks as thin everywhere
+else it appears.
+
+So a campaign is a **named list of topics**, written before the interviews start by whoever knows
+what is at risk. *Incident escalation. The Redis failover runbook. The data-retention rules.*
+Progress is topics captured against topics named.
+
+That list is also the artefact with value independent of the software. **No tool does the hard
+part** — deciding what one person knows that nobody else does — and the empty state asks for the
+list rather than offering a button that starts work.
+
+#### Derived, so it cannot drift
+
+There is no counter column and no job maintaining one. A topic's state comes from its draft: no
+draft is *not started*, a draft is *in progress*, a published draft is *captured*. A stored status
+goes stale the first time somebody publishes without coming back to tick a box — which is the
+normal way work happens, and it drifts in the flattering direction, because nobody notices a
+progress bar that is too high.
+
+`verify:campaigns` proves it the only way that means anything: it publishes a draft **by writing
+`published_skill_id` directly**, telling the campaign nothing, and requires the campaign to report
+50%. A stored counter would still read zero.
+
+> **An empty campaign reports no share, not 0%.** *Nothing captured* and *nothing asked for* are
+> the same zero and opposite meanings, and a bar at zero on an unscoped programme reads as failure
+> where it should read as unstarted. The endorsement card and `archetypes --blocks` each had to
+> learn this; `capturedShare` returns `null` and the panel says "not scoped yet".
+
+> **Deleting a draft nulls the topic's link rather than deleting the topic.** A cascade would
+> shrink the denominator, and a programme would report itself **more complete** because somebody
+> tidied up. Same reason an accepted interview candidate keeps its row when the block it became is
+> deleted.
+
+#### Effort beside outcome, never averaged into it
+
+Interview sessions, distill runs and accepted suggestions are derived from the campaign's drafts
+and shown next to the topic counts. *Twelve interviews* is a fact about work; *four of nine
+captured* is a fact about the result. One number blending them answers neither — the argument
+that keeps lift and telemetry separable on an archetype page.
+
+#### Doc 6 says Enterprise, and there is no Enterprise
+
+`PLANS` has three tiers and `team` is the top. Adding a fourth is a pricing decision with a page
+and a contract behind it, not a code change — so `capture-campaigns` sits on the highest tier that
+exists and the mismatch is written into `plans.ts` rather than resolved by inventing a plan nobody
+has agreed to sell.
+
 ### Notifications: no notification table, and the events name the wrong thing (R8.7, plan step F5)
 
 `src/lib/watch.ts` · `src/server/notifications/watch.ts` · migration 0048
@@ -2211,10 +2282,13 @@ silently, and a licence re-resolution is exactly what a watcher wants — it is 
 turns an undownloadable skill into a downloadable one. **Fixed forward in `sync.ts`; both
 spellings accepted for the history.**
 
-> **The first query did not finish, and that is why it was probed.** `join skills s on (subject
-> is the skill) or (subject is one of its versions)` — Postgres cannot use an index for either
-> branch of an `or` across two join conditions, so it degraded to a scan of 185,000 events
-> against 50,000 skills. Same class as E2's accidental cross-product, found the same way.
+> **The first query took over twenty minutes, and that is why it was probed.** `join skills s on
+> (subject is the skill) or (subject is one of its versions)` — Postgres cannot use an index for
+> either branch of an `or` across two join conditions, so it degraded to a scan of 185,000 events
+> against 50,000 skills. It blew a five-minute timeout, was left running in the background, and
+> eventually returned **111,207 joinable notifiable events** — which is both the confirmation
+> that the join is *correct* and the measure of how unusable it was. Same class as E2's
+> accidental cross-product, found the same way.
 >
 > The fix is not one clever query but **two shapes, because the two watches want opposite
 > drivers**: a skill watch knows its subject and drives from `events_subject_idx`; a category
@@ -5680,6 +5754,7 @@ pnpm verify:billing                      # RC.4 a late delivery cannot downgrade
 pnpm verify:mcp-create                   # RM.3 an agent creates a draft, never publishes; free
 pnpm verify:api                          # R8.6/R3.7/R8.3 metadata, never bodies; free
 pnpm verify:watch                        # R8.7 the feed resolves versions to skills; free
+pnpm verify:campaigns                    # RK.8 progress is derived, never stored; free
 pnpm verify:improve                      # R5.6 a fork carries its licence; free, no network
 pnpm verify:scope                        # RW.10/RW.11 scope and disclosure; free, no network
 pnpm scope --status                      # coverage first, then the finding; free

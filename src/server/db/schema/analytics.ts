@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  date,
   index,
   integer,
   pgPolicy,
@@ -15,6 +16,7 @@ import {
 
 import { organization, user } from "./auth";
 import { skills, skillVersions } from "./corpus";
+import { skillDrafts } from "./drafts";
 
 /**
  * Near-duplicate detection (Doc 2 R1.4).
@@ -283,6 +285,117 @@ export const skillWatches = pgTable(
       to: "app_runtime",
       using: sql`true`,
       withCheck: sql`true`,
+    }),
+  ],
+);
+
+/**
+ * A facilitated expertise-capture programme (Doc 6 RK.8, plan step E7) — Team.
+ *
+ * ## The row is the commitment; the progress is derived
+ *
+ * A campaign stores *what we are capturing, from whom, and by when*. It stores no counts and no
+ * status per topic — those are queries over the drafts, sessions and runs that already exist,
+ * because the plan's own note is that this step has **nothing new underneath it**. Interview and
+ * Distill do the capturing; a campaign is the thing that can say whether it is finished.
+ *
+ * ## `subject_user_id` is who is leaving, not who is doing the work
+ *
+ * The premise is somebody rotating off. Naming them is the point — *what does this person know
+ * that nobody else does* is the question the programme exists to force — and `set null` on
+ * delete, because the campaign outlives the account. A record of what was captured before
+ * somebody left must survive them leaving.
+ */
+export const captureCampaigns = pgTable(
+  "capture_campaigns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+
+    name: text("name").notNull(),
+    /** Why this is happening. Read by whoever picks the programme up halfway through. */
+    purpose: text("purpose"),
+
+    /** Whose expertise. Null for a programme about an area rather than a person. */
+    subjectUserId: text("subject_user_id").references(() => user.id, { onDelete: "set null" }),
+    /** The category being covered, when there is one. `function` or `domain`. */
+    axis: text("axis"),
+    category: text("category"),
+
+    /** The date the knowledge stops being available. The whole reason for the urgency. */
+    dueOn: date("due_on"),
+
+    /** `open` or `closed`. Closing is a decision, not an expiry — nothing sweeps this. */
+    status: text("status").notNull().default("open"),
+
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("capture_campaigns_org_idx").on(t.orgId, t.status),
+    pgPolicy("org_scope", {
+      for: "all",
+      to: "app_runtime",
+      using: sql`org_id = current_setting('app.org_id', true)`,
+      withCheck: sql`org_id = current_setting('app.org_id', true)`,
+    }),
+  ],
+);
+
+/**
+ * One thing that has to be captured before the deadline.
+ *
+ * **The denominator.** Without a named list written down before the interviews start, "progress"
+ * is a count of what happened and cannot say whether it was enough — a rate with no sample size,
+ * which this codebase marks as thin everywhere else it appears.
+ *
+ * `draft_id` is the only link to the work, and the topic's state is derived from it: no draft is
+ * *not started*, a draft is *in progress*, a published draft is *captured*. A stored status would
+ * be a second source of truth that goes stale the moment somebody publishes without coming back
+ * to tick a box — which is precisely when a progress bar most needs to be right.
+ */
+export const campaignTopics = pgTable(
+  "campaign_topics",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    campaignId: uuid("campaign_id")
+      .notNull()
+      .references(() => captureCampaigns.id, { onDelete: "cascade" }),
+
+    title: text("title").notNull(),
+    /** What makes this one hard, or who else half-knows it. The facilitator's note. */
+    note: text("note"),
+
+    /**
+     * The draft this became. `set null`, never cascade.
+     *
+     * Deleting a draft must not delete the record that the topic was named — otherwise a
+     * campaign's denominator shrinks when somebody tidies up, and the programme reports itself
+     * more complete than it is. The same reason an accepted interview candidate keeps its row
+     * when the block it became is deleted.
+     */
+    draftId: uuid("draft_id").references(() => skillDrafts.id, { onDelete: "set null" }),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /** One topic per title per campaign, folded — two spellings of one topic is one topic. */
+    uniqueIndex("campaign_topics_uq").on(t.campaignId, sql`lower(${t.title})`),
+    index("campaign_topics_campaign_idx").on(t.campaignId),
+
+    pgPolicy("org_scope", {
+      for: "all",
+      to: "app_runtime",
+      using: sql`org_id = current_setting('app.org_id', true)`,
+      withCheck: sql`org_id = current_setting('app.org_id', true)`,
     }),
   ],
 );
