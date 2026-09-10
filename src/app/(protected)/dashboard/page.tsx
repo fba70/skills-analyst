@@ -3,10 +3,12 @@ import Link from "next/link";
 import { Sparkles } from "lucide-react";
 
 import { LicenseBadge } from "@/components/registry/license-badge";
+import { WatchFeed } from "@/components/registry/watch-feed";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireSession } from "@/server/dal/session";
+import { feed, watchList } from "@/server/notifications/watch";
 import { listDrafts } from "@/server/builder/drafts";
 import { platformStats } from "@/server/dal/stats";
 
@@ -34,7 +36,13 @@ export default async function DashboardPage() {
   // Drafts, not `mySkills()`. Nothing writes an org-scoped row into `skills` — a draft
   // becomes one only when it is published — so reading the corpus table here would show an
   // empty list to someone who has just written three skills.
-  const [stats, drafts] = await Promise.all([platformStats(), listDrafts()]);
+  const [stats, drafts, watchItems, watches] = await Promise.all([
+    platformStats(),
+    listDrafts(),
+    /* R8.7. Derived from `events` on read — there is no notification table to fall behind. */
+    feed(session.user.id, 25),
+    watchList(session.user.id),
+  ]);
 
   return (
     <div className="grid min-w-0 gap-6">
@@ -44,6 +52,26 @@ export default async function DashboardPage() {
           Welcome back, {firstName}.
         </p>
       </div>
+
+      {/*
+        R8.7's feed, above the corpus figures.
+
+        What changed on the things *you* follow outranks what the corpus looks like overall —
+        that is the difference between a dashboard somebody opens and one they walk past. It is
+        rendered even when empty, because the empty state is the only place to explain what
+        watching would give you.
+      */}
+      <WatchFeed
+        watches={watches.length}
+        items={watchItems.map((item) => ({
+          at: item.at.toISOString(),
+          kind: item.kind,
+          label: item.label,
+          tone: item.tone,
+          slug: item.slug,
+          name: item.name,
+        }))}
+      />
 
       {/* ---- The corpus at a glance ---------------------------------------- */}
       <section className="grid gap-3">

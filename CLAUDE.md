@@ -2169,6 +2169,98 @@ would be enforcing an untested mean.
 > draft.
 
 
+### Notifications: no notification table, and the events name the wrong thing (R8.7, plan step F5)
+
+`src/lib/watch.ts` · `src/server/notifications/watch.ts` · migration 0048
+Watch button on a skill page · the feed on `/dashboard` · `pnpm verify:watch` (free)
+
+The last step of the plan. *"Watch a skill or a category; be told when a version changes, a
+takedown lands or a lifecycle state moves."* The plan's own note is the design: **every one of
+those already exists as an `events` row**, so this is not an event system — it is a subscription,
+a query and a surface.
+
+#### Derived on read, so there is nothing to re-run
+
+The obvious build materialises a notification row per watcher per event behind a cursor job.
+That is a job that can fail silently, a dedup rule, and a second copy of what `events` already
+holds — three recorded failure shapes in one feature.
+
+A watch stores **what you follow and when you last looked**; the feed is a query since that
+timestamp. Correct by construction, and a watch created today can show last month, because the
+events were never the missing part. Read state is one column: `last_seen_at`. There is no
+`notifications` table and `verify:watch` asserts there is not.
+
+#### The events name a version. The watcher names a skill.
+
+Measured on the live table before any code was written — which is the only reason it was caught:
+
+```
+108,074  skill_version.indexed      · skill_versions
+ 51,207  skill_version.created      · skill_versions
+  2,804  skill_version.quarantined  · skill_versions
+    404  licence.reresolved         · skill_version     ← singular
+```
+
+Every kind that matters carries a **version id** in `subject_id`. A feed matching
+`subject_id = <skill>` returns almost nothing and looks like a working feature over a quiet
+corpus — a confident empty answer, which is the failure this codebase finds most often.
+
+And one kind spells its subject type differently: 404 `licence.reresolved` rows say
+`skill_version` where everything else says `skill_versions`. Matching one spelling drops them
+silently, and a licence re-resolution is exactly what a watcher wants — it is the event that
+turns an undownloadable skill into a downloadable one. **Fixed forward in `sync.ts`; both
+spellings accepted for the history.**
+
+> **The first query did not finish, and that is why it was probed.** `join skills s on (subject
+> is the skill) or (subject is one of its versions)` — Postgres cannot use an index for either
+> branch of an `or` across two join conditions, so it degraded to a scan of 185,000 events
+> against 50,000 skills. Same class as E2's accidental cross-product, found the same way.
+>
+> The fix is not one clever query but **two shapes, because the two watches want opposite
+> drivers**: a skill watch knows its subject and drives from `events_subject_idx`; a category
+> watch has thousands of skills and drives from `events_at_idx`, because the window since you
+> last looked is small where the category is not. Measured: **63 ms** and **1.67 s**.
+
+> **And `sql<T>` lied again, in the same codebase that has a section about it.** `FeedRow.at` was
+> annotated `Date`; `db.execute` with a raw template applies no parser, so the driver returned a
+> string and the dedup key called `.toISOString()` on it. E1's `linkCheckSummary` did exactly
+> this with `min(checked_at)` and CLAUDE.md already recorded the rule — *a `sql<T>` annotation is
+> a claim about a value, not a conversion of it.* Knowing the rule was not enough; running the
+> code was. Typed honestly now, converted once at the boundary.
+
+#### An allow-list, because the loudest events are the least interesting
+
+`skill_version.created` is 51,207 rows and fires when bytes change upstream *before validation
+has decided anything* — `indexed` and `quarantined` are the answers, and reporting the question
+as well doubles the feed. `structures.extracted` and `taxonomy.classified` are derived-data
+passes. All three are true, all three are about your skill, and all three are noise.
+
+A feed that reports every pass is one people mute, and then the quarantine in amongst it is
+missed. Ten kinds are notifiable; the suite asserts the three loudest are not.
+
+#### Smaller decisions
+
+- **A new watch sees thirty days of history.** A feed that is empty on the day you subscribe
+  teaches people it does not work — and the events were always there, so hiding them would be
+  pretending the feature started when you pressed the button.
+- **A watch is keyed on the person, not the workspace.** Two colleagues watching different skills
+  is the normal case, and an org-keyed row would let one unsubscribe the other.
+- **A category watch uses the servable-category rule** the registry applies, not every
+  assignment. Notifying somebody about a skill that is only *maybe* in their category is how a
+  feed earns a mute.
+- **The empty state says which empty it is** — *you watch nothing* and *nothing happened* are the
+  same list and opposite conclusions.
+
+#### What is deliberately not built: sending anything
+
+There is no email. R8.7 says *be told*, and a feed on a page is the weaker reading — but delivery
+needs an unsubscribe path, bounce handling and a digest cadence, none of which exist, and
+`MAIL_TRANSPORT` is pinned to `console` locally so a laptop cannot quietly email people. Shipping
+a sender without those is how a platform earns a spam complaint on behalf of its users.
+
+The watermark makes it a small step when it comes: a digest is *the feed since `last_seen_at`*,
+which is the function that already exists.
+
 ### The public API serves metadata, and that is what makes bulk access lawful (R8.6 / R3.7 / R8.3, plan step F4)
 
 `src/lib/api.ts` · `src/server/api/public.ts` · `/api/v1/…` · `pnpm verify:api` (23 checks, free)
@@ -5587,6 +5679,7 @@ pnpm verify:mcp-usage                    # RC.3 the agent surface is accounted f
 pnpm verify:billing                      # RC.4 a late delivery cannot downgrade a customer; free
 pnpm verify:mcp-create                   # RM.3 an agent creates a draft, never publishes; free
 pnpm verify:api                          # R8.6/R3.7/R8.3 metadata, never bodies; free
+pnpm verify:watch                        # R8.7 the feed resolves versions to skills; free
 pnpm verify:improve                      # R5.6 a fork carries its licence; free, no network
 pnpm verify:scope                        # RW.10/RW.11 scope and disclosure; free, no network
 pnpm scope --status                      # coverage first, then the finding; free

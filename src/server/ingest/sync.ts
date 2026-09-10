@@ -979,7 +979,15 @@ async function writeSkillVersionOnce(
           orgId,
           actorType: "system",
           kind: "licence.reresolved",
-          subjectType: "skill_version",
+          /*
+         * `skill_versions`, plural, like every other event on this table.
+         *
+         * This one row-type was written singular and 404 events carry it. A feed that joins
+         * events to versions on `subject_type` would silently drop them — a licence
+         * re-resolution, which is exactly the change a watcher of that skill wants to hear
+         * about. Fixed forward; the notification feed accepts both spellings for the history.
+         */
+          subjectType: "skill_versions",
           subjectId: duplicate.id,
           reason: `${duplicate.redistribution} → ${license.posture} (${license.source})`,
           payload: {

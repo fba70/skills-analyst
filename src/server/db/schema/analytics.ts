@@ -13,7 +13,7 @@ import {
   vector,
 } from "drizzle-orm/pg-core";
 
-import { organization } from "./auth";
+import { organization, user } from "./auth";
 import { skills, skillVersions } from "./corpus";
 
 /**
@@ -213,6 +213,76 @@ export const skillEmbeddings = pgTable(
       to: "app_runtime",
       using: sql`org_id is null or org_id = current_setting('app.org_id', true)`,
       withCheck: sql`org_id is null or org_id = current_setting('app.org_id', true)`,
+    }),
+  ],
+);
+
+/**
+ * What somebody is watching (Doc 2 R8.7, plan step F5).
+ *
+ * ## One row per watch, and no notification rows at all
+ *
+ * There is deliberately no `notifications` table. A materialised row per watcher per event needs
+ * a fan-out job — one more thing that can fail silently — plus a dedup rule and a second copy of
+ * what `events` already holds. What is stored instead is **what you watch and when you last
+ * looked**, and the feed is a query over events since that timestamp.
+ *
+ * That also means a watch created today can show last month's history, because the events were
+ * never the missing part. A materialised design would have to backfill to achieve the same, and
+ * would look empty if somebody forgot.
+ *
+ * ## Keyed on the user, not the workspace
+ *
+ * A watch is a person's attention, not a workspace's policy. Two people in one organisation
+ * watching different skills is the normal case, and an org-keyed row would make one of them
+ * unsubscribe the other. `org_id` is absent for the same reason: there is nothing here that
+ * belongs to a tenant.
+ */
+export const skillWatches = pgTable(
+  "skill_watches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+
+    /** `skill` or `category` — one of `WATCH_SUBJECTS`. */
+    subjectType: text("subject_type").notNull(),
+    /** A skill id, or an `axis:value` category key. */
+    subjectId: text("subject_id").notNull(),
+
+    /**
+     * When this watcher last read the feed for this watch.
+     *
+     * The whole unread mechanism, in one column. Set to the watch's creation time on subscribe
+     * minus the backfill window, so a new watch opens with recent history rather than with
+     * nothing — a feed that is empty on the day you subscribe teaches people it does not work.
+     */
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /** One watch per person per thing. Pressing the button twice is not two subscriptions. */
+    uniqueIndex("skill_watches_uq").on(t.userId, t.subjectType, t.subjectId),
+    /** Every read: this person's watches. */
+    index("skill_watches_user_idx").on(t.userId),
+
+    /**
+     * Keyed on the user, so the policy is the user's own rows — and `app.org_id` is the wrong
+     * scope for it. There is no tenant here: a watch is a person's attention.
+     *
+     * Open to `app_runtime` and filtered by the caller, which is the honest shape when the
+     * identity RLS would need is a user rather than an organisation. Safe because of the column
+     * list: a user id, a subject, two timestamps. Every read goes through a function that already
+     * resolved the session.
+     */
+    pgPolicy("all_access", {
+      for: "all",
+      to: "app_runtime",
+      using: sql`true`,
+      withCheck: sql`true`,
     }),
   ],
 );

@@ -7,6 +7,7 @@ import { ActivationCostBadge } from "@/components/registry/activation-cost";
 import { CapabilitySurface } from "@/components/registry/capability-surface";
 import { LifecycleBadge, LifecycleNotice } from "@/components/registry/lifecycle-notice";
 import { ReportForms } from "@/components/registry/report-forms";
+import { WatchButton } from "@/components/registry/watch-button";
 import { Explain, ExplainLink } from "@/components/registry/explain";
 import { ConsistencyCard } from "@/components/registry/consistency-card";
 import { ImpactCard } from "@/components/registry/impact-card";
@@ -27,6 +28,7 @@ import { minedCategories } from "@/server/analytics/archetype-read";
 import { outcomeCollectionStart, outcomesForSkill } from "@/server/analytics/outcomes";
 import { relationsFor } from "@/server/analytics/relations";
 import { endorseAffordance, endorsementsFor } from "@/server/curation/maintainers";
+import { isWatching } from "@/server/notifications/watch";
 import { withdrawalNotice } from "@/server/compliance/takedown";
 import { getSession } from "@/server/dal/session";
 import { getSkillBySlug } from "@/server/dal/skills";
@@ -73,7 +75,8 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
    */
   const session = await getSession();
 
-  const [outcomes, collectionStart, relations, endorsement, affordance] = await Promise.all([
+  const [outcomes, collectionStart, relations, endorsement, affordance, watching] =
+    await Promise.all([
     outcomesForSkill(skill.id),
     outcomeCollectionStart(),
     /*
@@ -96,6 +99,12 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
      * re-checks anyway because a control is a hint and a POST is the operation.
      */
     endorseAffordance(session?.user.id ?? null, skill.id),
+    /*
+     * R8.7's watch state. Resolved on the server like every other affordance here, and false for
+     * an anonymous reader — the button is absent rather than disabled, because a control that
+     * exists only to say you cannot use it is worse than the space it takes.
+     */
+    session ? isWatching(session.user.id, "skill", skill.id) : Promise.resolve(false),
   ]);
 
   const mined = await minedCategories();
@@ -458,6 +467,22 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
         A prominent button here would fill a curator's queue with idle clicks; a reader who
         has actually found a credential in a skill will look for this.
       */}
+      {/*
+        Beside the report forms, at the foot of the page.
+
+        Both are things a reader decides *after* reading — following it, or telling us something
+        is wrong — and both are deliberately quiet. A prominent Watch button at the top would
+        compete with the download, which is what most people came for.
+      */}
+      {session ? (
+        <div className="flex items-center gap-3">
+          <WatchButton skillId={skill.id} initiallyWatching={watching} />
+          <span className="text-muted-foreground text-xs">
+            New versions, quarantines and licence changes appear on your dashboard.
+          </span>
+        </div>
+      ) : null}
+
       <ReportForms slug={skill.slug} canTakedown={skill.status !== "withdrawn"} />
     </div>
   );

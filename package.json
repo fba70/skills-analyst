@@ -81,6 +81,7 @@
     "verify:demand": "tsx --conditions=react-server scripts/verify-demand.mts",
     "verify:freshness": "tsx --conditions=react-server scripts/verify-freshness.mts",
     "verify:impact": "tsx --conditions=react-server scripts/verify-impact.mts",
+    "verify:watch": "tsx --conditions=react-server scripts/verify-watch.mts",
     "verify:tree": "tsx scripts/verify-tree.mts",
     "verify:tokens": "tsx --conditions=react-server scripts/verify-tokens.mts",
     "verify:lifecycle": "tsx --conditions=react-server scripts/verify-lifecycle.mts",
