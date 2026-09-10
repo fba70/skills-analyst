@@ -45,6 +45,8 @@ export type RateLimitSettings = {
   mcpPaid: ScopeLimits;
   /** Agent-side skill creation over MCP (RM.3). Tighter than any human write scope. */
   mcpWrite: ScopeLimits;
+  /** The anonymous public JSON API (R8.6, plan step F4). Reads, so loose — see the default. */
+  publicApi: ScopeLimits;
   /**
    * Anonymous **writes**: flagging a skill, submitting a repository, filing a notice
    * (R2.5, R1.8, R7.5).
@@ -93,6 +95,16 @@ export const RATE_LIMIT_DEFAULTS: RateLimitSettings = {
    * scope wants the opposite bias, exactly as `publicWrite` does against the MCP reads.
    */
   mcpWrite: { enabled: true, perMinute: 3, perHour: 10 },
+  /**
+   * The public JSON API (R8.6). Generous, and keyed on an address rather than an identity.
+   *
+   * It exists so people stop scraping HTML, so it has to be *more* pleasant than scraping or it
+   * will not be used — a limit tight enough to be annoying just sends the traffic back to the
+   * pages it was meant to relieve. Fails open like the other read scopes: the data behind it is
+   * public and read-only, and taking the registry dark because a counter table blinked is worse
+   * than serving a burst.
+   */
+  publicApi: { enabled: true, perMinute: 120, perHour: 3_000 },
 };
 
 const KEY = "rate-limits";
@@ -113,6 +125,7 @@ export async function getRateLimits(): Promise<RateLimitSettings> {
     mcpPaid: { ...RATE_LIMIT_DEFAULTS.mcpPaid, ...(stored.mcpPaid ?? {}) },
     publicWrite: { ...RATE_LIMIT_DEFAULTS.publicWrite, ...(stored.publicWrite ?? {}) },
     mcpWrite: { ...RATE_LIMIT_DEFAULTS.mcpWrite, ...(stored.mcpWrite ?? {}) },
+    publicApi: { ...RATE_LIMIT_DEFAULTS.publicApi, ...(stored.publicApi ?? {}) },
   };
 }
 
@@ -161,6 +174,7 @@ export async function setRateLimits(
     mcpPaid: sanitiseScope(next.mcpPaid),
     publicWrite: sanitiseScope(next.publicWrite),
     mcpWrite: sanitiseScope(next.mcpWrite),
+    publicApi: sanitiseScope(next.publicApi),
   };
 
   await db.transaction(async (tx) => {

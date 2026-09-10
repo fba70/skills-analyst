@@ -123,6 +123,7 @@ await cleanupBuckets();
       mcpPaid: RATE_LIMIT_DEFAULTS.mcpPaid,
       publicWrite: RATE_LIMIT_DEFAULTS.publicWrite,
       mcpWrite: RATE_LIMIT_DEFAULTS.mcpWrite,
+      publicApi: RATE_LIMIT_DEFAULTS.publicApi,
     },
     { userId: actor.id, email: actor.email },
   );
@@ -204,6 +205,7 @@ await cleanupBuckets();
       mcpPaid: { enabled: true, perMinute: 10, perHour: 5 },
       publicWrite: RATE_LIMIT_DEFAULTS.publicWrite,
       mcpWrite: RATE_LIMIT_DEFAULTS.mcpWrite,
+      publicApi: RATE_LIMIT_DEFAULTS.publicApi,
     },
     { userId: actor.id, email: actor.email },
   );
@@ -227,6 +229,7 @@ await cleanupBuckets();
       mcpPaid: RATE_LIMIT_DEFAULTS.mcpPaid,
       publicWrite: RATE_LIMIT_DEFAULTS.publicWrite,
       mcpWrite: RATE_LIMIT_DEFAULTS.mcpWrite,
+      publicApi: RATE_LIMIT_DEFAULTS.publicApi,
     },
     { userId: actor.id, email: actor.email },
   );

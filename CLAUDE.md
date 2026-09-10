@@ -2169,6 +2169,75 @@ would be enforcing an untested mean.
 > draft.
 
 
+### The public API serves metadata, and that is what makes bulk access lawful (R8.6 / R3.7 / R8.3, plan step F4)
+
+`src/lib/api.ts` · `src/server/api/public.ts` · `/api/v1/…` · `pnpm verify:api` (23 checks, free)
+
+Three requirements, one surface, no migration:
+
+| | | |
+|---|---|---|
+| **R8.6** | `GET /api/v1/skills` and `/skills/{slug}` | the read half of what MCP already serves, over HTTP |
+| **R3.7** | `GET /api/v1/dataset` | the researcher offer Doc 1 makes, cursor-paged |
+| **R8.3** | `GET /api/v1/skills/{slug}/resolve` | version pinning over the content hash |
+
+Every shape calls the same `src/server` function a page calls — RM.2's rule, written for MCP and
+holding verbatim here. A lighter reimplementation would be a second definition of *servable*, and
+the second drifts on licence gating and takedowns, where drift is a legal problem rather than a
+bug.
+
+#### Metadata, never bodies — the constraint is the feature
+
+96% of this corpus is `attribution_required` and some is `metadata_only`, which is precisely the
+posture meaning *we may say it exists, name it, describe it and link to it, and may not hand over
+the bytes*. **That is the exact shape of a metadata API.**
+
+So a bulk endpoint with bodies would be lawful for none of the corpus, and one without them is
+lawful for all of it — including the skills nobody may download. The download route keeps its
+451s and stays the only path to bytes. `verify:api` reads real records back and asserts no field
+is long enough to be a body, and scans every route for any route to a bundle at all.
+
+**The verdicts come back as counts, not findings.** A finding can name the line of somebody's
+skill where a credential sits; a bulk-readable index of *where the secrets are* is a worse thing
+to publish than the score it produced. The page shows them to a reader who came for one skill.
+
+#### Two licences, because there are two
+
+The **skills** are their authors' — carried per record as `licence` and `redistribution`. The
+**derived analysis** is ours: verdicts, quality scores, categories, archetypes. Doc 1 licenses
+archetype snapshots CC BY-SA and the same terms are the honest offer for the rest.
+
+Both are stamped on every envelope, which is not decoration: a researcher publishing a paper needs
+to know which half they may redistribute, and a single `licence` field would be wrong for one of
+them whichever value it held.
+
+#### Smaller decisions
+
+- **A withdrawn skill is 410, not 404.** R8.4 wants citations to keep resolving, and *"it was here
+  and it is not any more"* is a fact a reader can act on where a silent 404 is not.
+- **A near-duplicate resolves to its canonical entry** and says which name was asked for. An agent
+  requesting one of sixty copies should get the one the registry maintains.
+- **The dataset is cursor-paged on the slug**, not offset-paged. An offset silently skips or
+  repeats rows when the corpus grows underneath a long export, and this corpus grows on a cron.
+- **The read limiter is deliberately generous** — 120/min, 3,000/hr — because the API exists so
+  people stop scraping pages, and a limit tight enough to annoy sends that traffic straight back
+  to the pages it was meant to relieve. Fails open, like the other read scopes.
+- **Reads are cacheable for five minutes**, short enough that a takedown propagates within the
+  hour, which is the one update that must not linger.
+
+> **The type checker refused a second paging vocabulary, and it was right.** The API first offered
+> 10/25/50/100 against the DAL's narrow `5 | 10 | 25`. Matching the registry is not a workaround:
+> the API *is* the read half of the registry, so the two behaviours are one behaviour — and a wider
+> list would have been silently clamped while the response reported a `pageSize` it had not used.
+> `verify:api` asserts the two lists are equal so the copy cannot drift. Bulk has its own endpoint,
+> which is what `DATASET_PAGE` is for.
+
+> **The DAL cannot load in a plain node process**, because it resolves a session through
+> `next/navigation` — the reason `export.ts` was split into `buildBundle` and `exportSkill`. Its
+> imports here are lazy, so the module still loads in a script and **`apiDataset` — pure SQL, and
+> the endpoint where a body leak would be worst — stays testable**. The three DAL-backed shapes
+> skip with that reason named, covered by the source scan rather than left silently unchecked.
+
 ### An agent can create a skill, and cannot publish one (RM.3, plan step F3) — Pro
 
 `src/server/mcp/create.ts` · `create_skill` on `/api/mcp` · `pnpm verify:mcp-create` (20 checks, free)
@@ -5517,6 +5586,7 @@ pnpm verify:shared                       # RK.4 a convention is synced, never su
 pnpm verify:mcp-usage                    # RC.3 the agent surface is accounted for; free
 pnpm verify:billing                      # RC.4 a late delivery cannot downgrade a customer; free
 pnpm verify:mcp-create                   # RM.3 an agent creates a draft, never publishes; free
+pnpm verify:api                          # R8.6/R3.7/R8.3 metadata, never bodies; free
 pnpm verify:improve                      # R5.6 a fork carries its licence; free, no network
 pnpm verify:scope                        # RW.10/RW.11 scope and disclosure; free, no network
 pnpm scope --status                      # coverage first, then the finding; free
