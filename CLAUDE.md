@@ -15,6 +15,8 @@ Specs are the source of truth for requirements, in this order (local only, gitig
 - `specs/core/02-requirements-spec.md` — functional requirements (R1.x … R7.x, RC.x)
 - `specs/core/03-implementation-spec.md` — architecture and platform decisions
 - `specs/core/04-source-ingestion-analysis.md` — sources, licence chain, crawl waves
+- `specs/core/06-workbench-and-km-extensions.md` — the block model and the workbench (RW.x, RK.x) — built
+- `specs/core/07-parameters-tools-and-the-intelligent-designer.md` — parameters, tools, the designer (RD.x) — in progress
 
 Read the relevant spec before designing anything. If the code and a spec disagree,
 that is a bug in one of them — say which.
@@ -236,13 +238,13 @@ where these numbers came from.
 | Taxonomy | **46,489 labelled**, 103,588 assignments · 163 held below the floor · 1,327 unlabelled |
 | Validation | 443,222 verdicts, all current |
 | Archetypes | 13 categories at **v9 (review v10)**, miner **3.0.0** · 91 earlier rows kept as history · public at `/archetypes` |
-| Blocks | **1,620,316 typed spans** at extractor 2.0.0 across 50,870 of 50,965 documents · now mined and published |
+| Blocks | **1,620,316 typed spans** at extractor 2.0.0 across 50,870 of 50,965 documents · now mined and published · **extractor is 2.1.0 since 2026-09-10** (tool references) and the re-extract has not run — every stored fingerprint reads as stale until `pnpm structures --extract 500 --drain` |
 | Embeddings | 47,854 of 47,855 canonical skills · pgvector 0.8.6, HNSW cosine, 1,536 dimensions · $0.08 |
 | Lifecycle | **new (A4)** — derived second axis; battle-tested unreachable by construction |
 | Entitlements | **new (A5)** — three plans; the trust surfaces cannot be gated at all |
 | Builder | live at `/build` · **a draft is typed blocks and the body is their render (C1)** · block editing, revisions and a no-model scaffold path (C1b, R4.6, R4.7) · **Interview mode, five techniques, typed candidates accepted or rejected (C2, RW.4, R5.1, R5.4)** · block-level archetype deviations (R4.3) |
 | MCP | live at `/api/mcp` · six tools, token-gated, rate-limit scope now follows the plan |
-| Schema | 42 migrations (0000–0040) · 46 tables · 41 RLS policies |
+| Schema | 51 migrations (0000–0050) · `pnpm db:audit` has the live table count |
 | Spend, cumulative | **$31.70** — $31.52 taxonomy, $0.10 builder, $0.08 embeddings. All metered. |
 
 **Ingestion, classification and every backfill run from a local terminal**, not from the
@@ -2168,6 +2170,116 @@ would be enforcing an untested mean.
 > missing", because an archetype with no blocks would otherwise read as a fully conformant
 > draft.
 
+
+### A skill's own parameters, and the rule that stays prose until somebody confirms it (Doc 7 RD.1–RD.3, step P4)
+
+`src/lib/parameters.ts` · `src/server/builder/parameters.ts` · `components/builder/parameters-panel.tsx`
+migration 0050 · `pnpm verify:parameters` (61 checks, free) · Settings → Models → **Parameters**
+
+`decision-rule` is the strongest discriminating block in the corpus — 10 of 13 categories at +22 —
+and the designer knew nothing about what a rule branched on. Now a draft can declare its
+**parameters** (name, kind, values), a decision-rule block can carry a **structure** beside its
+prose (`conditions → action`), and two things are derived from that: **coverage** of the case
+space and **consistency** between rules on the same parameter. Doc 7 §3 has the argument; this
+records what was decided while building it.
+
+#### The document stays the artefact, so everything renders to markdown
+
+No new frontmatter key, no rule engine, nothing the agent has to know about. The Parameters table
+reaches the body as an ordinary `glossary` block written through `setDraftBlocks`, so
+`skill_drafts.body` keeps its single writer — `verify:draft-blocks` stayed at 62/62 with the
+scan that asserts it. Structure → prose is a **deterministic render** (a table for two or more
+rules, a sentence for one; byte-stable across calls). Prose → structure is a model *candidate*
+the author confirms. An author who edits a rendered table detaches it: the block is marked
+*structure out of date* and never re-rendered underneath them — the same rule shared blocks hold.
+
+#### Two departures from the spec, both about where a candidate lives
+
+**Parameter and rule candidates are not interview candidates.** The directive said reuse the
+Interview accept path. An interview candidate is *a block to append*; a parameter candidate is a
+`draft_parameters` row with a `decision`, and a rule candidate is `draft_blocks.rule` with
+`confirmed: false` on the block it describes. Filing them in `interview_candidates` would have
+needed a third origin column and a fake session — the fake-source shape `skill_drafts` warns
+about. Same mechanics (pending → accepted or rejected, rejected kept), separate rows.
+
+**Confirming a rule writes `rule` and never `text`, directly.** Not through `setDraftBlocks`:
+the text does not change, so the body does not change, and a revision whose diff is empty is
+noise in the history. `verify:parameters` asserts those direct sets touch `rule` alone. Only a
+`decision-rule` block keeps a `rule`; retyping drops it.
+
+#### Coverage says which zero it is, and gates nothing
+
+`0 / 0` is not 0%. An `enum` with no declared values is **not measurable**, and the panel says so
+rather than showing an empty bar. An explicit *otherwise* row counts as covered — a skill may
+leave a case to judgment and say so. Uncovered cases are listed one by one with **"add a rule
+here"**, which inserts an empty structured rule and never pastes anybody's action. Nothing here
+reaches the publish gate: the suite scans `publish.ts` for any reference to parameters or coverage
+and finds none, and a draft's status stays `ready` when its coverage drops.
+
+Detection is one Flash-Lite call per decision-rule block, behind a button, metered as `builder`
+against the workspace cap; consistency is one call per pair of rules sharing a parameter, capped
+at `MAX_CONSISTENCY_PAIRS`. Model task `parameters`, default `gemini-2.5-flash-lite`, resolved
+once per invocation like every other task.
+
+> **This makes migration 0050 a hard dependency of the draft page.** `getDraftBlocks` selects
+> `rule`, so `/build/[id]`, `verify:shared` and `verify:interview` fail with `column "rule" does
+> not exist` until it is applied. Migration-before-code, loud rather than silent — the note 0029,
+> 0034, 0035 and 0043 each carry.
+
+### Tool references are counted before a vocabulary is written (Doc 7 RD.6 measurement, step P0)
+
+`src/lib/tool-refs.ts` · `src/server/analytics/tools-run.ts` · extractor **2.1.0** · migration 0050
+`pnpm structures --probe 400 --tools [--samples npx]` · `pnpm structures --tools` · `pnpm verify:tool-refs` (44 checks, free)
+
+Skills name `gh`, `kubectl`, `psql` everywhere and the registry can filter on none of them. Doc 7
+§4 says the tool vocabulary is **seeded from a corpus count, not from memory** — the way
+`SEED_REPOS` are verified against the GitHub API rather than typed from recollection — and this
+step is the count. Three sources, one confident: the first token of each command line in a shell
+fence; `allowed-tools` from Claude Code's frontmatter (`Bash(git:*)` names two tools); and inline
+code in prose, which **confirms** a tool the document invokes elsewhere and does not establish
+one on its own, because `` `SKILL.md` `` and `` `kubectl` `` are indistinguishable by shape.
+
+Stored on `skill_structures` as `tool_refs jsonb` (token → count), `allowed_tools`,
+`version_pins`. Candidate tokens, deliberately: a token no vocabulary names is a fact about the
+corpus and is counted as *unrecognised*, the way the unclassified block share is.
+
+#### The probe writes nothing, and it found three faults in three runs
+
+`pnpm structures --probe N --tools` runs the real extractor over a random sample of real bundles
+and prints the table, sorted by **distinct repositories** so a generator shipping eighteen skills
+that call one CLI cannot head it. It exists for the reason `structures --probe` did: a fixture
+proves a rule *can* fire, only real text shows what it fires on.
+
+> **First run: `bash` at 585 references across 131 skills, top of the table.** A block's text
+> runs from the opening fence to the closing one, and the normaliser strips leading backticks —
+> so the first "command" of every bash fence was its language tag. **Second run:** `eof`, `import`
+> and `def` in the code column (heredoc bodies from `python3 - <<EOF`), and `post`, `get`, `const`,
+> `await` in the prose column (snippets in backticks read as commands). **Third run:** the top
+> version pins were `workflow 1` and `pattern 3` — numbered headings — then `But 4` and `Read 2`.
+>
+> Each fix is a rule with the probe's number beside it, and `verify:tool-refs` reproduces the
+> naive reading first — asserts that the fence line *does* read as `bash`, that `EOF` *does* read
+> as a command — before asserting the detector declines. A fixture that no longer reproduces the
+> bug is a fixture that passes for the wrong reason.
+
+**What it measured** (400 bundles): 53% of skills reference a tool, 9% declare `allowed-tools`,
+47% carry a decision rule at 3.2 per skill. Per category, from stored block counts over the whole
+labelled corpus, **38–55% of skills carry a decision rule** — Part A's input exists in half of
+every category. `structures --tools` reads that half at the newest extractor version that *has*
+rows and says which, because a bumped version must not look like data loss.
+
+Two stated limits, carried into P1: a bare three-word command alone in backticks (`gh pr
+create`) does not count without the tool in a fence or `allowed-tools` — an English phrase in
+backticks is argv-shaped too, so a command needs an *argument* to stand alone; and version pins
+are the roughest detector, read from prose only, mid-sentence, capitalised or confirmed. P5 reads
+their noise before building on them.
+
+> **The extractor is 2.1.0 and the re-extract has not run.** No block rule changed, so every
+> stored span stays valid — but the version string is the only selector a re-extract has, and
+> the three new columns are empty on every 2.0.0 row. Until `pnpm structures --extract 500
+> --drain` finishes (~2.5 hours, free, in your own shell), `db:audit`, `archetypes --mine-all`,
+> `verify:blocks` and `verify:tokens` all report the corpus as unextracted, and they are right
+> to. The stored `--tools` table is empty until then; the probe answers now.
 
 ### Expertise capture: the value is the denominator (RK.8, plan step E7) — Team
 
@@ -5719,6 +5831,8 @@ pnpm validate --consistency --limit 10   # R2.3 audit — COSTS MONEY, capped at
 pnpm structures --extract 500        # structural fingerprints + blocks — free, no model
 pnpm structures --probe 250          # block detection, DRY: reads bundles, writes nothing
 pnpm structures --blocks             # stored block coverage (Doc 6 RW.1)
+pnpm structures --probe 400 --tools  # tool references and decision rules, DRY, from real bundles (Doc 7 P0)
+pnpm structures --tools              # the stored table, after the 2.1.0 re-extract
 pnpm archetypes --blocks             # does the block grain discriminate? (RW.2) — free
 pnpm blocks --library review         # read real fragments per block type (RW.3) — free
 pnpm blocks --library plan --type reference-pointer --wider
@@ -5755,6 +5869,8 @@ pnpm verify:mcp-create                   # RM.3 an agent creates a draft, never 
 pnpm verify:api                          # R8.6/R3.7/R8.3 metadata, never bodies; free
 pnpm verify:watch                        # R8.7 the feed resolves versions to skills; free
 pnpm verify:campaigns                    # RK.8 progress is derived, never stored; free
+pnpm verify:parameters                   # RD.1–RD.3 parameters, rules, coverage that says which zero; free
+pnpm verify:tool-refs                    # RD.6 tool tokens: the naive reading fails first; free
 pnpm verify:improve                      # R5.6 a fork carries its licence; free, no network
 pnpm verify:scope                        # RW.10/RW.11 scope and disclosure; free, no network
 pnpm scope --status                      # coverage first, then the finding; free

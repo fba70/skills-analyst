@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { BlockType } from "@/lib/block-types";
+import { extractToolRefs, versionPinsOf, type VersionPin } from "@/lib/tool-refs";
 import type { BundleFile } from "@/server/storage";
 
 import { blockCountsOf, blockTypesOf, extractBlocks, type SkillBlock } from "./blocks";
@@ -32,8 +33,13 @@ import { blockCountsOf, blockTypesOf, extractBlocks, type SkillBlock } from "./b
  *   (`steps` at 67% strong against 55% weak) while what goes *inside* a section had never
  *   been measured. Major, not minor: the selector for a re-extract campaign is this string,
  *   and every stored fingerprint needs the new columns filled.
+ * 2.1.0 — **tool references and version pins** (Doc 7 RD.6, step P0). Which commands a skill
+ *   tells an agent to run, from shell fences, confirmed inline code and `allowed-tools`; and
+ *   which tool versions its prose pins. No block rule changed, so every stored span stays
+ *   valid — but the three new columns are empty on every 2.0.0 row, and the version string is
+ *   the only selector a re-extract has, so it moves. Minor, because the segmentation did not.
  */
-export const EXTRACTOR_VERSION = "2.0.0";
+export const EXTRACTOR_VERSION = "2.1.0";
 
 /**
  * The closed set of section roles.
@@ -226,6 +232,16 @@ export type StructureFingerprint = {
   frontmatterKeys: string[];
   descriptionLength: number;
   descriptionShape: DescriptionShape;
+  /**
+   * `{ gh: 3, git: 5, "scripts/run.py": 1 }` — commands the body tells an agent to run, counted
+   * across shell fences, confirmed inline code and `allowed-tools` (Doc 7 RD.6). Candidate
+   * tokens, not vocabulary entries: the vocabulary is written *from* this table.
+   */
+  toolRefs: Record<string, number>;
+  /** `allowed-tools` from the frontmatter, kept apart so RD.8 can compare it to the prose. */
+  allowedTools: string[];
+  /** `next@15`, `python@3.11` — tools the prose names with a version (Doc 7 RD.10). */
+  versionPins: VersionPin[];
   /** Heading strings no rule recognised — the only input the LLM pass needs. */
   unresolvedHeadings: string[];
 };
@@ -398,6 +414,20 @@ export function extractStructure(input: ExtractInput): StructureFingerprint {
     bundlePaths: new Set(files.map((f) => f.path.replace(/^\.\//, ""))),
   });
 
+  /**
+   * Tool references read the blocks' own segmentation rather than re-walking the body, so a
+   * fence begins where the block detector says it does and nowhere else. Same reason blocks
+   * are extracted here against this exact heading tree.
+   */
+  const tools = extractToolRefs({
+    frontmatter,
+    segments: blocks.map((block) => ({
+      kind: block.features.kind === "code" ? ("code" as const) : ("prose" as const),
+      language: block.features.codeLanguage,
+      text: body.slice(block.startChar, block.endChar),
+    })),
+  });
+
   return {
     extractorVersion: EXTRACTOR_VERSION,
     headings,
@@ -429,6 +459,16 @@ export function extractStructure(input: ExtractInput): StructureFingerprint {
     frontmatterKeys: Object.keys(frontmatter).sort(),
     descriptionLength: description.length,
     descriptionShape: describeDescription(description),
+    toolRefs: tools.counts,
+    allowedTools: tools.allowedTools,
+    // Prose only, and a bare `Node 18` counts only when `node` is a tool this document invokes.
+    versionPins: versionPinsOf(
+      blocks
+        .filter((block) => block.features.kind !== "code")
+        .map((block) => body.slice(block.startChar, block.endChar))
+        .join("\n"),
+      new Set(Object.keys(tools.counts)),
+    ),
     unresolvedHeadings: [
       ...new Set(headings.filter((h) => h.role === null).map((h) => h.text)),
     ],

@@ -98,6 +98,28 @@ export const skillStructures = pgTable(
     /** `{ startsWithVerb, hasUseWhen, hasTriggerCue, sentenceCount, ... }` (R2.8). */
     descriptionShape: jsonb("description_shape").notNull().default(sql`'{}'::jsonb`),
 
+    // ---- Tool references (Doc 7 RD.6, extractor 2.1.0) -----------------------
+    /**
+     * `{ gh: 3, git: 5, "scripts/run.py": 1 }` — commands the body tells an agent to run.
+     *
+     * Candidate tokens with counts, **not** vocabulary entries: Doc 7 §4 says the tool
+     * vocabulary is seeded from this table rather than typed from memory, so the column has
+     * to hold whatever the corpus actually says. jsonb like `blockCounts`, for the same
+     * reason — the question asked of it is "how often does this token appear corpus-wide",
+     * which is one `jsonb_each` over the rows at the current extractor version.
+     */
+    toolRefs: jsonb("tool_refs")
+      .$type<Record<string, number>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    /** `allowed-tools` from the frontmatter, kept apart so RD.8 can compare it to the prose. */
+    allowedTools: text("allowed_tools").array().notNull().default(sql`'{}'::text[]`),
+    /** `[{ tool: "next", version: "15" }]` — what the prose pins, for RD.10's drift check. */
+    versionPins: jsonb("version_pins")
+      .$type<Array<{ tool: string; version: string }>>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+
     // ---- Blocks (Doc 6 RW.1) -----------------------------------------------
     /**
      * Which marker file the body and every block span index into.

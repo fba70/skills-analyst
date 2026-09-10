@@ -2,6 +2,7 @@ import "server-only";
 
 import { BLOCK_TYPES, type BlockKind, type BlockType } from "@/lib/block-types";
 import { estimateTokens as estimateTokensFor } from "@/lib/tokens";
+import { SHELL_FENCE_LANGS } from "@/lib/tool-refs";
 
 import type { SectionRole } from "./structure";
 
@@ -469,9 +470,8 @@ const DEFINITION_ITEM = /^\s*(?:[-*+]\s+)?\*\*[^*\n]{1,60}\*\*\s*[-—–:]\s*\S
 const TERM_TABLE_HEADER = /^\s*\|\s*\**\s*(term|name|word|concept|field|key)s?\b/i;
 const TERM_TABLE_SECOND = /\b(meaning|definition|description|what it (is|does)|explanation)\b/i;
 
-const SHELL_LANGS = new Set([
-  "bash", "sh", "zsh", "shell", "console", "terminal", "cmd", "bat", "powershell", "ps1",
-]);
+/** One list with `tool-refs.ts`, so the shell-code rule and the tool counter agree on a fence. */
+const SHELL_LANGS = SHELL_FENCE_LANGS;
 const CLI_RUNNER =
   /^\s*(?:\$\s*|>\s*)?(npm|pnpm|npx|yarn|bun|bunx|node|deno|python3?|pip3?|uv|uvx|ruby|gem|go|cargo|rustc|make|just|task|curl|wget|git|gh|docker|docker-compose|podman|kubectl|helm|terraform|tofu|ansible|aws|gcloud|az|vercel|wrangler|psql|mysql|sqlite3|redis-cli|jq|yq|sed|awk|grep|rg|fd|find|tar|zip|unzip|chmod|chown|mkdir|rsync|ssh|scp|systemctl|brew|apt|apt-get|yum|dnf|pacman|\.\/[\w.-]+)\b/m;
 const SCRIPT_INVOCATION =

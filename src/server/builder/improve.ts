@@ -418,6 +418,9 @@ export async function offloadBlockToReference(
           depth: block.depth,
           type: block.type,
           text: block.text,
+          rule: block.rule ?? null,
+          sharedBlockId: block.sharedBlockId ?? null,
+          sharedBlockVersion: block.sharedBlockVersion ?? null,
         },
   );
 

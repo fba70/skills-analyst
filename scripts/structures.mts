@@ -15,6 +15,9 @@ import { categoryEvidence, sourceDiversity, templateClusters } from "../src/serv
  *   pnpm structures --probe 250       # block detection, DRY: reads bundles, writes nothing
  *   pnpm structures --probe 250 --samples guardrail   # read real matches of one type
  *   pnpm structures --blocks          # stored block coverage (Doc 6 RW.1)
+ *   pnpm structures --tools           # stored tool references + decision rules per category (Doc 7 P0)
+ *   pnpm structures --probe 300 --tools   # the same table, DRY, from real bundles — the answer today
+ *   pnpm structures --probe 300 --tools --samples npx   # read the lines behind one token
  *   pnpm structures --templates       # structural monoculture: the number that gates mining
  *
  * `--force` is the re-extract campaign: bump EXTRACTOR_VERSION first if the *rules*
@@ -205,6 +208,128 @@ if (args.includes("--blocks")) {
         `  ${row.type.padEnd(18)} ${String(row.skills).padStart(6)}  ${pctOf.toFixed(1).padStart(5)}%  ${"█".repeat(Math.round(pctOf / 2.5))}`,
       );
     }
+  }
+  console.info("");
+  process.exit(0);
+}
+
+if (args.includes("--tools")) {
+  /**
+   * Tool references and decision rules — the measurement Doc 7 starts from (step P0).
+   *
+   * The vocabulary in `src/lib/tools.ts` is written *from* this table, not before it. With
+   * `--probe N` the table comes from real bundles read now and written nowhere; without it,
+   * from what extraction stored, which is empty until the 2.1.0 re-extract has run — and the
+   * coverage line above the table says so, because a short table over 3% of the corpus reads
+   * as a quiet corpus.
+   */
+  const { decisionRuleCoverage, probeTools, toolRefSummary } = await import(
+    "../src/server/analytics/tools-run"
+  );
+  const categoryIndex = args.indexOf("--category");
+  const category = categoryIndex >= 0 ? args[categoryIndex + 1] : undefined;
+  const sampleIndex = args.indexOf("--samples");
+  const sampleToken =
+    sampleIndex >= 0 && args[sampleIndex + 1] && !args[sampleIndex + 1].startsWith("--")
+      ? args[sampleIndex + 1]
+      : undefined;
+
+  if (args.includes("--probe")) {
+    const report = await probeTools({ limit: value("probe") ?? 300, category, sampleToken });
+    const pct = (n: number) => (report.versions > 0 ? ((n / report.versions) * 100).toFixed(0) : "0");
+    console.info(
+      `\nTool references, dry run over ${report.versions} bundles` +
+        (category ? ` in ${category}` : "") +
+        `  (extractor ${EXTRACTOR_VERSION} as in the source tree; nothing written)`,
+    );
+    console.info(`  failed to load           ${report.failed}`);
+    console.info(`  with any tool reference  ${report.withAnyTool}  (${pct(report.withAnyTool)}%)`);
+    console.info(`  with allowed-tools       ${report.withAllowedTools}  (${pct(report.withAllowedTools)}%)`);
+    console.info(
+      `  with a decision rule     ${report.decisionRules.skills}  (${pct(report.decisionRules.skills)}%)` +
+        `  · ${report.decisionRules.meanPerSkill} rules per skill among those`,
+    );
+
+    console.info(
+      "\nTokens  (repos · skills · refs · code / prose / frontmatter) — candidates, not a vocabulary;" +
+        " sorted by distinct repositories so a generator cannot head the table",
+    );
+    for (const row of report.tokens.slice(0, 60)) {
+      console.info(
+        `  ${row.token.padEnd(26)} ${String(row.sources).padStart(4)} ${String(row.skills).padStart(5)}  ${String(row.refs).padStart(6)}   ` +
+          `${String(row.code).padStart(5)} / ${String(row.prose).padStart(5)} / ${String(row.frontmatter).padStart(4)}`,
+      );
+    }
+    if (report.tokens.length > 60) console.info(`  … ${report.tokens.length - 60} more tokens`);
+    if (report.samples.length > 0) {
+      console.info(`\nSamples for ${sampleToken}  (source · excerpt; local diagnostic, never stored)`);
+      for (const sample of report.samples) console.info(`  · ${sample}`);
+    }
+
+    if (report.pins.length > 0) {
+      console.info("\nVersion pins  (the roughest detector; read the noise before building on it)");
+      for (const pin of report.pins.slice(0, 30)) {
+        console.info(`  ${`${pin.tool} ${pin.version}`.padEnd(30)} ${String(pin.skills).padStart(5)}`);
+      }
+    }
+    console.info("");
+    process.exit(0);
+  }
+
+  /*
+   * The columns arrive with a migration and the version bump arrives with the code, so there is
+   * a window where this runs against a table that cannot answer. Say so and carry on to the
+   * decision-rule half, which needs neither.
+   */
+  const summary = await toolRefSummary().catch((error: unknown) => {
+    const cause = (error as { cause?: { code?: string } }).cause;
+    if (cause?.code === "42703") return null;
+    throw error;
+  });
+  if (!summary) {
+    console.info(
+      `\nTool references, stored — columns absent: the 2.1.0 migration is not applied yet` +
+        ` (pnpm db:generate, read the SQL, pnpm db:migrate). \`--probe 300 --tools\` answers now.`,
+    );
+  } else {
+    const covered = summary.eligible > 0 ? (summary.fingerprinted / summary.eligible) * 100 : 0;
+    console.info(`\nTool references, stored (extractor ${summary.extractorVersion})`);
+    console.info(
+      `  fingerprinted  ${summary.fingerprinted} of ${summary.eligible} (${covered.toFixed(1)}%)` +
+        (covered < 90
+          ? "  — PARTIAL: read the table as a sample. `pnpm structures --extract 500 --drain` fills it," +
+            " or `--probe 300 --tools` answers now from real bundles."
+          : ""),
+    );
+  }
+  if (summary && summary.fingerprinted > 0) {
+    console.info(`  with any tool reference  ${summary.withAnyTool}`);
+    console.info(`  with allowed-tools       ${summary.withAllowedTools}`);
+    console.info("\nTokens  (skills · refs)");
+    for (const row of summary.tokens) {
+      console.info(`  ${row.token.padEnd(26)} ${String(row.skills).padStart(6)}  ${String(row.refs).padStart(7)}`);
+    }
+    if (summary.pins.length > 0) {
+      console.info("\nVersion pins  (skills)");
+      for (const pin of summary.pins) {
+        console.info(`  ${`${pin.tool} ${pin.version}`.padEnd(30)} ${String(pin.skills).padStart(6)}`);
+      }
+    }
+  }
+
+  const rules = await decisionRuleCoverage();
+  console.info(
+    `\nDecision rules per function category` +
+      (rules.extractorVersion
+        ? `  (block counts at extractor ${rules.extractorVersion}${rules.fallback ? " — the newest with rows; nothing is extracted at " + EXTRACTOR_VERSION + " yet" : ""})`
+        : "  (no fingerprints stored)"),
+  );
+  for (const row of rules.categories) {
+    const share = row.skills > 0 ? (row.with_rules / row.skills) * 100 : 0;
+    console.info(
+      `  ${row.category.padEnd(20)} ${String(row.skills).padStart(6)} skills  ${String(row.with_rules).padStart(6)} with a rule  ` +
+        `${share.toFixed(0).padStart(3)}%  ${String(row.mean_rules).padStart(4)} per skill among those`,
+    );
   }
   console.info("");
   process.exit(0);

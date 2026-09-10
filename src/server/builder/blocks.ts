@@ -16,6 +16,7 @@ import {
   type DraftBlockInput,
   type RevisionReason,
 } from "@/lib/draft-blocks";
+import { isBlockRule, type BlockRule } from "@/lib/parameters";
 import { headingSpans } from "@/server/analytics/blocks";
 import { extractStructure } from "@/server/analytics/structure";
 import { withExplicitOrgScope } from "@/server/dal/scope";
@@ -147,6 +148,8 @@ export async function getDraftBlocks(draftId: string, orgId: string): Promise<Dr
       text: row.text,
       sharedBlockId: row.sharedBlockId,
       sharedBlockVersion: row.sharedBlockVersion,
+      /* Validated on the way out: a row hand-edited into a bad shape reads as prose, not as a crash. */
+      rule: isBlockRule(row.rule) ? row.rule : null,
     }));
   });
 }
@@ -254,6 +257,8 @@ export async function setDraftBlocks(
           /* Provenance travels with the row; a heading is never a transclusion. */
           sharedBlockId: block.form === "heading" ? null : (block.sharedBlockId ?? null),
           sharedBlockVersion: block.form === "heading" ? null : (block.sharedBlockVersion ?? null),
+          /* And so does structure. A heading has none; a decision rule keeps what the author confirmed. */
+          rule: block.form === "heading" ? null : block.rule,
         })),
       );
     }
@@ -280,6 +285,8 @@ export async function setDraftBlocks(
       depth: block.depth,
       type: block.type,
       text: block.text,
+      /* In the snapshot so a restore brings the structure back with the sentence. Ignored by the diff. */
+      rule: block.rule,
     }));
 
     /*
@@ -442,6 +449,7 @@ export async function restoreDraftRevision(
       depth: block.depth,
       type: block.type,
       text: block.text,
+      rule: isBlockRule(block.rule) ? block.rule : null,
     })),
     { reason: "restored", note: `restored from revision ${revision}`, createdBy },
   );
@@ -455,6 +463,7 @@ type NormalisedBlock = {
   text: string;
   sharedBlockId: string | null;
   sharedBlockVersion: number | null;
+  rule: BlockRule | null;
 };
 
 function normalise(block: DraftBlockInput): NormalisedBlock {
@@ -470,5 +479,11 @@ function normalise(block: DraftBlockInput): NormalisedBlock {
     text,
     sharedBlockId: block.sharedBlockId ?? null,
     sharedBlockVersion: block.sharedBlockVersion ?? null,
+    /*
+     * Only a decision rule carries structure. Retyping a block to anything else drops it, which
+     * is the author saying this passage is not a rule — and a guardrail wearing a decision table
+     * would be counted in coverage it has no business in.
+     */
+    rule: type === "decision-rule" && isBlockRule(block.rule) ? block.rule : null,
   };
 }

@@ -9,6 +9,7 @@ import { DistillPanel } from "@/components/builder/distill-panel";
 import { Interview } from "@/components/builder/interview";
 import { MatrixPanel } from "@/components/builder/matrix-panel";
 import { OptimiserPanel } from "@/components/builder/optimiser-panel";
+import { ParametersPanel } from "@/components/builder/parameters-panel";
 import { TriggerLab } from "@/components/builder/trigger-lab";
 import { RevisionHistory } from "@/components/builder/revision-history";
 import { DraftActions } from "@/components/builder/draft-actions";
@@ -17,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getDraftBlocks, listDraftRevisions } from "@/server/builder/blocks";
+import { coverageFor } from "@/server/builder/parameters";
 import { contentHashOf, evalParentFor, evalStates } from "@/server/evals/store";
 import { getSession, listSessions } from "@/server/interview/session";
 import { blockDeviations } from "@/server/builder/deviation";
@@ -118,6 +120,13 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         return open ? getSession(open.id, orgId) : null;
       })()
     : null;
+
+  /*
+   * Parameters, rule states and coverage (Doc 7 RD.1–RD.3). Derived on read, like the deviation
+   * marks: a stored coverage figure would go on describing rules the author has since edited.
+   * Free — arithmetic over rows already fetched for the editor.
+   */
+  const designer = orgId ? await coverageFor(draft.id, orgId) : null;
 
   return (
     <div className="grid min-w-0 gap-6">
@@ -244,6 +253,22 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
           </CardContent>
         </Card>
       )}
+
+      {/*
+        Directly under the editor, because it is about the document's own structure rather than a
+        verdict on it. Validation and evals below answer "may this ship" and "does this work";
+        this answers "is the decision written down completely", which is the author's question
+        while they are still writing.
+      */}
+      {designer && blocks.length > 0 ? (
+        <ParametersPanel
+          draftId={draft.id}
+          parameters={designer.parameters}
+          rules={designer.rules}
+          coverage={designer.coverage}
+          disabled={draft.status === "generating"}
+        />
+      ) : null}
 
       {draft.validation ? (
         <Card>

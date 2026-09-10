@@ -123,6 +123,13 @@ export function BlockEditor({
           depth: block.depth,
           type: block.type,
           text: block.text,
+          /*
+           * The structure behind a decision rule travels with the save (Doc 7 RD.2). The
+           * editor never edits it; it carries it, so an author fixing a typo two blocks away
+           * does not silently lose a table's rows. If they edited the rendered text itself, the
+           * hash stops matching and the panel says the structure is out of date.
+           */
+          rule: block.rule ?? null,
         })),
       );
       if (!result.ok) {

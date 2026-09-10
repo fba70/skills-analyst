@@ -351,6 +351,13 @@
       "when": 1789022808137,
       "tag": "0049_flawless_runaways",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1789039563602,
+      "tag": "0050_zippy_snowbird",
+      "breakpoints": true
     }
   ]
 }

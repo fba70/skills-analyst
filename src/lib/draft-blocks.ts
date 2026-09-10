@@ -1,4 +1,5 @@
 import { BLOCK_TYPES, blockTypeLabel, type BlockType } from "./block-types";
+import type { BlockRule } from "./parameters";
 
 /**
  * A draft as a list of typed blocks (Doc 6 RW.3, plan step C1).
@@ -79,6 +80,12 @@ export type DraftBlock = {
   type: BlockType | null;
   /** The author's own markdown. For a heading, the label alone without its `#` marks. */
   text: string;
+  /**
+   * The structure behind a decision rule (Doc 7 RD.2). A `BlockRule` from `parameters.ts`, or
+   * null. Carried by every caller that rewrites the list, or a save from the editor would strip
+   * the structure off a rule the author never touched.
+   */
+  rule?: BlockRule | null;
 };
 
 /** What a caller supplies. `id` is optional so a new block does not have to invent one. */
@@ -88,6 +95,8 @@ export type DraftBlockInput = {
   depth?: number | null;
   type?: BlockType | null;
   text: string;
+  /** See `DraftBlock.rule`. Ignored on a heading. */
+  rule?: BlockRule | null;
   /**
    * The shared convention this block was pulled from (RK.4, plan step E6).
    *
@@ -276,6 +285,13 @@ export const REVISION_REASONS = [
   /** An organisation convention pulled in, or a pending update taken (RK.4, plan step E6). */
   "shared",
   "optimised",
+  /**
+   * Scattered conditionals made into one decision table, a rule row added for an uncovered case,
+   * or the Parameters table written or refreshed (Doc 7 RD.1–RD.3, plan step P4). Its own reason
+   * because each of those changes the document's *structure* on the author's behalf, and the
+   * history is where they would look to ask why three sentences became a table.
+   */
+  "parameters",
 ] as const;
 
 export type RevisionReason = (typeof REVISION_REASONS)[number];
@@ -289,4 +305,5 @@ export const REVISION_REASON_LABEL: Record<RevisionReason, string> = {
   distilled: "Distilled from a transcript",
   shared: "Shared convention added or updated",
   optimised: "Compressed by the optimiser",
+  parameters: "Parameters and decision rules",
 };

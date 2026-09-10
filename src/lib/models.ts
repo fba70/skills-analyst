@@ -34,6 +34,8 @@ export const MODEL_TASKS = [
   "interview",
   /** RW.5 Distill: one call per correction window over a transcript. */
   "distill",
+  /** Doc 7 RD.1–RD.3: read the structure out of a decision rule; judge two rules for conflict. */
+  "parameters",
   "evalAgent",
   "evalAgentB",
   "evalJudge",
@@ -75,6 +77,16 @@ export const MODEL_DEFAULTS: ModelSettings = {
    * sees every candidate before it reaches the draft.
    */
   distill: "google/gemini-2.5-flash-lite",
+  /**
+   * Parameters and decision rules (Doc 7 RD.1–RD.3) — one call per decision-rule block, and one
+   * per pair of rules that can both fire.
+   *
+   * The same shape as Distill: a short passage, a narrow question — *what does this branch on,
+   * and on which values* — and a structured answer the author confirms before it touches
+   * anything. Reading a structure out of a sentence is extraction, not writing, and the author
+   * sees every candidate.
+   */
+  parameters: "google/gemini-2.5-flash-lite",
   /**
    * The agent under test in a golden task (Doc 6 RW.6).
    *
@@ -136,6 +148,11 @@ export const MODEL_TASK_META: Record<ModelTask, { label: string; blurb: string }
     label: "Distill mode",
     blurb:
       "Reads one corrected exchange from a working session and states the durable rule behind it. Many short calls per transcript, most of which correctly return nothing.",
+  },
+  parameters: {
+    label: "Parameters and decision rules",
+    blurb:
+      "Reads what a decision rule branches on and proposes the parameter and its values; judges whether two rules that can both fire contradict each other. Short calls, on demand, every result confirmed by the author.",
   },
   evalAgent: {
     label: "Eval — the agent under test",

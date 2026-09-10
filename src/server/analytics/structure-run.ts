@@ -173,6 +173,9 @@ export async function extractStructures(
             frontmatterKeys: fingerprint.frontmatterKeys,
             descriptionLength: fingerprint.descriptionLength,
             descriptionShape: fingerprint.descriptionShape,
+            toolRefs: fingerprint.toolRefs,
+            allowedTools: fingerprint.allowedTools,
+            versionPins: fingerprint.versionPins,
           })
           // Supersede by upsert: a fingerprint is derived, so an old one carries no
           // history worth keeping — unlike a verdict, which is a judgement.
@@ -208,6 +211,9 @@ export async function extractStructures(
               frontmatterKeys: fingerprint.frontmatterKeys,
               descriptionLength: fingerprint.descriptionLength,
               descriptionShape: fingerprint.descriptionShape,
+              toolRefs: fingerprint.toolRefs,
+              allowedTools: fingerprint.allowedTools,
+              versionPins: fingerprint.versionPins,
               createdAt: new Date(),
             },
           });

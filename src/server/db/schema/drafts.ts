@@ -295,6 +295,21 @@ export const draftBlocks = pgTable(
     /** Which version of it was pulled. Behind the shared block's own version means an update waits. */
     sharedBlockVersion: integer("shared_block_version"),
 
+    /**
+     * The structure behind a `decision-rule` block (Doc 7 RD.2, plan step P4). A `BlockRule` from
+     * `src/lib/parameters.ts`: rows of conditions over the draft's parameters and an action in
+     * the author's words, plus the hash of the text those rows rendered to. Null for every block
+     * that is prose, which is nearly all of them.
+     *
+     * On the block it describes rather than in a second table, so the two cannot disagree about
+     * which passage the structure belongs to. **Never on `skill_blocks`**, which stores offsets
+     * and no content — a corpus skill's structure is re-derived, not stored.
+     *
+     * The text stays the author's. When it no longer hashes to `renderHash` the structure is
+     * *out of date* and is shown as such; nothing re-renders a sentence somebody edited.
+     */
+    rule: jsonb("rule"),
+
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -553,6 +568,84 @@ export const sharedBlocks = pgTable(
      */
     uniqueIndex("shared_blocks_name_uq").on(t.orgId, sql`lower(${t.name})`),
     index("shared_blocks_org_idx").on(t.orgId, t.retiredAt),
+
+    pgPolicy("org_scope", {
+      for: "all",
+      to: "app_runtime",
+      using: sql`org_id = current_setting('app.org_id', true)`,
+      withCheck: sql`org_id = current_setting('app.org_id', true)`,
+    }),
+  ],
+);
+
+/**
+ * A draft's declared parameters (Doc 7 RD.1, plan step P4).
+ *
+ * ## A taxonomy local to the skill
+ *
+ * `function` and `domain` are the platform's closed vocabularies; a parameter is the author's —
+ * `environment`, `severity`, `change size` — the named things this one skill's rules branch on.
+ * It has a kind, and for an enum the closed set of values, which is the denominator coverage is
+ * measured against. A parameter with kind `enum` and no values is refused: there would be nothing
+ * to measure, and *not measurable* is a different sentence from *0%*.
+ *
+ * ## Candidates live here too, with a decision
+ *
+ * A parameter the model read out of the draft's own decision rules arrives `detected` and
+ * `pending`; the author accepts, renames or rejects it. Declared ones are `accepted` on arrival.
+ * A rejected candidate is **kept**, for the reason a rejected interview candidate is: a source
+ * whose suggestions are always rejected is only prunable if the rejections exist.
+ *
+ * ## In the document as a table, through the one writer
+ *
+ * The accepted parameters render as a glossary table in the body. That render goes through
+ * `setDraftBlocks` as an ordinary block, never through a second render path — `skill_drafts.body`
+ * keeps its single writer, and `verify:draft-blocks` keeps asserting so.
+ *
+ * Org-scoped with no `IS NULL` escape, exactly as the draft itself: there is no such thing as a
+ * public draft, so there is no public parameter.
+ */
+export const draftParameters = pgTable(
+  "draft_parameters",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+
+    /** Denormalised for RLS, exactly as on `draft_blocks`. */
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+
+    draftId: uuid("draft_id")
+      .notNull()
+      .references(() => skillDrafts.id, { onDelete: "cascade" }),
+
+    /** What the rules call it. Unique per draft, case-folded. */
+    name: text("name").notNull(),
+    /** One of `PARAMETER_KINDS`. */
+    kind: text("kind").notNull(),
+    /** The closed set for an enum; `[]` for every other kind. */
+    values: jsonb("values").notNull().default(sql`'[]'::jsonb`),
+    unit: text("unit"),
+    /** One line: what this parameter means to the skill. Rendered in the glossary table. */
+    meaning: text("meaning"),
+
+    /** One of `PARAMETER_SOURCES` — who put it here. */
+    source: text("source").notNull().default("declared"),
+    /** One of `PARAMETER_DECISIONS`. A declared parameter is accepted on arrival. */
+    decision: text("decision").notNull().default("accepted"),
+
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /**
+     * One parameter per name per draft, folded — `Environment` and `environment` are one thing,
+     * and the second person to type it would otherwise never find out. The repository-identity
+     * fold, one layer up, as on `shared_blocks`.
+     */
+    uniqueIndex("draft_parameters_name_uq").on(t.draftId, sql`lower(${t.name})`),
+    index("draft_parameters_draft_idx").on(t.draftId),
 
     pgPolicy("org_scope", {
       for: "all",

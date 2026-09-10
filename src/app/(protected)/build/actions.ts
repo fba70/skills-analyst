@@ -9,6 +9,7 @@ import type { MatrixReport } from "@/lib/matrix";
 import type { TriggerReport } from "@/lib/trigger";
 import type { VariantReport } from "@/lib/variants";
 import { isCandidateDecision, isInterviewTechnique } from "@/lib/interview";
+import { isBlockRule, isParameterDecision, isParameterKind } from "@/lib/parameters";
 import { libraryFragments, type LibraryResult } from "@/server/analytics/block-library";
 import { requireSession } from "@/server/dal/session";
 import { buildScaffold, type Scaffold } from "@/server/builder/scaffold";
@@ -415,6 +416,8 @@ export async function saveDraftBlocksAction(
       depth: typeof block.depth === "number" ? block.depth : null,
       type: isBlockType(block.type) ? block.type : null,
       text: typeof block.text === "string" ? block.text.slice(0, MAX_BLOCK_CHARS) : "",
+      /* Shape-checked like everything else that crosses this boundary. A bad rule is no rule. */
+      rule: isBlockRule(block.rule) ? block.rule : null,
     }));
 
     const { setDraftBlocks } = await import("@/server/builder/blocks");
@@ -1149,6 +1152,253 @@ export async function syncTransclusionsAction(
             : `${outcome.updated} convention(s) updated, in one revision you can restore from.`,
       },
     };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// Parameters and decision rules (Doc 7 RD.1–RD.3, plan step P4)
+// ---------------------------------------------------------------------------------------
+
+/**
+ * Free on every plan: this is Compose mode. The model calls it makes — detection, consistency —
+ * are metered to the workspace like every other builder call and refused by the cap, not by a
+ * plan. Nothing here gates publishing.
+ */
+async function requireDraftAuthor(): Promise<
+  { ok: true; orgId: string; userId: string } | { ok: false; message: string }
+> {
+  const session = await requireSession();
+  const orgId = session.session.activeOrganizationId;
+  if (!orgId) return { ok: false, message: "No active workspace." };
+  return { ok: true, orgId, userId: session.user.id };
+}
+
+export type ParameterFormInput = {
+  name: string;
+  kind: string;
+  /** Comma- or newline-separated. Split and folded server-side. */
+  values: string;
+  unit: string;
+  meaning: string;
+};
+
+function cleanParameterInput(input: ParameterFormInput) {
+  return {
+    name: typeof input.name === "string" ? input.name : "",
+    kind: isParameterKind(input.kind) ? input.kind : ("free" as const),
+    values:
+      typeof input.values === "string"
+        ? input.values.split(/[,\n]/).map((v) => v.trim()).filter(Boolean)
+        : [],
+    unit: typeof input.unit === "string" ? input.unit : null,
+    meaning: typeof input.meaning === "string" ? input.meaning : null,
+  };
+}
+
+export async function declareParameterAction(
+  draftId: string,
+  input: ParameterFormInput,
+): Promise<ActionResult<{ id: string }>> {
+  try {
+    const gate = await requireDraftAuthor();
+    if (!gate.ok) return gate;
+    const { declareParameter } = await import("@/server/builder/parameters");
+    const { PARAMETER_REFUSAL_MESSAGE } = await import("@/lib/parameters");
+    const outcome = await declareParameter({
+      orgId: gate.orgId,
+      userId: gate.userId,
+      draftId,
+      parameter: cleanParameterInput(input),
+    });
+    if (!outcome.ok) return { ok: false, message: PARAMETER_REFUSAL_MESSAGE[outcome.refusal] };
+    revalidatePath(`/build/${draftId}`);
+    return { ok: true, data: outcome.data };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function updateParameterAction(
+  draftId: string,
+  id: string,
+  input: ParameterFormInput,
+): Promise<ActionResult<{ id: string }>> {
+  try {
+    const gate = await requireDraftAuthor();
+    if (!gate.ok) return gate;
+    const { updateParameter } = await import("@/server/builder/parameters");
+    const { PARAMETER_REFUSAL_MESSAGE } = await import("@/lib/parameters");
+    const outcome = await updateParameter({
+      orgId: gate.orgId,
+      userId: gate.userId,
+      draftId,
+      id,
+      parameter: cleanParameterInput(input),
+    });
+    if (!outcome.ok) return { ok: false, message: PARAMETER_REFUSAL_MESSAGE[outcome.refusal] };
+    revalidatePath(`/build/${draftId}`);
+    return { ok: true, data: outcome.data };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function deleteParameterAction(
+  draftId: string,
+  id: string,
+): Promise<ActionResult<{ message: string }>> {
+  try {
+    const gate = await requireDraftAuthor();
+    if (!gate.ok) return gate;
+    const { deleteParameter } = await import("@/server/builder/parameters");
+    const { PARAMETER_REFUSAL_MESSAGE } = await import("@/lib/parameters");
+    const outcome = await deleteParameter({ orgId: gate.orgId, userId: gate.userId, draftId, id });
+    if (!outcome.ok) return { ok: false, message: PARAMETER_REFUSAL_MESSAGE[outcome.refusal] };
+    revalidatePath(`/build/${draftId}`);
+    return { ok: true, data: { message: "Removed. Rules that named it are still yours, as prose." } };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function decideParameterAction(
+  draftId: string,
+  id: string,
+  decision: string,
+): Promise<ActionResult<{ message: string }>> {
+  try {
+    const gate = await requireDraftAuthor();
+    if (!gate.ok) return gate;
+    if (!isParameterDecision(decision) || decision === "pending")
+      return { ok: false, message: "Accept or reject." };
+    const { decideParameter } = await import("@/server/builder/parameters");
+    const { PARAMETER_REFUSAL_MESSAGE } = await import("@/lib/parameters");
+    const outcome = await decideParameter({
+      orgId: gate.orgId,
+      userId: gate.userId,
+      draftId,
+      id,
+      decision,
+    });
+    if (!outcome.ok) return { ok: false, message: PARAMETER_REFUSAL_MESSAGE[outcome.refusal] };
+    revalidatePath(`/build/${draftId}`);
+    return {
+      ok: true,
+      data: { message: decision === "accepted" ? "Declared." : "Rejected — kept, so the suggestion is not made again." },
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Read the structure out of the draft's decision rules. One small-model call per block, metered to
+ * the workspace, behind a button — never on keystroke.
+ */
+export async function detectParametersAction(
+  draftId: string,
+): Promise<ActionResult<{ message: string }>> {
+  try {
+    const gate = await requireDraftAuthor();
+    if (!gate.ok) return gate;
+    const { detectParameters } = await import("@/server/builder/parameters");
+    const report = await detectParameters({ orgId: gate.orgId, userId: gate.userId, draftId });
+    revalidatePath(`/build/${draftId}`);
+    const message =
+      report.blocksSent === 0
+        ? report.blocksRead === 0
+          ? "No decision-rule blocks on this draft yet. Type a block as a decision rule first."
+          : "Every decision rule already has confirmed structure. Nothing to read."
+        : `Read ${report.blocksSent} rule${report.blocksSent === 1 ? "" : "s"}: ${report.parametersProposed} parameter${report.parametersProposed === 1 ? "" : "s"} and ${report.rulesProposed} structure${report.rulesProposed === 1 ? "" : "s"} proposed. Confirm what you agree with.${report.stopped ? " Stopped early — the workspace budget refused." : ""}`;
+    return { ok: true, data: { message } };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function decideRuleAction(
+  draftId: string,
+  blockId: string,
+  decision: string,
+): Promise<ActionResult<{ message: string }>> {
+  try {
+    const gate = await requireDraftAuthor();
+    if (!gate.ok) return gate;
+    if (decision !== "confirm" && decision !== "reject") return { ok: false, message: "Confirm or reject." };
+    const { decideRule } = await import("@/server/builder/parameters");
+    const { PARAMETER_REFUSAL_MESSAGE } = await import("@/lib/parameters");
+    const outcome = await decideRule({ orgId: gate.orgId, userId: gate.userId, draftId, blockId, decision });
+    if (!outcome.ok) return { ok: false, message: PARAMETER_REFUSAL_MESSAGE[outcome.refusal] };
+    revalidatePath(`/build/${draftId}`);
+    return {
+      ok: true,
+      data: { message: decision === "confirm" ? "Structure confirmed. Coverage counts it now." : "Back to prose." },
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function makeTableAction(
+  draftId: string,
+  blockIds: string[],
+): Promise<ActionResult<{ message: string }>> {
+  try {
+    const gate = await requireDraftAuthor();
+    if (!gate.ok) return gate;
+    const ids = Array.isArray(blockIds) ? blockIds.filter((id) => typeof id === "string" && UUID.test(id)) : [];
+    const { makeTable } = await import("@/server/builder/parameters");
+    const { PARAMETER_REFUSAL_MESSAGE } = await import("@/lib/parameters");
+    const outcome = await makeTable({ orgId: gate.orgId, userId: gate.userId, draftId, blockIds: ids });
+    if (!outcome.ok) return { ok: false, message: PARAMETER_REFUSAL_MESSAGE[outcome.refusal] };
+    revalidatePath(`/build/${draftId}`);
+    return { ok: true, data: { message: `One table, ${outcome.data.rows} rows. The history can restore the sentences.` } };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function addRuleAction(
+  draftId: string,
+  parameter: string,
+  value: string,
+  blockId: string | null,
+): Promise<ActionResult<{ message: string }>> {
+  try {
+    const gate = await requireDraftAuthor();
+    if (!gate.ok) return gate;
+    const { addRuleRow } = await import("@/server/builder/parameters");
+    const { PARAMETER_REFUSAL_MESSAGE } = await import("@/lib/parameters");
+    const outcome = await addRuleRow({
+      orgId: gate.orgId,
+      userId: gate.userId,
+      draftId,
+      parameter: typeof parameter === "string" ? parameter : "",
+      value: typeof value === "string" ? value : "",
+      blockId: typeof blockId === "string" && UUID.test(blockId) ? blockId : null,
+    });
+    if (!outcome.ok) return { ok: false, message: PARAMETER_REFUSAL_MESSAGE[outcome.refusal] };
+    revalidatePath(`/build/${draftId}`);
+    return { ok: true, data: { message: "An empty rule is in the draft. Write what happens in that case." } };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export type ConsistencyResult = Awaited<
+  ReturnType<(typeof import("@/server/builder/parameters"))["consistencyCheck"]>
+>;
+
+/** One call per pair of rules that can both fire. Metered, on demand, never stored. */
+export async function consistencyAction(draftId: string): Promise<ActionResult<ConsistencyResult>> {
+  try {
+    const gate = await requireDraftAuthor();
+    if (!gate.ok) return gate;
+    const { consistencyCheck } = await import("@/server/builder/parameters");
+    const report = await consistencyCheck({ orgId: gate.orgId, userId: gate.userId, draftId });
+    return { ok: true, data: report };
   } catch (error) {
     return failure(error);
   }
