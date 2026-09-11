@@ -2171,6 +2171,165 @@ would be enforcing an untested mean.
 > draft.
 
 
+### The decision surface: measured, and deliberately not published (Doc 7 RD.5, step P7)
+
+`src/lib/decision-surface.ts` · `src/server/analytics/parameters-run.ts` · `parameters-mine.ts`
+migration 0055 · `pnpm parameters --probe | --sample | --clusters | --status`
+`pnpm archetypes --parameters` · `pnpm verify:decision-surface` (42 checks, free)
+
+`decision-rule` is the second strongest block type in the corpus — 10 of 13 categories, median
++21. So the archetype can say *good review skills carry decision rules and yours has none*, and
+cannot say what those rules are **about**. RD.5 is the dimension that answers it: which parameters
+a category's curated band branches on, at what prevalence in each band.
+
+**The measurement is built and nothing is published.** That is the honest state of this step, and
+it is C5's decision one feature over — a CLI and a stored verdict, no author-facing panel, until
+the numbers have been read.
+
+#### What the free probe found, and it changed the rule it was measuring with
+
+Doc 7 §2 principle 4 says a dimension gets a number before it gets a card. The number that decides
+this one is not *how many skills carry a decision rule* — 23,476, already measured — but **what
+those blocks are**. E2 learned that the hard way: the guardrails reaching the conflict detector
+turned out to be long expository paragraphs, so the plumbing was right and the raw material was
+coarser than the design assumed.
+
+`pnpm parameters --probe 150` reads real bundles, sorts blocks by rule alone and writes nothing.
+Over 499 blocks from 150 skills:
+
+| shape | share |
+|---|---|
+| conditional | 59% |
+| prose — contains a conditional word and branches on nothing | 23% |
+| list | 9% |
+| table | 9% |
+
+**68% is a table or a conditional**, the only two shapes a parameter can be read out of. That is
+well clear of the floor below which this would not be worth extracting, and the remaining 23% is
+why the extraction prompt has to treat *no parameters* as an ordinary answer — Distill's rule,
+for the same reason.
+
+> **Reading the output changed the tally.** *"Greenfield feature → default EXPANSION · Bug fix →
+> default HOLD SCOPE · Plan touching >15 files → suggest REDUCTION"* is a decision table without
+> the pipes, and the first version of `shapeOf` filed it under `list` — the shape whose whole
+> meaning is *nothing to extract here*. An arrow-form bullet list is a conditional now, the suite
+> pins it, and the usable share moved 66% → 68%. This is the fourth time a probe's printed output
+> has corrected the instrument rather than the conclusion.
+
+The sixteen passages read by hand say something the spec did not assume, and it is worth knowing
+before the labels are written: the corpus branches overwhelmingly on **state predicates** — *is a
+daemon already running*, *was audit data provided*, *is there a `.bib` file* — rather than on the
+`environment = prod | staging | dev` configuration knobs RD.5 imagines. Two of four sampled tables
+were request→output lookups rather than decisions at all. Sixteen is a start on the two hundred
+the spec asks for, not the curation itself.
+
+#### The vocabulary is empty, and that is the feature
+
+A model reading 23,476 documents returns `env`, `environment`, `target environment` and `ENV` for
+one idea. Clustering folds them; a **curated label** is what may reach a page. So
+`DECISION_PARAMETERS` ships **empty**, `vocabularyReady()` is false, and every reader asks it
+first and prints *not measured yet* rather than *no parameters found*. Writing a plausible list
+from what a parameter is usually called would be the written-from-memory failure `seeds.ts` was
+burned by, and it would be invisible: every downstream number would look exactly as confident as a
+measured one.
+
+`pnpm parameters --clusters` embeds the distinct names with their observed values, groups them by
+single-link agglomeration and prints the proposals. Single-link rather than k-means for C5's
+reason — a grouping that changes between two runs of one input is one nobody can review — and
+ordered by **distinct repositories**, never occurrences, because one generator's eight hundred
+skills are one data point about the corpus.
+
+> **The trap that keeps the two halves together.** `mineAndStore` skips on an unchanged skeleton
+> *and* a matching `MINER_VERSION`, so a dimension curated into existence without a bump reaches
+> exactly zero archetypes and reports success. That caught 2.1.0's attribution and 3.0.0's blocks.
+> `verify:decision-surface` now asserts the **relationship**: with any curated parameter present,
+> `MINER_VERSION` may not still be 3.0.0. Whoever writes the first label is told in a red check
+> what else has to move, so it cannot catch a third.
+
+#### Keyed on the examination, not on the parameter
+
+`skill_parameters` holds one row per `(version, analyser)` carrying what was found, `[]` included.
+The obvious shape — a row per extracted parameter — makes absence mean both *not examined* and
+*branches on nothing*, and *branches on nothing* is an ordinary answer for a skill whose rules are
+`if it looks wrong, say so`. P1's tool resolver keyed on exactly that absence and re-read 28,035
+versions for 776 passes while printing progress; E1's link checker starved its own queue the same
+way. Keyed on the examination, the selector cannot lie about what has been looked at.
+
+Raw names are stored and **resolved at read time**, so widening the vocabulary is a query rather
+than 23,476 fresh model calls — the architecture `skill_tools` has against `tool_refs`, which
+turned an afternoon into a minute.
+
+#### The first 200, and two things they refuted
+
+`pnpm parameters --sample 200` cost **$0.0177**. That makes the whole remaining population
+**about $1.58**, not the $10–15 Doc 7 estimated — the projection divides tokens actually charged
+by skills actually done, the way `embeddings --status` does, and the spec's figure assumed a
+classifier-sized call where this one is short.
+
+**142 of 200 named at least one parameter, and they produced 290 distinct names.** Fifteen of
+those appear in two or more repositories. That ratio is the number this dimension lives or dies
+on: a parameter has to reach `MIN_STRONG_PREVALENCE` — a quarter of a category's curated band —
+and `review`'s curated band is 407 structures. A name seen in three repositories corpus-wide
+cannot get near that. At 1% coverage nothing is concluded except that **fifteen candidates is not
+a vocabulary**, and the honest next step is coverage rather than curation.
+
+> **The first clustering composition was wrong, and one pair proved it.** 1.0.0 embedded the name
+> plus up to six observed values, reasoning that a bare two-word name embeds thinly and the values
+> are what separate `severity level` from `zoom level`. The first real run returned **13 groups
+> over 15 names — nothing merged at all**, and the calibration line said why: `file type` and
+> `file types`, the same parameter singular and plural, sat at **0.531**. One skill's values were
+> `md, txt` and the other's `images, pdfs`, and on a two-word name the values dominate the vector.
+> A composition that cannot merge a plural is not separating homonyms, it is separating
+> everything.
+>
+> 1.1.0 embeds the name alone. `file type` + `file types` now merge at 5 sources, `situation` +
+> `situation type` at 5, and the closest pair left apart is `situation` / `scenario` at 0.556 —
+> genuine near-synonyms, which is exactly where the line belongs: the clusterer merges spellings
+> and leaves synonymy to the person writing the label.
+>
+> **The calibration line is the part worth keeping.** `--clusters` now prints the closest pairs
+> the threshold kept apart, computed from vectors already in hand, so it costs nothing. It is
+> `scope --calibrate`'s question answered for free, and it is what turned *"the threshold may be
+> wrong"* into *"the composition is wrong, and here is the pair that shows it"* in one run.
+
+> **A query nothing had ever executed, again, in the file that quotes the lesson.**
+> `clusterProposals` joined `skills sk` and counted `distinct sk.source_id`. The source lives on
+> `skill_versions`, not on `skills`. A `sql` template is a string, so it typechecked, and this
+> suite was green while the command could not run: it exercised the pending selector, the summary
+> and the mine, and not the fourth query. C5 exported `pendingScopeVersions` for exactly this
+> reason and I had written that reason into this module's own comments.
+>
+> The query is now `parameterNameCounts`, exported and executed by the suite — and split from the
+> embedding half for a second reason: a free suite that called `clusterProposals` would start
+> spending the first time somebody ran an extraction.
+
+#### Smaller decisions worth keeping
+
+- **`corpus_parameters` is its own spend purpose**, not folded into `corpus_taxonomy`. This is the
+  second-largest corpus spend after classification, and sharing a row would make *"what did the
+  taxonomy cost"* permanently unanswerable — the number four vocabulary versions were judged
+  against. It needs an enum value, which is why 0055 carries an `ALTER TYPE`.
+- **`decisionSurface` is its own model task**, beside P4's `parameters`. Nearly the same question,
+  but one runs on demand over a block an author is looking at and the other over 23,476 documents
+  on the platform budget; an operator tuning the second must not change the first.
+- **Six at a time, and the overshoot is stated.** `scope.ts` is strictly sequential because RC.2's
+  check-before/ledger-after ordering bounds the overshoot at one call; the classifier runs eight
+  wide because a batch dying on skill 3 of 20 wastes the two before it. This is a 23,476-call job,
+  so sequential is the shape that does not finish. Six matches `bundleConcurrency`, each lane also
+  holds a bundle read and a connection against a pool of ten, and the cap may be passed by up to
+  six calls — fractions of a cent, taken deliberately.
+- **One bundle read per skill**, then slices. `readFragment` per block is C5's 36 round trips to an
+  EU bucket for one document.
+- **The corpus passage arrives fenced and labelled as data** (R7.3), which the draft-side prompt
+  does not need and this one does: one reads the author's own words, the other a stranger's.
+- **Values are stored and never shown.** They are what separates `severity level` from `zoom
+  level` when clustering. What reaches an author is a parameter name and its two bands.
+
+> **A comment inside a `sql` template is still a template.** The paragraph explaining why the id
+> list is built as `any(array[…])` contained a `${…}`, which interpolated, and the file would not
+> compile. CLAUDE.md already records the backtick half of this trap from the taxonomy queries;
+> the interpolation half cost the same five minutes. Prose about a query goes above it.
+
 ### A rule row is a test case, and the whole step is a render (Doc 7 RD.4, step P6)
 
 `src/lib/rule-cases.ts` · `src/server/evals/rule-cases.ts` · migration 0054
@@ -6472,6 +6631,12 @@ pnpm verify:watch                        # R8.7 the feed resolves versions to sk
 pnpm verify:campaigns                    # RK.8 progress is derived, never stored; free
 pnpm verify:parameters                   # RD.1–RD.3 parameters, rules, coverage that says which zero; free
 pnpm verify:rule-cases                   # RD.4 a rule row is a golden task, proposed and never created; free
+pnpm parameters --probe 200              # RD.5 what a decision-rule block actually is; free, writes nothing
+pnpm parameters --sample 200             # read what corpus rules branch on — COSTS MONEY (~$0.06)
+pnpm parameters --clusters               # propose the vocabulary a person curates — COSTS A FRACTION OF A CENT
+pnpm parameters --status                 # coverage, then the finding; free
+pnpm archetypes --parameters             # does the decision surface discriminate? free, writes nothing
+pnpm verify:decision-surface             # RD.5 an uncurated vocabulary publishes nothing; free
 pnpm verify:tool-refs                    # RD.6 tool tokens: the naive reading fails first; free
 pnpm verify:tools                        # RD.6/RD.7 the vocabulary, and the tail it refuses to name; free
 pnpm verify:tool-alignment               # RD.8 steps vs allowed-tools vs the bundle; free, never a gate

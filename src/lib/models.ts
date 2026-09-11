@@ -36,6 +36,15 @@ export const MODEL_TASKS = [
   "distill",
   /** Doc 7 RD.1–RD.3: read the structure out of a decision rule; judge two rules for conflict. */
   "parameters",
+  /**
+   * Doc 7 RD.5: read what a *corpus* skill's rules branch on.
+   *
+   * Its own task rather than `parameters`, though the question is nearly the same one. That task
+   * runs on demand over one draft block an author is looking at; this one runs over 23,476
+   * documents on the platform budget. An operator tuning the cost of the corpus pass must not
+   * silently change what the builder does to somebody's draft.
+   */
+  "decisionSurface",
   "evalAgent",
   "evalAgentB",
   "evalJudge",
@@ -87,6 +96,7 @@ export const MODEL_DEFAULTS: ModelSettings = {
    * sees every candidate.
    */
   parameters: "google/gemini-2.5-flash-lite",
+  decisionSurface: "google/gemini-2.5-flash-lite",
   /**
    * The agent under test in a golden task (Doc 6 RW.6).
    *
@@ -153,6 +163,11 @@ export const MODEL_TASK_META: Record<ModelTask, { label: string; blurb: string }
     label: "Parameters and decision rules",
     blurb:
       "Reads what a decision rule branches on and proposes the parameter and its values; judges whether two rules that can both fire contradict each other. Short calls, on demand, every result confirmed by the author.",
+  },
+  decisionSurface: {
+    label: "Decision surface (corpus)",
+    blurb:
+      "Reads what a public skill's decision rules branch on, one call per skill, so the archetype can say which parameters a category's best skills branch on. A short classification-shaped job where returning nothing is the commonest right answer.",
   },
   evalAgent: {
     label: "Eval — the agent under test",

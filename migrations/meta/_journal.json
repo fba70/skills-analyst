@@ -386,6 +386,13 @@
       "when": 1789123839582,
       "tag": "0054_sour_daredevil",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1789128809997,
+      "tag": "0055_chief_shooting_star",
+      "breakpoints": true
     }
   ]
 }

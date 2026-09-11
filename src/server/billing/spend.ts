@@ -77,7 +77,9 @@ export type LlmPurpose =
    * charging one customer's monthly allowance for work that benefits every reader would be
    * the mixing RC.2 separates the two budgets to prevent.
    */
-  | "corpus_embedding";
+  | "corpus_embedding"
+  /** Doc 7 RD.5: reading the decision surface out of the public corpus. Platform work. */
+  | "corpus_parameters";
 
 const isOrgPurpose = (purpose: LlmPurpose): boolean =>
   (ORG_PURPOSES as readonly string[]).includes(purpose);

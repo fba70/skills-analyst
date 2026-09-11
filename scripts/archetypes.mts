@@ -91,6 +91,141 @@ function render(a: NonNullable<Awaited<ReturnType<typeof mineArchetype>>>) {
   console.info(`  EXEMPLARS  ${a.exemplars.map((e) => e.slug).join(", ") || "(none licence-clean)"}`);
 }
 
+if (args.includes("--parameters")) {
+  /**
+   * Does the decision surface discriminate? (Doc 7 RD.5, plan step P7.)
+   *
+   *   pnpm archetypes --parameters
+   *   pnpm archetypes --parameters --category review
+   *
+   * Free, and it **writes nothing**. Two gates stand between this table and an archetype card,
+   * and the command says which one is shut: a curated vocabulary, and the extraction coverage
+   * behind it.
+   */
+  const { parameterLiftAcrossCategories, mineParameterLift } = await import(
+    "../src/server/analytics/parameters-mine"
+  );
+  const { FUNCTIONS } = await import("../src/server/taxonomy/vocabulary");
+  const { MIN_BAND } = await import("../src/server/analytics/archetype");
+  const { DECISION_PARAMETERS } = await import("../src/lib/decision-surface");
+
+  const categoryIndex = args.indexOf("--category");
+  const one = categoryIndex >= 0 ? args[categoryIndex + 1] : undefined;
+
+  if (one) {
+    const result = await mineParameterLift(one);
+    if (!result) {
+      console.info(`\nno representatives for ${one}\n`);
+      process.exit(0);
+    }
+    console.info(
+      `\nParameters measured in ${one}  (${result.strongBand} curated / ${result.weakBand} other` +
+        ` · ${result.examined} of ${result.structures} examined · ${result.recognised} named a curated parameter)`,
+    );
+    if (!result.banded) {
+      console.info(`  a band is below ${MIN_BAND}; a percentage over it would not mean anything\n`);
+      process.exit(0);
+    }
+    if (result.measured.length === 0) {
+      console.info(
+        `  nothing measured — ` +
+          (DECISION_PARAMETERS.length === 0
+            ? "the vocabulary is empty, so no extracted name resolves to anything\n"
+            : "no examined skill in this category branches on a curated parameter\n"),
+      );
+      process.exit(0);
+    }
+    console.info("\n  parameter              strong / weak   lift  needed   kept");
+    for (const row of result.measured) {
+      console.info(
+        `  ${row.label.padEnd(22)} ${String(row.strongPrevalence).padStart(4)}% / ${String(row.weakPrevalence).padStart(4)}%  ` +
+          `${String(row.lift).padStart(5)}  ${row.requiredLift.toFixed(1).padStart(6)}   ${row.kept ? "yes" : "no"}` +
+          (row.kept ? "" : `   (${row.rejectedFor})`),
+      );
+    }
+    console.info("");
+    process.exit(0);
+  }
+
+  /*
+   * Coverage first, and the finding withheld under it — `archetypes --blocks`'s refusal, which
+   * exists because a table of zeros at 1% extraction reads as *this dimension carries no signal*
+   * when the truth is *nothing has been measured yet*. Same output, opposite conclusions, on the
+   * command whose job is to decide whether the rest of the step gets built.
+   *
+   * The vocabulary is asked **before** any query runs. It needs no database, it is the gate that
+   * is actually shut today, and a crash about a missing table would hide the answer behind a
+   * stack trace about the plumbing.
+   */
+  if (DECISION_PARAMETERS.length === 0) {
+    const { parameterSummary } = await import("../src/server/analytics/parameters-run");
+    const summary = await parameterSummary().catch(() => null);
+    const extracted = summary?.examined ?? 0;
+    const eligible = summary?.eligible ?? 0;
+    const share = eligible === 0 ? 0 : (extracted / eligible) * 100;
+
+    console.info(`\nDecision-surface lift: cannot be answered yet.`);
+    console.info(
+      `\n  extracted                     ${extracted} of ${eligible}` +
+        `  (${share.toFixed(1)}%)` +
+        (summary ? "" : "   <- skill_parameters does not exist yet"),
+    );
+    console.info(`  curated parameters            0   <- this is what is missing`);
+    console.info(
+      `\n  An extracted name is a word a model chose. Until somebody has read the clusters and` +
+        `\n  written the real ones into DECISION_PARAMETERS, every percentage here would describe` +
+        `\n  the model's habits rather than the corpus — Doc 7 RD.5 says so in as many words.` +
+        `\n\n    pnpm parameters --probe 200    free, and the honest first step` +
+        `\n    pnpm parameters --sample 200   COSTS MONEY` +
+        `\n    pnpm parameters --clusters     the proposals to curate\n`,
+    );
+    process.exit(0);
+  }
+
+  const report = await parameterLiftAcrossCategories(FUNCTIONS.map((f) => f.id));
+  const pct = report.coverage.eligible === 0
+    ? 0
+    : (report.coverage.extracted / report.coverage.eligible) * 100;
+
+  if (report.banded.length === 0) {
+    console.info(
+      `\nNo category has both bands above the floor — nothing to measure.` +
+        `\n  pnpm taxonomy --status   the labels the bands are built from\n`,
+    );
+    process.exit(0);
+  }
+
+  console.info(
+    `\nDecision-surface lift across ${report.banded.length} banded categories  (writes nothing)`,
+  );
+  console.info(
+    `  extracted ${report.coverage.extracted} of ${report.coverage.eligible} eligible skills (${pct.toFixed(1)}%)`,
+  );
+  if (pct < 90) {
+    console.info(
+      `  WARNING: at ${pct.toFixed(1)}% these prevalences will move. A partial extraction is not a` +
+        `\n  random sample of a category — the selector has no ORDER BY.`,
+    );
+  }
+  console.info("\n  parameter              kept in   best lift  median  where");
+  for (const row of report.byParameter.slice(0, 30)) {
+    console.info(
+      `  ${row.label.padEnd(22)} ${String(row.keptIn).padStart(4)}/${String(report.banded.length).padEnd(3)} ` +
+        `${String(row.bestLift).padStart(9)}  ${String(row.medianLift).padStart(6)}  ${row.bestCategory || "—"}`,
+    );
+  }
+  const earning = report.byParameter.filter((p) => p.keptIn > 0);
+  console.info(
+    `\n  ${earning.length} of ${report.byParameter.length} parameters clear the threshold in at least one category.` +
+      (earning.length === 0
+        ? "\n  Nothing to publish: the decision surface does not separate the bands, and a dimension" +
+          "\n  that earns nothing gets reported here rather than put on an archetype card.\n"
+        : "\n  Publishing these is a deliberate act: bump MINER_VERSION and re-mine, or the new" +
+          "\n  dimension reaches exactly zero archetypes and says nothing about it.\n"),
+  );
+  process.exit(0);
+}
+
 if (args.includes("--tools")) {
   /**
    * Does the tool axis discriminate? (Doc 7 RD.9, plan step P3.)

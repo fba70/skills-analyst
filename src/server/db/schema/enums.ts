@@ -208,6 +208,15 @@ export const llmPurpose = pgEnum("llm_purpose", [
   "corpus_validation",
   /** The pgvector backfill over the public corpus. Platform budget. */
   "corpus_embedding",
+  /**
+   * Reading what a corpus skill's decision rules branch on (Doc 7 RD.5). Platform budget.
+   *
+   * Its own value rather than folded into `corpus_taxonomy`, for the reason `interview` is not
+   * folded into `builder`: this is the second-largest corpus spend after classification, and
+   * sharing a row would make *"what did the taxonomy cost"* permanently unanswerable — the one
+   * number four vocabulary versions were judged against.
+   */
+  "corpus_parameters",
 ]);
 
 /**
