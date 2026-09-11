@@ -3,8 +3,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
+import { blockTypeBlurb, blockTypeLabel } from "@/lib/block-types";
 import { capabilityBlurb, capabilityLabel } from "@/lib/capabilities";
 import { TOOL_KIND_META, toolById } from "@/lib/tools";
+import { Fragments } from "@/components/builder/block-library";
 import { Paginator } from "@/components/common/paginator";
 import { ExplainLink } from "@/components/registry/explain";
 import { SkillRow } from "@/components/registry/skill-row";
@@ -12,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { listSkills, PAGE_SIZES, type PageSize } from "@/server/dal/skills";
-import { toolDirectory } from "@/server/skills/tools-read";
+import { toolDirectory, toolEvidence } from "@/server/skills/tools-read";
 
 export async function generateMetadata(
   props: PageProps<"/tools/[id]">,
@@ -55,9 +57,10 @@ export default async function ToolPage(props: PageProps<"/tools/[id]">) {
     ? (requestedSize as PageSize)
     : undefined;
 
-  const [result, directory] = await Promise.all([
+  const [result, directory, evidence] = await Promise.all([
     listSkills({ tools: [toolId], page: Number(single("page")) || 1, pageSize }),
     toolDirectory(),
+    toolEvidence(toolId, tool.destructive),
   ]);
 
   const measured = directory.available && (directory.coverage?.resolved ?? 0) > 0;
@@ -132,6 +135,52 @@ export default async function ToolPage(props: PageProps<"/tools/[id]">) {
           </p>
         </CardContent>
       </Card>
+
+      {measured ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>What good skills say about it</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-5">
+            {evidence.groups.length === 0 ? (
+              /*
+                Distinct from "nothing uses it", which the skill list below answers on its own
+                evidence. A tool can be widely used and still have nothing quotable: every
+                passage about it may sit outside the word bounds, come from one repository, or
+                belong to a skill whose licence forbids copying. Saying "no examples" for both
+                would let a reader conclude the corpus is silent when it is only unquotable.
+              */
+              <p className="text-muted-foreground text-sm">
+                Nothing quotable was found for {tool.label}. Passages about it may be too short
+                or too long to be exemplary, may all come from one repository, or may belong to
+                skills whose licence does not permit copying — which is a gap in what can be
+                shown, not evidence that nobody writes about it.
+              </p>
+            ) : (
+              evidence.groups.map((group) => (
+                <div key={group.type} className="grid gap-2">
+                  <div className="grid gap-0.5">
+                    <h3 className="text-sm font-medium">{blockTypeLabel(group.type)}</h3>
+                    <p className="text-muted-foreground text-xs">
+                      {blockTypeBlurb(group.type)}
+                    </p>
+                  </div>
+                  <Fragments result={group.result} />
+                </div>
+              ))
+            )}
+            {/*
+              The same refusal the library makes everywhere, stated where the passages are.
+              Most of this corpus is attribution-required, and a control that pasted one of
+              these into a draft would launder that obligation into a document carrying none.
+            */}
+            <p className="text-muted-foreground border-t pt-3 text-xs">
+              Examples to read, from the curated band the archetypes are mined from. Each is
+              somebody else&rsquo;s work and stays theirs.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <section className="grid gap-3">
         <h2 className="text-base font-semibold">

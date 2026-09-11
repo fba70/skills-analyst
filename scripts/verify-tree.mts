@@ -82,8 +82,41 @@ function existsUntracked(base: string): boolean {
 
 const missing: Array<{ from: string; specifier: string; onDisk: boolean }> = [];
 
-for (const file of sourceFiles) {
-  const source = readFileSync(file, "utf8");
+/**
+ * Tracked by git and absent from disk — the other direction of this suite's own question.
+ *
+ * It hunts for files a fresh clone would *lack*. The mirror case is a file a fresh clone
+ * would **have** and this working copy does not: something committed and then deleted without
+ * staging the deletion. That is the same tree-versus-reality mismatch, and the first version
+ * of this checker did not report it — it threw `ENOENT` out of the read loop and died with a
+ * stack trace, so the one suite whose job is to compare git against the disk was the one
+ * surface that could not describe the difference.
+ */
+const deletedButTracked = sourceFiles.filter((file) => !existsSync(file));
+check(
+  "every tracked source file is still on disk",
+  deletedButTracked.length === 0,
+  deletedButTracked.length === 0
+    ? `${sourceFiles.length} tracked`
+    : `${deletedButTracked.join(", ")} — deleted but the deletion is unstaged; git add -A records it`,
+);
+
+for (const file of sourceFiles.filter((f) => existsSync(f))) {
+  /*
+   * Comments stripped first, because **a commented-out import is not an import**.
+   *
+   * Found the hard way: a comment in `verify:tools` explaining a *different* scanner's
+   * self-match trap quoted a half-written specifier, and this checker duly reported the suite
+   * as importing a module called `@/lib`. The prose describing a trap tripped the trap — the
+   * third time in this codebase, after `verify:relations` matching its own warnings about
+   * `= any(${array})` and the `no-db-in-api` hook matching a comment promising compliance.
+   *
+   * A false positive here is worse than in most scanners: this one is read to decide whether a
+   * commit is safe to push, so crying wolf teaches people to stage past it.
+   */
+  const source = readFileSync(file, "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
   /*
    * Static `import`/`export … from` and dynamic `import(…)` alike. The bug that prompted this
    * hid in a **dynamic** import inside a server action, which is the form a grep for `^import`

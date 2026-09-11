@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 
 import { isBlockType, type BlockType } from "@/lib/block-types";
 import { REDISTRIBUTABLE } from "@/lib/licence";
+import { isToolId, TOOL_IDS } from "@/lib/tools";
 import { CURATED_LIST } from "@/server/analytics/archetype";
 import { EXTRACTOR_VERSION } from "@/server/analytics/structure";
 import { db } from "@/server/db";
@@ -119,8 +120,27 @@ export type Fragment = {
 };
 
 export type LibraryQuery = {
-  category: string;
+  /**
+   * Narrow to one function category, or omit for the whole corpus.
+   *
+   * Optional because the tool axis (Doc 7 RD.9) asks a question the category axis cannot
+   * frame: *what does a good guardrail about `git` look like* is not a question about
+   * `review` skills. When it is absent the `skill_categories` join is dropped rather than
+   * left unfiltered — a skill carrying three labels would otherwise contribute three rows,
+   * which the per-source reduction hides but the median length does not.
+   */
+  category?: string;
   type: BlockType;
+  /**
+   * Narrow to fragments from skills that name one tool (Doc 7 RD.9).
+   *
+   * One more `where` on the existing query, never a second query path — so the licence gate,
+   * the one-fragment-per-source reduction, the near-duplicate exclusion and the word bounds
+   * all apply exactly as they do without it. A filter that reached the corpus by another
+   * route would be a second definition of what may be quoted, on the axis where divergence
+   * is a legal problem rather than a bug.
+   */
+  tool?: string;
   limit?: number;
   /**
    * Include fragments from outside the curated band, ranked below it.
@@ -140,6 +160,15 @@ export type LibraryResult = {
   withheldForLicence: number;
   /** True when the curated band alone produced nothing and the wider corpus was not asked. */
   bandEmpty: boolean;
+  /**
+   * Why the query was refused, when it was — never an empty list standing in for one.
+   *
+   * An unrecognised tool id returning zero fragments reads as *no skill has a good guardrail
+   * about this*, which is a claim about the corpus rather than about the typo that produced
+   * it. The same argument the MCP search tool makes for answering an invented category with
+   * the schema's enumeration instead of an empty result an agent would act on.
+   */
+  refusal: string | null;
 };
 
 /**
@@ -177,14 +206,25 @@ const QUOTABLE_SQL: string = QUOTABLE.join(",");
  */
 export async function libraryFragments(query: LibraryQuery): Promise<LibraryResult> {
   const limit = Math.min(Math.max(1, query.limit ?? 6), MAX_FRAGMENTS);
+  const empty = { fragments: [], candidates: 0, withheldForLicence: 0, bandEmpty: true };
   if (!isBlockType(query.type)) {
-    return { fragments: [], candidates: 0, withheldForLicence: 0, bandEmpty: true };
+    return { ...empty, refusal: `Unknown block type: ${query.type}.` };
+  }
+  /*
+   * Checked here as well as in every caller, because the callers are a CLI, a server action
+   * and a public page, and the one that forgets is the one nobody reviewed.
+   */
+  if (query.tool !== undefined && !isToolId(query.tool)) {
+    return {
+      ...empty,
+      refusal: `Unknown tool: ${query.tool}. One of: ${TOOL_IDS.join(", ")}.`,
+    };
   }
 
-  const rows = await candidateRows(query.category, query.type, limit, false);
+  const rows = await candidateRows(query, limit, false);
   const wider =
     rows.length === 0 && query.includeWiderCorpus
-      ? await candidateRows(query.category, query.type, limit, true)
+      ? await candidateRows(query, limit, true)
       : [];
   const chosen = rows.length > 0 ? rows : wider;
 
@@ -244,6 +284,7 @@ export async function libraryFragments(query: LibraryQuery): Promise<LibraryResu
     candidates: chosen.length,
     withheldForLicence: fragments.filter((f) => f.withheld === "licence").length,
     bandEmpty: rows.length === 0,
+    refusal: null,
   };
 }
 
@@ -304,11 +345,38 @@ type CandidateRow = {
  * distinct structures rather than in skills.
  */
 async function candidateRows(
-  category: string,
-  type: BlockType,
+  query: LibraryQuery,
   limit: number,
   includeWiderCorpus: boolean,
 ): Promise<CandidateRow[]> {
+  const { category, type, tool } = query;
+
+  /*
+   * Both axes are composed into the *existing* CTE rather than wrapped around it.
+   *
+   * Everything that makes this library safe lives in `eligible` and in the ranking below it —
+   * the licence flag, the served-version constraint, the near-duplicate exclusion, the word
+   * bounds, one fragment per source. A tool filter applied afterwards, or through a query of
+   * its own, would be a second path with a subset of those refusals, which is how a library
+   * comes to quote a skill the download route would refuse.
+   */
+  const categoryJoin = category
+    ? sql`join skill_categories c on c.skill_id = sk.id`
+    : sql``;
+  const categoryWhere = category
+    ? sql`and c.axis = 'function'
+        and c.value = ${category}
+        and (c.confidence >= ${REVIEW_FLOOR} or c.reviewed_at is not null)`
+    : sql``;
+  const toolWhere = tool
+    ? sql`and exists (
+          select 1 from skill_tools t
+           where t.skill_version_id = sv.id
+             and t.extractor_version = ${EXTRACTOR_VERSION}
+             and t.tool = ${tool}
+        )`
+    : sql``;
+
   const result = await db.execute(sql`
     with eligible as (
       select
@@ -329,13 +397,12 @@ async function candidateRows(
       join sources src on src.id = sv.source_id
       join skill_structures st on st.skill_version_id = sv.id
         and st.extractor_version = ${EXTRACTOR_VERSION}
-      join skill_categories c on c.skill_id = sk.id
+      ${categoryJoin}
       where b.extractor_version = ${EXTRACTOR_VERSION}
         and b.type = ${type}
         and b.org_id is null
-        and c.axis = 'function'
-        and c.value = ${category}
-        and (c.confidence >= ${REVIEW_FLOOR} or c.reviewed_at is not null)
+        ${categoryWhere}
+        ${toolWhere}
         and sk.status = 'indexed'
         and sk.canonical_skill_id is null
         and sv.id = sk.current_version_id

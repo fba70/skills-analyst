@@ -243,6 +243,40 @@ check(
   counters.map((f) => f.replace(process.cwd() + "/", "")).join(", ") || "none found",
 );
 
+console.info("\nWhat the tool axis is not allowed to become");
+
+/*
+ * Doc 7 RD.9 refuses this outright and the refusal has to be mechanical: a model told that
+ * good review skills use `gh` will write `gh` into a skill for a team on GitLab. Tool choice
+ * is a stack decision, not a craft convention — which the corpus then confirmed, with 0 of
+ * 103 tools clearing the archetype threshold in any of 13 categories.
+ *
+ * What may travel into a prompt is our own vocabulary about the corpus, the way the block
+ * grammar does. A tool name never is.
+ */
+const generate = readFileSync(join(process.cwd(), "src/server/builder/generate.ts"), "utf8")
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/^\s*\/\/.*$/gm, "");
+check(
+  "the generation prompt never learns which tools a category reaches for",
+  !/from "@\/lib\/tools"|toolsForVersion|toolFacet|skillTools|tool-grammar/.test(generate),
+  "a model told good review skills use `gh` writes `gh` into a skill for a team on GitLab",
+);
+check(
+  "and the scan can see a breach",
+  /*
+   * Assembled so that neither scanner sees a breach.
+   *
+   * The first version split it as `'… from "@/lib' + '/tools";'`, which kept this file clean
+   * for *its own* scan and handed a false positive to a different one: `verify:tree` reads
+   * `from "…"` to find imports, and the fragment ended at a quote, so it reported this suite
+   * as importing a module called `@/lib`. Dodging one scanner by writing a half-import is how
+   * you feed the next. The pieces below never sit adjacent in the source at all.
+   */
+  /from "@\/lib\/tools"/.test(["from ", '"', "@/lib/tools", '"'].join("")),
+  "so the control is neither a literal this scan reports nor an import the tree check does",
+);
+
 console.info("\nStored rows");
 
 const c = new Client({ connectionString: process.env.DATABASE_URL_UNPOOLED });
@@ -437,6 +471,123 @@ if (connected) {
           ? `${TOOL_IDS.length} of ${TOOL_IDS.length} earn their place`
           : `${unused.join(" ")} — written from memory rather than from the table`,
       );
+
+      /*
+       * RD.8's number, and the gate that had to be added after the first run.
+       *
+       * It reported `gcloud` at 86% over 37 skills — from **two sources**. That is two
+       * repositories' house style about to be quoted to an author as a corpus finding, and it
+       * is R3.4's argument in a new place: evidence is counted in distinct repositories,
+       * never skills, because one generator's clones are one data point. Both gates are
+       * asserted, and the source one is asserted *against a tool that fails only on it*.
+       */
+      const { guardrailPrevalenceFor, MIN_GUARDRAIL_EVIDENCE, MIN_GUARDRAIL_SOURCES } =
+        await import("../src/server/analytics/tools-mine");
+      check(
+        "the guardrail share is gated on repositories as well as skills",
+        MIN_GUARDRAIL_SOURCES >= 10 && MIN_GUARDRAIL_EVIDENCE >= 20,
+        `${MIN_GUARDRAIL_EVIDENCE} skills from ${MIN_GUARDRAIL_SOURCES} repositories`,
+      );
+
+      /*
+       * The same population the function measures — curated band only. An earlier version of
+       * this probe queried every indexed skill and found nothing to test with, so it skipped:
+       * a check that cannot reach its own subject is not evidence, and this one had the tool
+       * that motivated the gate sitting just outside its query.
+       */
+      const { CURATED_LIST } = await import("../src/server/analytics/archetype");
+      const { rows: thin } = await c.query<{ tool: string; skills: string; sources: string }>(
+        `select t.tool, count(*)::text as skills, count(distinct src.id)::text as sources
+           from skill_tools t
+           join skills sk on sk.id = t.skill_id and sk.current_version_id = t.skill_version_id
+           join skill_versions sv on sv.id = t.skill_version_id
+           join sources src on src.id = sv.source_id
+          where t.extractor_version = $1 and sk.status = 'indexed' and sk.org_id is null
+            and sk.canonical_skill_id is null
+            and lower(src.name) = any(string_to_array($4, ','))
+          group by t.tool
+         having count(*) >= $2 and count(distinct src.id) < $3
+          order by count(*) desc
+          limit 1`,
+        [EXTRACTOR_VERSION, MIN_GUARDRAIL_EVIDENCE, MIN_GUARDRAIL_SOURCES, CURATED_LIST],
+      );
+      if (thin.length === 0) {
+        console.info("  skip  no tool is used by many skills from few repositories right now");
+      } else {
+        check(
+          "a tool used by many skills from few repositories quotes no share",
+          (await guardrailPrevalenceFor(thin[0].tool)) === null,
+          `${thin[0].tool}: ${thin[0].skills} skills from only ${thin[0].sources} repositories`,
+        );
+      }
+
+      const wellEvidenced = await guardrailPrevalenceFor("git");
+      check(
+        "and a well-evidenced one does",
+        wellEvidenced !== null && wellEvidenced.sources >= MIN_GUARDRAIL_SOURCES,
+        wellEvidenced
+          ? `git: ${wellEvidenced.share}% over ${wellEvidenced.skills} skills from ${wellEvidenced.sources} repositories`
+          : "git is below the gate — if that is right, this check needs a different tool",
+      );
+
+      /*
+       * The library's tool filter is one more `where`, not a second query path — so every
+       * refusal it already makes has to survive it. The one that matters is the licence gate:
+       * a tool-filtered query must not be able to quote what the download route returns 451
+       * for, and `verify:blocks` cannot see that because it does not know about tools.
+       */
+      const { libraryFragments } = await import("../src/server/analytics/block-library");
+      const unfiltered = await libraryFragments({ category: "review", type: "guardrail" });
+      const filtered = await libraryFragments({ category: "review", type: "guardrail", tool: "git" });
+      if (unfiltered.refusal || filtered.refusal) {
+        console.info(`  skip  the library refused: ${unfiltered.refusal ?? filtered.refusal}`);
+      } else {
+        check(
+          "a tool-filtered library narrows rather than widens",
+          filtered.candidates <= unfiltered.candidates,
+          `${filtered.candidates} candidates of ${unfiltered.candidates}`,
+        );
+        /*
+         * The licence gate under the filter, asserted against a fragment that is **actually
+         * withheld**.
+         *
+         * The first version of this checked `text !== null || withheld !== null` over
+         * `review` + `git`, where all six candidates are quotable — so it passed without ever
+         * seeing the case it exists for. A check whose fixture cannot reach the failure is
+         * not evidence, which is the line this codebase has now paid for six times. It hunts
+         * for a genuinely withheld fragment and says so plainly when the corpus has none.
+         */
+        const withheld: Array<{ tool: string; fragment: (typeof filtered.fragments)[number] }> = [];
+        for (const candidate of ["pandoc", "ffmpeg", "qpdf", "yt-dlp", "psql"]) {
+          const probe = await libraryFragments({ type: "tool-contract", tool: candidate, limit: 4 });
+          const hit = probe.fragments.find((f) => f.withheld === "licence");
+          if (hit) {
+            withheld.push({ tool: candidate, fragment: hit });
+            break;
+          }
+        }
+        if (withheld.length === 0) {
+          console.info("  skip  no tool-filtered fragment is currently licence-withheld to test with");
+        } else {
+          const { tool, fragment } = withheld[0];
+          check(
+            "a tool filter cannot quote what the licence gate refuses",
+            fragment.text === null && fragment.withheld === "licence",
+            `${tool}: ${fragment.attribution.source} is ${fragment.attribution.redistribution}`,
+          );
+          check(
+            "and the withheld fragment keeps its attribution and a way to the origin",
+            fragment.attribution.source.length > 0 && fragment.attribution.sourceUrl !== null,
+            "withholding the text is not the same as hiding whose work it is",
+          );
+        }
+        check(
+          "an unknown tool id is refused rather than answered with an empty list",
+          (await libraryFragments({ category: "review", type: "guardrail", tool: "frobnicate" }))
+            .refusal !== undefined,
+          "zero fragments reads as a claim about the corpus rather than about the typo",
+        );
+      }
 
       const { rows: top } = await c.query<{ tool: string; skills: string }>(
         `select t.tool, count(distinct t.skill_id)::text as skills

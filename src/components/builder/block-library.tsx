@@ -146,7 +146,15 @@ export function BlockLibrary({
   );
 }
 
-function Fragments({ result }: { result: Result }) {
+/**
+ * The fragment list itself, exported because `/tools/<id>` shows the same thing (Doc 7 RD.9).
+ *
+ * One renderer, not two. Attribution and the withheld-for-licence notice are the licence
+ * obligation rendered wherever the content appears — a second copy on the tool page is a
+ * second place for one of them to be dropped, and the axis where that matters is the legal
+ * one. It takes plain props and holds no state, so a server page can render it directly.
+ */
+export function Fragments({ result }: { result: Result }) {
   if (result.fragments.length === 0) {
     return (
       <p className="text-muted-foreground text-xs">

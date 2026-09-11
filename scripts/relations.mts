@@ -26,6 +26,36 @@ const numberAfter = (flag: string, fallback: number) => {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
 
+if (args.includes("--filters")) {
+  /**
+   * Would *shares a tool* be a better third filter than *shares a significant word*?
+   *
+   *   pnpm relations --filters 60
+   *
+   * Free: no model is called and nothing is written. Doc 7 RD.9 proposes the swap and says it
+   * is adopted only if it removes more pairs at the same precision, so it gets a number first.
+   */
+  const { measurePairFilters } = await import("../src/server/analytics/conflicts");
+  const n = Number(args[args.indexOf("--filters") + 1]);
+  const report = await measurePairFilters(Number.isFinite(n) ? n : 40);
+
+  console.info(`\nCandidate-pair filters, measured over ${report.pairs} pairs  (no model, nothing written)`);
+  console.info(`  both sides have tool references   ${report.bothHaveTools}`);
+  console.info(`  passes 'shares a significant word' ${report.passesWord}`);
+  console.info(`  passes 'shares a tool'             ${report.passesTool}`);
+  console.info(`  tool would cut, word keeps         ${report.toolCutsWordKeeps}`);
+  console.info(`  word would cut, tool keeps         ${report.wordCutsToolKeeps}`);
+  console.info(`\n  model calls today (word only)      ${report.wordCalls}`);
+  console.info(`  model calls if swapped             ${report.swappedCalls}`);
+  console.info(
+    report.swappedCalls < report.wordCalls
+      ? `\n  The swap would send ${report.wordCalls - report.swappedCalls} fewer pair(s) to the model.` +
+          `\n  Cheaper is not the same as better: this counts pairs removed, never conflicts missed.\n`
+      : `\n  The swap saves nothing on this sample. Leave the word filter alone.\n`,
+  );
+  process.exit(0);
+}
+
 if (args.includes("--conflicts")) {
   const limit = numberAfter("--conflicts", 20);
   console.info(

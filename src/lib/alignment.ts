@@ -110,6 +110,16 @@ export type AlignmentInput = {
   hasGuardrail: boolean;
   /** Whether the draft has any resources at all, so "no code" is not read as "no reach". */
   hasResources: boolean;
+  /**
+   * How often curated skills naming the same tool carry a guardrail (Doc 7 RD.9).
+   *
+   * Optional, and `null` is the normal answer: the share is withheld below 20 skills from 10
+   * distinct repositories, because the first run of that measurement reported `gcloud` at 86%
+   * over **two sources** — two repositories' house style quoted to an author as a corpus
+   * finding. The sentence is written to read correctly without it, which is why P2 shipped
+   * before this number existed.
+   */
+  guardrailEvidence?: { tool: string; share: number; skills: number; sources: number } | null;
 };
 
 export type AlignmentReport = {
@@ -206,11 +216,22 @@ export function alignTools(input: AlignmentInput): AlignmentReport {
   const destructive = destructiveAmong(prose).filter((id) => id !== "agent:bash");
   if (destructive.length > 0 && !input.hasGuardrail) {
     const names = destructive.map((id) => `\`${toolLabel(id)}\``).join(", ");
+    const evidence = input.guardrailEvidence;
+    /*
+     * The measured half of the sentence, when there is one. *83% of curated skills that name
+     * `git` carry a guardrail* is a far stronger thing to read than the bare observation —
+     * the difference between an opinion and a finding — so it leads with the share and the
+     * sample behind it rather than asserting a norm.
+     */
+    const corpus =
+      evidence && destructive.includes(evidence.tool)
+        ? ` ${evidence.share}% of curated skills that name \`${toolLabel(evidence.tool)}\` carry one, over ${evidence.skills} skills from ${evidence.sources} repositories.`
+        : "";
     findings.push({
       kind: "unguarded-destructive",
       tool: destructive[0],
       capability: null,
-      message: `${names} can destroy data or change live state, and this draft states no constraint on using ${destructive.length > 1 ? "them" : "it"}.`,
+      message: `${names} can destroy data or change live state, and this draft states no constraint on using ${destructive.length > 1 ? "them" : "it"}.${corpus}`,
       fix: "add-guardrail",
     });
   }

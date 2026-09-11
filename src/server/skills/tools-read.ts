@@ -78,6 +78,57 @@ export async function toolViewsForVersions(
  * `/tools` therefore shows the same population `/skills` does — same registry underneath,
  * which is the whole argument for the `(public)` group reading through the DAL at all.
  */
+/**
+ * Which block types are worth quoting *about a tool*, best first (Doc 7 RD.9).
+ *
+ * Not every type says something about a tool. An `example` or a `glossary` entry from a skill
+ * that happens to run `git` is evidence about that skill, not about `git` — so the list is the
+ * three types whose subject *is* using something: the contract that invokes it, the constraint
+ * on invoking it, and the steps around it.
+ *
+ * A destructive tool leads with the guardrail, because that is the question RD.8 sends a reader
+ * here to answer: their draft names `rm` and carries no constraint, and this page is what good
+ * skills say about that.
+ */
+const EVIDENCE_TYPES = ["tool-contract", "guardrail", "procedure"] as const;
+
+export type ToolEvidenceGroup = {
+  type: (typeof EVIDENCE_TYPES)[number];
+  result: Awaited<ReturnType<typeof import("@/server/analytics/block-library").libraryFragments>>;
+};
+
+/**
+ * Real passages from skills that name one tool, for `/tools/<id>`.
+ *
+ * Goes through `libraryFragments` with `tool` set and **no category** — the whole corpus,
+ * because *what does a good guardrail about `git` look like* is not a question about `review`
+ * skills. That is one more `where` on the library's own query, so every refusal it makes still
+ * holds: the licence gate, one fragment per source, near-duplicates excluded, the word bounds.
+ *
+ * Three types at two fragments each. A page that listed every type would bury the one a reader
+ * came for, and the cap is the same restraint the library's own `MAX_FRAGMENTS` shows.
+ */
+export async function toolEvidence(
+  toolId: string,
+  destructive: boolean,
+): Promise<{ groups: ToolEvidenceGroup[]; available: boolean }> {
+  const order = destructive
+    ? (["guardrail", "tool-contract", "procedure"] as const)
+    : EVIDENCE_TYPES;
+  try {
+    const { libraryFragments } = await import("@/server/analytics/block-library");
+    const groups: ToolEvidenceGroup[] = [];
+    for (const type of order) {
+      const result = await libraryFragments({ type, tool: toolId, limit: 2 });
+      if (result.fragments.length > 0) groups.push({ type, result });
+    }
+    return { groups, available: true };
+  } catch (error) {
+    if (isMissingTable(error)) return { groups: [], available: false };
+    throw error;
+  }
+}
+
 export async function toolDirectory() {
   try {
     const { toolCoverage } = await import("@/server/analytics/tool-index");

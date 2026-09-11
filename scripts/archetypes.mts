@@ -91,6 +91,117 @@ function render(a: NonNullable<Awaited<ReturnType<typeof mineArchetype>>>) {
   console.info(`  EXEMPLARS  ${a.exemplars.map((e) => e.slug).join(", ") || "(none licence-clean)"}`);
 }
 
+if (args.includes("--tools")) {
+  /**
+   * Does the tool axis discriminate? (Doc 7 RD.9, plan step P3.)
+   *
+   *   pnpm archetypes --tools
+   *   pnpm archetypes --tools --category review
+   *
+   * Free, and it **writes nothing**. Doc 7 §2 principle 4: a mined dimension is a probe
+   * before it is a finding, and a tool lift only reaches an author if this table earns it.
+   * Same posture, and the same imported bands and threshold, as `--blocks`.
+   */
+  const { toolLiftAcrossCategories, mineToolLift } = await import(
+    "../src/server/analytics/tools-mine"
+  );
+  const { FUNCTIONS } = await import("../src/server/taxonomy/vocabulary");
+  const { MIN_BAND } = await import("../src/server/analytics/archetype");
+
+  const categoryIndex = args.indexOf("--category");
+  const one = categoryIndex >= 0 ? args[categoryIndex + 1] : undefined;
+
+  if (one) {
+    const result = await mineToolLift(one);
+    if (!result) {
+      console.info(`\nno representatives for ${one}\n`);
+      process.exit(0);
+    }
+    console.info(
+      `\nTools measured in ${one}  (${result.strongBand} curated / ${result.weakBand} other` +
+        ` · ${result.withTools} of ${result.structures} name a recognised tool)`,
+    );
+    if (!result.banded) {
+      console.info(`  a band is below ${MIN_BAND}; a percentage over it would not mean anything\n`);
+      process.exit(0);
+    }
+    console.info("\n  tool                   strong / weak   lift  needed   kept");
+    for (const row of result.measured) {
+      console.info(
+        `  ${row.label.padEnd(22)} ${String(row.strongPrevalence).padStart(4)}% / ${String(row.weakPrevalence).padStart(4)}%  ` +
+          `${String(row.lift).padStart(5)}  ${row.requiredLift.toFixed(1).padStart(6)}   ${row.kept ? "yes" : "no"}` +
+          (row.kept ? "" : `   (${row.rejectedFor})`),
+      );
+    }
+    console.info("");
+    process.exit(0);
+  }
+
+  const { banded, byTool } = await toolLiftAcrossCategories(FUNCTIONS.map((f) => f.id));
+  if (banded.length === 0) {
+    /*
+     * The refusal `archetypes --blocks` had to learn: printing a table of zeros reads as
+     * *the tool axis carries no signal* when the truth is *nothing has been measured*. Same
+     * output, opposite conclusions, on the command whose job is to decide whether the rest
+     * of the step gets built.
+     */
+    console.info(
+      "\nNo category has both bands above the floor — nothing to measure." +
+        "\n  pnpm structures --resolve-tools --drain   fills skill_tools\n",
+    );
+    process.exit(0);
+  }
+
+  console.info(`\nTool lift across ${banded.length} banded categories  (writes nothing)`);
+  console.info("\n  tool                   kept in   best lift  median  where");
+  for (const row of byTool.slice(0, 30)) {
+    console.info(
+      `  ${row.label.padEnd(22)} ${String(row.keptIn).padStart(4)}/${String(banded.length).padEnd(3)} ` +
+        `${String(row.bestLift).padStart(9)}  ${String(row.medianLift).padStart(6)}  ${row.bestCategory ?? "—"}`,
+    );
+  }
+  /*
+   * The other number this table is asked for, and it is not a lift.
+   *
+   * RD.8 wants to tell an author *"92% of curated skills that name `git` carry a guardrail;
+   * you have none"*. That is a conditional share within one band, not a contrast between two,
+   * so it survives whatever the lift says — and on this corpus the lift says nothing, which
+   * makes the distinction worth printing rather than assuming.
+   */
+  const { destructiveAmong } = await import("../src/lib/tools");
+  const { guardrailPrevalenceFor, MIN_GUARDRAIL_EVIDENCE, MIN_GUARDRAIL_SOURCES } = await import(
+    "../src/server/analytics/tools-mine"
+  );
+  const destructive = destructiveAmong(byTool.map((t) => t.tool));
+  if (destructive.length > 0) {
+    console.info(
+      `\n  Of curated skills naming a destructive tool, how many carry a guardrail` +
+        `  (RD.8's sentence; withheld below ${MIN_GUARDRAIL_EVIDENCE} skills from ${MIN_GUARDRAIL_SOURCES} sources)`,
+    );
+    for (const tool of destructive) {
+      const evidence = await guardrailPrevalenceFor(tool);
+      const { toolLabel } = await import("../src/lib/tools");
+      console.info(
+        `    ${toolLabel(tool).padEnd(22)} ` +
+          (evidence
+            ? `${String(evidence.share).padStart(3)}%  over ${evidence.skills} skills from ${evidence.sources} sources`
+            : "—     too few curated skills, or too few repositories, to quote a share"),
+      );
+    }
+  }
+
+  const earning = byTool.filter((t) => t.keptIn > 0);
+  console.info(
+    `\n  ${earning.length} of ${byTool.length} tools clear the threshold in at least one category.` +
+      (earning.length === 0
+        ? "\n  Nothing to publish: the tool axis does not separate the bands, and a dimension that" +
+          "\n  earns nothing gets reported here rather than put on an archetype card.\n"
+        : "\n  Read these before publishing any of them — a tool lift is a fact about what curated" +
+          "\n  skills reach for, never advice to write it into a draft.\n"),
+  );
+  process.exit(0);
+}
+
 if (args.includes("--blocks")) {
   /**
    * Does the block grain discriminate? (Doc 6 RW.2, mining v1.)

@@ -2171,6 +2171,116 @@ would be enforcing an untested mean.
 > draft.
 
 
+### The tool axis does not discriminate, and two of RD.9's three proposals were refused (Doc 7 RD.9, step P3)
+
+`src/server/analytics/tools-mine.ts` · `pnpm archetypes --tools` · `pnpm relations --filters`
+`pnpm blocks --library <category> --tool <id>` · `pnpm verify:tools` (46 checks, free)
+
+Doc 7 RD.9 proposed three things. **The corpus accepted one and refused two**, and the refusals
+are the more valuable half — Doc 7 §2 principle 4 exists so a dimension gets a number before it
+gets a card.
+
+#### Tool lift: 0 of 103, in 13 of 13 categories
+
+`archetypes --tools` measures prevalence in both bands with **the miner's own** `representatives()`,
+`MIN_LIFT`, `LIFT_SIGMA` and `MIN_BAND` — imported, never restated, for the reason `blocks-mine.ts`
+gives at length. Nothing clears the bar anywhere:
+
+| | strong / weak | lift | needed |
+|---|---|---|---|
+| `review` (407 / 3,341) best is `Bash` | 17% / 11% | +6 | 8.0 — and 17% is below the 25% prevalence floor |
+| `automate-browser` (35 / 505) best is `node` | 26% / 7% | +19 | 22.5 — a real gap, and a band too thin to call it |
+
+**The data is not starved** and that was checked before concluding: 1,796 of 3,748 `review`
+representatives name a recognised tool, 340 of 540 in `automate-browser`. The finding is real
+and it is interesting — **tool choice is a stack decision, not a craft convention.** Where 75%
+of curated `review` skills carry a decision rule, no single tool reaches a fifth of any curated
+band, because `git` or `gh`, `npm` or `pnpm` or `yarn`, `python` or `node` are choices about
+somebody's environment rather than about how well they write.
+
+So **no tool dimension is published on the archetype**, and `verify:tools` asserts the stronger
+form of that refusal: **the generation prompt must never learn which tools a category reaches
+for.** A model told good review skills use `gh` writes `gh` into a skill for a team on GitLab.
+Small categories are under-powered rather than refuted, and the command says so instead of
+reading as a verdict.
+
+#### The conflict filter would have cost more, not less
+
+RK.3 filters candidate pairs on *shares a significant word*; RD.9 proposed *shares a tool*
+where both sides have tool references. `pnpm relations --filters` measures the swap with no
+model call, the way E2 measured the word filter:
+
+| | 47 pairs | 97 pairs |
+|---|---|---|
+| model calls today | 42 | 85 |
+| **if swapped** | **45** | **86** |
+| tool would cut, word keeps | 0 | 1 |
+
+It removes nothing the word filter does not already remove, and *adds* calls by keeping pairs
+the word filter drops. **Not adopted.** The command says so in its own output rather than
+leaving the reader to compare two numbers, and it states the limit of what it measured: this
+counts pairs removed, never conflicts missed.
+
+#### What the corpus did support: the number RD.8 shipped without
+
+`guardrailPrevalenceFor` answers *how often curated skills that name this tool also carry a
+guardrail* — a conditional share within one band, not a contrast between two, which is why it
+survives a lift of zero. It is now in P2's finding: *"`rm` can destroy data … 83% of curated
+skills that name `git` carry one, over 240 skills from 40 repositories."*
+
+> **The first run of it reported `gcloud` at 86% over 37 skills — from two sources.** Two
+> repositories' house style, about to be quoted to an author as a corpus finding. R3.4's
+> argument arriving in a new place: evidence is counted in distinct repositories, never skills,
+> because one generator's clones are one data point. `aws` (4 sources) and `kubectl` (7) fell
+> the same way. `MIN_GUARDRAIL_SOURCES` is 10 and six tools clear both gates — `git` 83%,
+> `Bash` 87%, `gh` 83%, `bash` 89%, `docker` 81%, `rm` 95%. `verify:tools` asserts a tool that
+> fails **only** the source gate quotes nothing.
+
+The number is looked up only when it could be shown, so a draft that already has a guardrail
+costs no query, and the **best-evidenced** destructive tool is quoted rather than the first —
+picking the first would be a number chosen by array order.
+
+#### And the library gained a tool axis
+
+`pnpm blocks --library review --tool git` — one more `where` inside the existing query, so
+every refusal survives it: licence gating, one fragment per source, the 12–220 word bounds, the
+median-length ranking, source trust over `quality_score`. An unknown id is refused by naming the
+vocabulary rather than returning an empty list, which would read as a claim about the corpus
+instead of about the typo.
+
+`pnpm blocks --tool <id>` is the corpus-wide view, and it had to be added: `libraryFragments`
+made `category` optional precisely so *what does a good guardrail about `git` look like* could
+be asked, and until this flag existed **only `/tools/<id>` could reach that path** — so a claim
+about what it returns got made from a command that does something else. A surface no command
+can reach is a surface nobody checks. It prints through the same `toolEvidence` the page
+renders, so the two cannot diverge.
+
+> **The licence gate under the filter was asserted vacuously at first.** The check read
+> *text is present or a reason is* over `review` + `git`, where all six candidates are
+> quotable — so it passed without ever seeing a withheld fragment. It now hunts for one and
+> tests it: `pandoc` → `snyk/agent-scan`, `metadata_only`, **text absent, attribution and
+> origin URL intact**. A tool-filtered query cannot quote what the download route returns 451
+> for, and withholding the text is not the same as hiding whose work it is.
+
+> **What that withheld fragment turned out to be is the best evidence the chain works.**
+> `anthropics/skills` looked wrong in the output — a curated, first-party, Apache-2.0 repo
+> showing `metadata_only`. It is not wrong. Fourteen of its skills are `attribution_required`
+> from `in_tree_license`; **four declare `license: proprietary` in their own frontmatter**, and
+> a per-skill declaration outranks the repository's LICENSE (R1.6's ordering). `snyk/agent-scan`
+> splits the same way, 13 to 4.
+>
+> So Anthropic's own `pdf`, `xlsx`, `pptx` and `docx` skills are indexed, searchable, scored,
+> block-extracted and **never copied** — which is precisely the posture the platform promises
+> for content it may describe and may not mirror. `license_evidence` records the step, the
+> match and what else was considered, so the decision is auditable rather than asserted:
+> `{"matched":"frontmatter:proprietary","considered":[…]}`. Checked because the output looked
+> like a resolver bug; it was the resolver being right about a subtle case.
+
+`category` became optional so *what does a good guardrail about `git` look like* can be asked
+at all — and when it is absent the `skill_categories` join is **dropped** rather than left
+unfiltered, because a skill with three labels would otherwise contribute three rows and skew
+the median length the ranking depends on.
+
 ### Three places a skill says what it runs, and nothing had compared them (Doc 7 RD.8, step P2)
 
 `src/lib/alignment.ts` · `src/server/builder/alignment.ts` · `components/builder/alignment-panel.tsx`
@@ -4021,6 +4131,23 @@ those need opposite fixes and guessing between them is most of the time lost to 
 The dynamic-import case is the one that mattered here: the broken call was
 `await import("@/server/evals/matrix")` inside a server action, which a grep for `^import` would
 never have seen. Same shape as the `aws4fetch` grep that returned clean and meant nothing.
+
+> **Two faults in the checker itself, both found on 2026-09-11, both the same thing: a suite
+> that compares git against the disk must be able to describe every difference.**
+>
+> It hunted one direction only — files a fresh clone would *lack*. The mirror case is a file a
+> clone would **have** and this copy does not: something committed and then deleted without
+> staging the deletion. It did not report that; it **threw `ENOENT` out of the read loop and
+> died with a stack trace**, so the one surface whose whole job is this comparison was the one
+> that could not name the difference. It is a check now, and it names `git add -A`.
+>
+> And it read imports out of **comments**. A comment in `verify:tools` explaining a *different*
+> scanner's self-match trap quoted a half-written specifier, and this checker reported that
+> suite as importing a module called `@/lib` — the prose describing a trap tripping the trap,
+> third time after `verify:relations` matching its own warnings and the `no-db-in-api` hook
+> matching a comment promising compliance. A commented-out import is not an import. A false
+> positive matters more here than in most scanners: this one is read to decide whether a commit
+> is safe, so crying wolf teaches people to stage past it.
 
 ### The optimiser: a cheaper skill, proven before it is offered (RW.9, plan step D4)
 
@@ -6110,8 +6237,11 @@ pnpm structures --tools              # the stored table, after the 2.1.0 re-extr
 pnpm structures --resolve-tools --drain  # token counts -> skill_tools (Doc 7 P1); free, no bundles
 pnpm structures --repair-tools       # hand back fingerprints whose tool counts are not numbers
 pnpm archetypes --blocks             # does the block grain discriminate? (RW.2) — free
+pnpm archetypes --tools              # does the tool axis? (Doc 7 RD.9) — free, writes nothing; answer was no
+pnpm relations --filters 100         # would 'shares a tool' beat 'shares a word'? free; answer was no
 pnpm blocks --library review         # read real fragments per block type (RW.3) — free
 pnpm blocks --library plan --type reference-pointer --wider
+pnpm blocks --library review --tool git   # the same library, narrowed to one tool (RD.9)
 pnpm taxonomy --sample 20            # categories — COSTS MONEY, capped at 100/run
 pnpm taxonomy --status | --review | --resync
 pnpm verify:lists | verify:revocation | verify:export | verify:takedown | verify:publish

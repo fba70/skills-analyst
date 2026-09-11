@@ -11,6 +11,7 @@ import {
   MAX_GUARDRAILS_PER_SIDE,
 } from "@/lib/relations";
 import { db } from "@/server/db";
+import { EXTRACTOR_VERSION } from "./structure";
 import {
   skillBlocks,
   skillEmbeddings,
@@ -162,6 +163,86 @@ type Candidate = {
   bVersion: string;
   similarity: number;
 };
+
+/**
+ * Would *shares a tool* be a better third filter than *shares a significant word*? (Doc 7 RD.9.)
+ *
+ * **Measures, calls no model, writes nothing.** RD.9 proposes replacing the lexical gate where
+ * both skills have tool references, and says the replacement is adopted *only if it removes
+ * more pairs at the same precision*. E2 measured the word filter the same way — pairs
+ * considered against pairs called — and found it removed 2 of 11, useful and much weaker than
+ * the similarity threshold. A filter is a cost decision, so it gets a number before it gets a
+ * commit.
+ *
+ * The honest caveat, stated because the number invites the opposite reading: this counts
+ * *pairs removed*, not *conflicts missed*. A filter that removes more is cheaper and is only
+ * better if the pairs it removes were going to be clean, which this cannot see — only
+ * `--live`'s controls and a real run can.
+ */
+export async function measurePairFilters(limit = 40): Promise<{
+  pairs: number;
+  bothHaveTools: number;
+  passesWord: number;
+  passesTool: number;
+  /** Pairs the tool filter would cut that the word filter passes, and the reverse. */
+  toolCutsWordKeeps: number;
+  wordCutsToolKeeps: number;
+  /** What each rule would send to the model, over the pairs where a swap is even possible. */
+  wordCalls: number;
+  swappedCalls: number;
+}> {
+  const candidates = await candidatePairs(limit);
+  const ids = [...new Set(candidates.flatMap((pair) => [pair.aId, pair.bId]))];
+
+  const bySkill = new Map<string, Set<string>>();
+  if (ids.length > 0) {
+    const { rows } = await db.execute<{ skill_id: string; tool: string }>(sql`
+      select skill_id, tool from skill_tools
+       where extractor_version = ${EXTRACTOR_VERSION}
+         and skill_id = any(${sql`array[${sql.join(
+           ids.map((id) => sql`${id}::uuid`),
+           sql`, `,
+         )}]`})
+    `);
+    for (const row of rows) {
+      const set = bySkill.get(row.skill_id) ?? new Set<string>();
+      set.add(row.tool);
+      bySkill.set(row.skill_id, set);
+    }
+  }
+
+  const out = {
+    pairs: candidates.length,
+    bothHaveTools: 0,
+    passesWord: 0,
+    passesTool: 0,
+    toolCutsWordKeeps: 0,
+    wordCutsToolKeeps: 0,
+    wordCalls: 0,
+    swappedCalls: 0,
+  };
+
+  for (const pair of candidates) {
+    const a = bySkill.get(pair.aId) ?? new Set<string>();
+    const b = bySkill.get(pair.bId) ?? new Set<string>();
+    const both = a.size > 0 && b.size > 0;
+    const sharesTool = [...a].some((tool) => b.has(tool));
+    const word = sharesTerm(pair.aGuardrails, pair.bGuardrails);
+
+    if (both) out.bothHaveTools += 1;
+    if (word) out.passesWord += 1;
+    if (sharesTool) out.passesTool += 1;
+    if (both && word && !sharesTool) out.toolCutsWordKeeps += 1;
+    if (both && sharesTool && !word) out.wordCutsToolKeeps += 1;
+
+    if (word) out.wordCalls += 1;
+    // RD.9's proposal exactly: the tool rule where both sides have tools, the word rule where
+    // they do not, so a pair with no tool references is never silently dropped.
+    if (both ? sharesTool : word) out.swappedCalls += 1;
+  }
+
+  return out;
+}
 
 export async function mineConflicts(
   options: { limit?: number } = {},

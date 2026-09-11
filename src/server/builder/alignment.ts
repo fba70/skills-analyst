@@ -133,13 +133,49 @@ export async function alignmentForDraft(
       ]
     : null;
 
+  const hasGuardrail = (fingerprint.blockCounts.guardrail ?? 0) > 0;
+
   return alignTools({
     prose: [...prose],
     declared,
     bundleCapabilities: await bundleCapabilities({ body, frontmatter, files, dialect: draft.dialect }),
-    hasGuardrail: (fingerprint.blockCounts.guardrail ?? 0) > 0,
+    hasGuardrail,
     hasResources: resources.length > 0,
+    // Looked up only when it could be shown, so a draft that already has a guardrail costs
+    // no query at all.
+    guardrailEvidence: hasGuardrail ? null : await guardrailEvidenceFor([...prose]),
   });
+}
+
+/**
+ * The corpus share behind RD.8's sentence, for the best-evidenced destructive tool named.
+ *
+ * The **best-evidenced**, not the first: a draft naming two destructive tools where only one
+ * clears the gate should quote that one, and picking the first would be a number chosen by
+ * array order. `null` whenever nothing clears it, which is most tools — six of twenty-four do
+ * on this corpus — and the sentence reads correctly without it.
+ */
+async function guardrailEvidenceFor(
+  prose: readonly string[],
+): Promise<{ tool: string; share: number; skills: number; sources: number } | null> {
+  const { destructiveAmong } = await import("@/lib/tools");
+  const candidates = destructiveAmong(prose).filter((id) => id !== "agent:bash");
+  if (candidates.length === 0) return null;
+
+  try {
+    const { guardrailPrevalenceFor } = await import("@/server/analytics/tools-mine");
+    let best: { tool: string; share: number; skills: number; sources: number } | null = null;
+    for (const tool of candidates) {
+      const evidence = await guardrailPrevalenceFor(tool);
+      if (evidence && (best === null || evidence.sources > best.sources)) {
+        best = { tool, ...evidence };
+      }
+    }
+    return best;
+  } catch {
+    // The panel is worth more than the number; a missing table must not empty the card.
+    return null;
+  }
 }
 
 /**
