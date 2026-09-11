@@ -2171,6 +2171,95 @@ would be enforcing an untested mean.
 > draft.
 
 
+### Version drift: the half of RK.2 that was never built, and every feed was fetched before it was believed (Doc 7 RD.10, step P5)
+
+`src/lib/versions.ts` · `src/server/skills/versions.ts` · migration 0053
+`pnpm versions --check [--dry]` · `pnpm versions --status` · `pnpm verify:version-drift` (40 checks, free)
+
+RK.2 promised *"your skill teaches Next 15 idioms; 16 changed X"*. Link rot and review dates
+shipped; this did not, because nothing knew which projects a skill referenced. P0's pins and a
+vocabulary close it.
+
+#### Drift is not rot, and nothing here may demote anything
+
+A skill teaching Next 15 idioms is **exactly right** for a codebase on Next 15. So this
+produces a fact shown beside the skill and touches neither the lifecycle, the quality score
+nor any trust surface. **`stale` — a review date somebody set and let pass — stays the only
+freshness signal that moves a state**, because that one is a governance decision a human made.
+`verify:version-drift` scans the derivation for any reach into the lifecycle and asserts
+`lifecycle.ts` has never heard of drift.
+
+#### The noise was in the name half, which is what made a vocabulary the fix
+
+7,023 documents carry a pin. The raw table looks unusable — `if` at **90 repositories**, `is`
+62, `rate` 50, `count`, `ratio`, `target` — and the first read of it suggested RD.10 could not
+be built. Filtering to one name says otherwise: `python` reads 3, 3.10, 3.8, 3.11, 3.12;
+`node` reads 18, 20, 22, 16, 24; `go` reads 1.21, 1.24, 1.22. **The versions were right all
+along and the names were the problem**, so the fix is P1's: a closed vocabulary applied at
+**read time**, with `version_pins` keeping every candidate the way `tool_refs` keeps every
+token. Widening the list is a query, not a 2.5-hour re-extract.
+
+Two exclusions are the judgement this list turns on, and both are the most-pinned names after
+the runtimes. **Standards** — `wcag` 64, `oauth` 55, `tls` 28, `openapi` 25 — are out because
+*a standard version is a choice, not staleness*: a skill written against WCAG 2.1 does not
+become wrong when 2.2 ships. **Models** — `opus` 36, `gemini` 34, `sonnet` 31 — are out
+because a model id is already a setting here rather than something to nag an author about.
+
+#### Four of the first twenty feeds were 404s
+
+`releases` was the one field P1 refused to write, on the grounds that a URL from memory is what
+`seeds.ts` was burned by. That refusal paid immediately: the first draft put `python`, `go`,
+`django` and `postgres` on GitHub releases and **all four 404'd**, because those projects tag
+rather than release.
+
+> **Tags are not a substitute, and were checked rather than assumed.** `python/cpython` returns
+> release candidates first — `v3.15.0rc2` while 3.14 is stable. `golang/go` returns **weekly
+> tags from 2012**. `django/django` returns branch pointers (`stable/5.1.x`). `openjdk/jdk`
+> returns early-access builds (`jdk-28+15`). Any of them would have produced a confident claim
+> about a version nobody shipped.
+>
+> So there is a second feed kind — endoflife.date — for the three that tag, and the reason it
+> is trustworthy is a **cross-check**: where both sources answer, they agree (`node` reads
+> 26.8.2 from each). `java` is dropped outright: no GitHub releases, tags that are
+> early-access, and no endoflife product. Nothing is claimed for it rather than something
+> invented. `postgres` is dropped because **no skill pins it** — it was in my draft from
+> memory, and the suite now asserts every entry is pinned somewhere so that cannot recur.
+
+All 19 remaining feeds were fetched and answered before the list was trusted.
+
+> **And one of my own checks could not fail.** The parser was anchored, so
+> `swift-6.3.3-RELEASE`, `php-8.5.10` and `bun-v1.4.2` parsed to nothing — three tracked
+> projects that would have produced drift **never**, silently, because an unparseable version
+> compares as `unknown`. The check meant to catch it read
+> `parseVersion(x).length === 0 || …`, an `||` whose right side was trivially true. It now
+> asserts each real tag shape against its expected numbers, written out from the feeds.
+
+Precision is per project — `major` for `node 18`, `minor` for `python 3.11` — because nobody
+writing against Python 3.11 meant 3.11.4, and drift on a patch would fire on every document
+every month. Nothing is surfaced below **two releases** behind: one behind is ordinary and
+often deliberate. 1,634 indexed documents pin a tracked project, about 3.4% of the corpus.
+
+> **The threshold was denominated in a unit half the list never moves in, and the real-data
+> check is what caught it.** It counted *majors*, so a skill pinning `terraform 1.7.0` against
+> a current `1.16.2` — nine releases behind — scored **zero** and could never surface. Nor
+> could anything pinning `python`, `go`, `rust` or `kubectl`, all of which have lived on one
+> major for years: half the tracked list was unreachable by construction, and every check was
+> green. `stepsBehind` counts in the project's own unit now, and the suite asserts the
+> terraform case by name.
+>
+> This is the third time here that a gate has been measured with something that is not the
+> gate, after `taxonomy --status` counting skills where the miner counts structures, and the
+> near-proxy that would have replaced it. The check that found it is the one that runs the
+> derivation **against a real stored document** rather than asserting the SQL exists — it
+> reported `0 surfaced` for a document that plainly should have, which is the kind of quiet
+> wrong answer no schema assertion can see.
+
+> **And a SQL scoping bug in that very check.** Its candidate query put
+> `jsonb_array_elements(...) p` after the join that reads `p`, and Postgres refused the whole
+> statement with *column "p" does not exist*: FROM items resolve left to right, so a lateral
+> declared later cannot be referenced earlier. The comma form reads as though order does not
+> matter. It is `cross join lateral`, spelled out, before its reader.
+
 ### The tool axis does not discriminate, and two of RD.9's three proposals were refused (Doc 7 RD.9, step P3)
 
 `src/server/analytics/tools-mine.ts` · `pnpm archetypes --tools` · `pnpm relations --filters`
@@ -4021,6 +4110,21 @@ the whole answer.
 > to the front as never-checked, and **sorted to the front again next pass** — starving the queue
 > behind them. Excluded from the selector rather than marked checked, because a row saying "looked,
 > found nothing" would be a claim about a document we cannot open.
+
+> **`verify:freshness` had been red for three days and nobody saw it** (found 2026-09-11).
+>
+> The queue-jump probe backdates a link check by 48 hours and asserts that document reaches
+> the front of `nextTargets`. `nextTargets` ranks unconfirmed-stale failures first and breaks
+> the tie on the **oldest** check — and E1's own first real pass left **53 documents** at that
+> rank dated 2026-09-08, every one of them older than a 48-hour backdate. So the victim ranked
+> 54th and the check reported the queue jump as broken while it was working exactly as
+> designed.
+>
+> **A fixture that only holds on a corpus with no real findings stops holding the moment the
+> feature it tests is used.** The backdate is derived from `min(checked_at)` now, so it is
+> oldest by construction whatever has accumulated. Worth knowing more generally: this suite is
+> not in the baseline sweep at the top of `specs/plan.md`, which is why three days passed —
+> the sweep is where a stateful probe earns its place.
 
 > **The extractor had the bug its own comment warned about.** A URL inside backticks kept the
 > closing backtick, and a URL with a stray character 404s — which is the one verdict this module
@@ -6279,6 +6383,7 @@ pnpm verify:parameters                   # RD.1–RD.3 parameters, rules, covera
 pnpm verify:tool-refs                    # RD.6 tool tokens: the naive reading fails first; free
 pnpm verify:tools                        # RD.6/RD.7 the vocabulary, and the tail it refuses to name; free
 pnpm verify:tool-alignment               # RD.8 steps vs allowed-tools vs the bundle; free, never a gate
+pnpm verify:version-drift                # RD.10 drift is a fact, never a demotion; free
 pnpm verify:improve                      # R5.6 a fork carries its licence; free, no network
 pnpm verify:scope                        # RW.10/RW.11 scope and disclosure; free, no network
 pnpm scope --status                      # coverage first, then the finding; free
@@ -6289,6 +6394,7 @@ pnpm verify:maintainers                  # RK.6 endorsement counts only while st
 pnpm maintainers --status                # who maintains what, and which categories have nobody
 pnpm maintainers --grant <email> function review --by <you@example.com>
 pnpm links --status | --check 200        # external link rot; free, bounded, polite
+pnpm versions --check [--dry] | --status # RD.10 version drift; free, 19 feeds, never scheduled
 pnpm verify:tree                         # would a fresh clone build this? free, offline
 pnpm db:audit                            # is the derived data current? one command, free
 pnpm verify:blocks                       # block taxonomy and span invariants; free

@@ -89,3 +89,64 @@ export const linkChecks = pgTable(
     }),
   ],
 );
+
+/**
+ * The latest released version of each thing skills pin (Doc 7 RD.10, plan step P5).
+ *
+ * ## A state table, not a log — and for the reason `link_checks` is one
+ *
+ * The entire value of a row is *what is current now*. A history keyed by check would grow by
+ * project × pass to answer a question only the newest row answers, and the two numbers worth
+ * keeping from the past — the failure streak and when it started — are columns.
+ *
+ * ## One row per tracked project, not per skill
+ *
+ * Twenty projects against seven thousand documents that pin something. The drift a reader sees
+ * is **derived on read** by comparing a skill's stored `version_pins` against this table, so
+ * nothing has to be recomputed when a release ships: one row changes and every document that
+ * names it reads differently. The same reason the lifecycle is a derivation rather than a
+ * column, and the reason RK.4's transclusion state is not stored either.
+ *
+ * `org_id` is deliberately absent: what Node released is not a fact about anybody's workspace.
+ * That makes this the rare table with no tenant column, which is safe **because of the column
+ * list** — a project name, a version string, a date and a status. It may never grow a column
+ * that names a skill, an organisation or a URL a customer supplied.
+ */
+export const toolVersions = pgTable(
+  "tool_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** One of `VERSIONED_IDS`. A closed vocabulary, which is what makes the join sound. */
+    subject: text("subject").notNull(),
+    /** The latest released version as the feed reports it, or NULL when nothing answered. */
+    currentVersion: text("current_version"),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+    /** `ok` | `blocked` | `unreachable` — the same three a link check distinguishes. */
+    status: text("status").notNull(),
+    statusCode: integer("status_code"),
+    /**
+     * Kept for the same reason `link_checks` keeps it: one refusal is a fact about a bad
+     * afternoon, and a run of them is a fact about the feed. A single failure must never
+     * discard a version we already know.
+     */
+    consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+    checkedAt: timestamp("checked_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("tool_versions_uq").on(t.subject),
+    index("tool_versions_due_idx").on(t.checkedAt),
+    /**
+     * Readable by everyone, writable by the app.
+     *
+     * There is no tenant dimension to scope on — a release date is a fact about the world —
+     * and the drift it feeds is shown on public skill pages, so an org-scoped read would make
+     * the feature invisible to exactly the anonymous reader R8.1 exists for.
+     */
+    pgPolicy("public_read", {
+      for: "all",
+      to: "app_runtime",
+      using: sql`true`,
+      withCheck: sql`true`,
+    }),
+  ],
+);

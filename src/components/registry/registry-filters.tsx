@@ -46,26 +46,45 @@ function SearchBox({
 
   return (
     <form
-      /* Full width on a phone: sharing a wrapping flex row with four selects squeezed
-         this down to the search icon and nothing else. */
-      className="relative w-full sm:w-auto sm:min-w-0 sm:flex-1 sm:max-w-xs"
+      /*
+       * Its own row, and it fills it.
+       *
+       * This used to share one wrapping flex row with the facet selects, capped at
+       * `max-w-xs`. Each `SelectTrigger` carries `min-w-36`, so as facets were added the
+       * box was squeezed to the search icon and nothing else — the hazard the previous
+       * comment here already named, arriving again the moment a seventh facet landed.
+       * Search is the primary control on this page and the facets are secondary, so the
+       * layout now says so.
+       */
+      className="flex w-full items-center gap-2"
       onSubmit={(event) => {
         event.preventDefault();
         onSearch(value);
       }}
     >
-      <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
-      <Input
-        name="q"
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        placeholder="Search skills…"
-        aria-label="Search skills"
-        className="pl-9"
-      />
-      {pending ? (
-        <Loader2 className="text-muted-foreground absolute top-1/2 right-3 size-4 -translate-y-1/2 animate-spin" />
-      ) : null}
+      <div className="relative min-w-0 flex-1">
+        <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
+        <Input
+          name="q"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          placeholder="Search skills…"
+          aria-label="Search skills"
+          className="pl-9"
+        />
+        {pending ? (
+          <Loader2 className="text-muted-foreground absolute top-1/2 right-3 size-4 -translate-y-1/2 animate-spin" />
+        ) : null}
+      </div>
+      {/*
+       * A visible submit, because the only way to run a search was to press Enter in a
+       * field that gave no sign it was part of a form. The behaviour is unchanged — the
+       * button submits the same form the key already did — but a control with no
+       * affordance reads as one that does not work, which is how it was reported.
+       */}
+      <Button type="submit" variant="secondary" disabled={pending}>
+        Search
+      </Button>
     </form>
   );
 }
@@ -149,16 +168,17 @@ export function RegistryFilters({ options, pageSizes, sorts }: RegistryFiltersPr
 
   return (
     <div className="grid gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {/* Keyed on the URL value: when `q` changes from anywhere else — back button,
-            Clear — the box remounts with the new value instead of syncing in an effect. */}
-        <SearchBox
-          key={params.get("q") ?? ""}
-          initialValue={params.get("q") ?? ""}
-          pending={isPending}
-          onSearch={(value) => apply({ q: value })}
-        />
+      {/* Keyed on the URL value: when `q` changes from anywhere else — back button,
+          Clear — the box remounts with the new value instead of syncing in an effect. */}
+      <SearchBox
+        key={params.get("q") ?? ""}
+        initialValue={params.get("q") ?? ""}
+        pending={isPending}
+        onSearch={(value) => apply({ q: value })}
+      />
 
+      {/* Second row: the facets, and Clear, which resets the query as well as these. */}
+      <div className="flex flex-wrap items-center gap-2">
         {facets.map((facet) => (
           <Select
             key={`${facet.key}-${facet.label}`}

@@ -65,6 +65,8 @@
     "verify:tool-refs": "tsx --conditions=react-server scripts/verify-tool-refs.mts",
     "verify:tools": "tsx --conditions=react-server scripts/verify-tools.mts",
     "verify:tool-alignment": "tsx --conditions=react-server scripts/verify-tool-alignment.mts",
+    "versions": "tsx --conditions=react-server scripts/versions.mts",
+    "verify:version-drift": "tsx --conditions=react-server scripts/verify-version-drift.mts",
     "verify:draft-blocks": "tsx --conditions=react-server scripts/verify-draft-blocks.mts",
     "verify:stream": "tsx --conditions=react-server scripts/verify-stream.mts",
     "verify:interview": "tsx --conditions=react-server scripts/verify-interview.mts",

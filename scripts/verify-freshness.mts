@@ -366,13 +366,28 @@ if (connected) {
       if (!victim) {
         skip("the queue-jump probe", "no readable public document to backdate");
       } else {
+        /*
+         * Backdated **older than every real row**, not by a fixed 48 hours.
+         *
+         * The fixed version was corpus-dependent and had been failing for three days without
+         * anybody noticing. `nextTargets` ranks unconfirmed-stale failures first and breaks
+         * the tie on the oldest check — and E1's first real pass left **53 documents** sitting
+         * at that rank since 2026-09-08, all older than a 48-hour backdate. So the victim
+         * ranked 54th and the assertion read as "the queue jump is broken" when the queue jump
+         * was working exactly as designed.
+         *
+         * A fixture that only holds on a corpus with no real findings is a fixture that stops
+         * holding the moment the feature it tests is used. Derived from the table so it is
+         * oldest by construction, whatever the corpus has accumulated.
+         */
         await owner.query(
           `insert into link_checks
              (skill_id, skill_version_id, url, status, status_code, consecutive_failures, checked_at)
            values ($1, $2, 'https://verify-freshness.invalid/probe', 'broken', 404, 1,
-                   now() - interval '48 hours')
+                   coalesce((select min(checked_at) from link_checks), now()) - interval '1 day')
            on conflict (skill_version_id, url) do update
-             set consecutive_failures = 1, checked_at = now() - interval '48 hours'`,
+             set consecutive_failures = 1,
+                 checked_at = coalesce((select min(checked_at) from link_checks), now()) - interval '1 day'`,
           [victim.skill_id, victim.version_id],
         );
 

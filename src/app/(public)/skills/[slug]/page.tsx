@@ -16,6 +16,7 @@ import { DownloadCard } from "@/components/registry/download-card";
 import { EndorsementCard } from "@/components/registry/endorsement-card";
 import { ProvenanceCard } from "@/components/registry/provenance-card";
 import { ToolChips } from "@/components/registry/tool-chips";
+import { VersionDriftCard } from "@/components/registry/version-drift";
 import {
   OverallVerdict,
   VerdictBadge,
@@ -33,6 +34,7 @@ import { isWatching } from "@/server/notifications/watch";
 import { withdrawalNotice } from "@/server/compliance/takedown";
 import { getSession } from "@/server/dal/session";
 import { getSkillBySlug } from "@/server/dal/skills";
+import { driftViewForVersion } from "@/server/skills/drift-read";
 import { toolViewForVersion } from "@/server/skills/tools-read";
 import { labelFor } from "@/server/taxonomy/vocabulary";
 
@@ -77,7 +79,7 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
    */
   const session = await getSession();
 
-  const [outcomes, collectionStart, relations, endorsement, affordance, watching, toolView] =
+  const [outcomes, collectionStart, relations, endorsement, affordance, watching, toolView, driftView] =
     await Promise.all([
     outcomesForSkill(skill.id),
     outcomeCollectionStart(),
@@ -113,6 +115,12 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
      * than the skill — a re-sync produces a new document that may run different commands.
      */
     toolViewForVersion(skill.versionId),
+    /*
+     * Version drift (Doc 7 RD.10) — keyed on the version for the reason the tools are: a
+     * re-sync produces a new document that may pin something different. Information only; it
+     * reaches no badge, no score and no lifecycle state.
+     */
+    driftViewForVersion(skill.versionId),
   ]);
 
   const mined = await minedCategories();
@@ -232,6 +240,13 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
         reviewBy={skill.reviewBy}
         supersededBy={skill.supersededBy}
       />
+
+      {/*
+        Beside the lifecycle notice, because both answer *is this still current* — and apart
+        from it, because only one of them is a state. The notice can say a skill is stale or
+        superseded; this can only say the world moved on, which is a fact about the world.
+      */}
+      <VersionDriftCard drifts={driftView.drifts} />
 
       <ConsistencyCard verdicts={skill.verdicts} />
 

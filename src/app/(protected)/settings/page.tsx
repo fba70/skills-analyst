@@ -32,6 +32,7 @@ import { archetypeSummary } from "@/server/analytics/archetype-run";
 import { archetypeActivity, loopEvents, loopMetrics } from "@/server/analytics/loop";
 import { DUE_SOON_DAYS } from "@/lib/freshness";
 import { dueForReview } from "@/server/skills/lifecycle";
+import { versionSummaryView } from "@/server/skills/drift-read";
 import { linkCheckSummary, rottenLinks } from "@/server/skills/links";
 import { MODEL_TASKS } from "@/lib/models";
 import { getModelSettings } from "@/server/settings/models";
@@ -154,7 +155,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, flags, platformBudget, breakdown, mcpUsage, metrics, activity, loopLog, linkRot, linkCoverage, schedule, rateLimits, models, maintainerRoster, maintainerCounts] =
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, flags, platformBudget, breakdown, mcpUsage, metrics, activity, loopLog, linkRot, linkCoverage, trackedVersions, schedule, rateLimits, models, maintainerRoster, maintainerCounts] =
     await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
@@ -180,6 +181,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "loop" ? loopEvents() : null,
     tab === "freshness" ? rottenLinks(50) : null,
     tab === "freshness" ? linkCheckSummary() : null,
+    tab === "freshness" ? versionSummaryView() : null,
     tab === "schedule" ? getSchedule() : null,
     tab === "limits" ? getRateLimits() : null,
     tab === "models" ? getModelSettings() : null,
@@ -355,6 +357,12 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
               blocked: linkCoverage.blocked,
               unreachable: linkCoverage.unreachable,
             }}
+            /*
+              Already serialised and aged by the reader boundary, so this passes straight
+              through — including `null`, which is the absent-table case and makes the section
+              print the command rather than an empty table.
+            */
+            versions={trackedVersions}
           />
         ) : null}
 
