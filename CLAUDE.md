@@ -238,7 +238,7 @@ where these numbers came from.
 | Taxonomy | **46,489 labelled**, 103,588 assignments · 163 held below the floor · 1,327 unlabelled |
 | Validation | 443,222 verdicts, all current |
 | Archetypes | 13 categories at **v9 (review v10)**, miner **3.0.0** · 91 earlier rows kept as history · public at `/archetypes` |
-| Blocks | **1,620,316 typed spans** at extractor 2.0.0 across 50,870 of 50,965 documents · now mined and published · **extractor is 2.1.0 since 2026-09-10** (tool references) and the re-extract has not run — every stored fingerprint reads as stale until `pnpm structures --extract 500 --drain` |
+| Blocks | **1,620,316 typed spans** across 50,870 of 50,965 documents · mined and published · **extractor 2.1.0** (tool references, Doc 7 P0) re-extracted 2026-09-11: 50,965 of 50,966, block output byte-identical because no segmentation rule moved |
 | Embeddings | 47,854 of 47,855 canonical skills · pgvector 0.8.6, HNSW cosine, 1,536 dimensions · $0.08 |
 | Lifecycle | **new (A4)** — derived second axis; battle-tested unreachable by construction |
 | Entitlements | **new (A5)** — three plans; the trust surfaces cannot be gated at all |
@@ -2262,6 +2262,38 @@ proves a rule *can* fire, only real text shows what it fires on.
 > as a command — before asserting the detector declines. A fixture that no longer reproduces the
 > bug is a fixture that passes for the wrong reason.
 
+#### One skill in the corpus is named after a prototype property, and it poisoned the ledger
+
+> **The whole re-extract finished green and the summary query died on
+> `invalid input syntax for type integer: "function Object() { [native code] }1"`.**
+>
+> `counts[token] = (counts[token] ?? 0) + 1` on a plain object reads through the prototype. One
+> document has a fence line reading `constructor`, so the lookup found
+> `Object.prototype.constructor` — not null, so `??` never fired — and the count became that
+> function stringified with `1` appended. It was written to jsonb where an integer belongs, in
+> 1 of 50,965 rows, and **nothing noticed for a whole 2.5-hour pass**: the extractor does not
+> read the value back, and `verify:tool-refs` was only checking that rows existed.
+>
+> `constructor` is the only token that can do it — `__proto__` cannot match `COMMAND_SHAPE`,
+> and `toString`/`valueOf` survive lower-casing as `tostring`/`valueof`, which inherit nothing.
+> So a one-word blocklist would have fixed it and would have been the wrong fix: **the hazard is
+> the accumulator, not the word.** The tally is a `Map` now, converted with
+> `Object.fromEntries`, and neither half has a prototype chain to read through.
+>
+> Two checks came out of it, and the second is the one that matters. `verify:tool-refs`
+> reproduces the naive object accumulator and requires it to produce a *string* before asserting
+> the real one produces a number — and then asserts against the **table** that no stored count
+> is non-numeric, because this bug was found by a query failing a whole pass later rather than
+> by any check or any amount of reading. `pnpm structures --repair-tools` hands an affected
+> fingerprint back to the extractor by deleting it, since the selector already means "no
+> fingerprint at this version". The value is never patched: reasoning the true count out of the
+> corruption string is the guess this codebase re-derives instead of making.
+>
+> The audit lesson is the one `recordUsage` and `recordOutcome` already taught in a different
+> costume — **a writer that never reads its own output back cannot tell you it wrote nonsense.**
+> Every other counter in the tree was checked: only this one takes corpus-controlled text as an
+> object key. `blockCountsOf`, `byType` and `byRule` are all closed vocabularies.
+
 **What it measured** (400 bundles): 53% of skills reference a tool, 9% declare `allowed-tools`,
 47% carry a decision rule at 3.2 per skill. Per category, from stored block counts over the whole
 labelled corpus, **38–55% of skills carry a decision rule** — Part A's input exists in half of
@@ -2274,12 +2306,11 @@ backticks is argv-shaped too, so a command needs an *argument* to stand alone; a
 are the roughest detector, read from prose only, mid-sentence, capitalised or confirmed. P5 reads
 their noise before building on them.
 
-> **The extractor is 2.1.0 and the re-extract has not run.** No block rule changed, so every
-> stored span stays valid — but the version string is the only selector a re-extract has, and
-> the three new columns are empty on every 2.0.0 row. Until `pnpm structures --extract 500
-> --drain` finishes (~2.5 hours, free, in your own shell), `db:audit`, `archetypes --mine-all`,
-> `verify:blocks` and `verify:tokens` all report the corpus as unextracted, and they are right
-> to. The stored `--tools` table is empty until then; the probe answers now.
+> **The 2.1.0 re-extract is done** (2026-09-11): 50,965 of 50,966, and the block output is
+> byte-identical because no segmentation rule moved — `verify:blocks` 55/55 and the span count
+> unchanged at 1,620,316. The version string is the only selector a re-extract has, so the bump
+> was needed even though only three columns were new, and for the 2.5 hours it ran `db:audit`
+> and every block surface honestly reported the corpus as unextracted.
 
 ### Expertise capture: the value is the denominator (RK.8, plan step E7) — Team
 
@@ -5833,6 +5864,7 @@ pnpm structures --probe 250          # block detection, DRY: reads bundles, writ
 pnpm structures --blocks             # stored block coverage (Doc 6 RW.1)
 pnpm structures --probe 400 --tools  # tool references and decision rules, DRY, from real bundles (Doc 7 P0)
 pnpm structures --tools              # the stored table, after the 2.1.0 re-extract
+pnpm structures --repair-tools       # hand back fingerprints whose tool counts are not numbers
 pnpm archetypes --blocks             # does the block grain discriminate? (RW.2) — free
 pnpm blocks --library review         # read real fragments per block type (RW.3) — free
 pnpm blocks --library plan --type reference-pointer --wider

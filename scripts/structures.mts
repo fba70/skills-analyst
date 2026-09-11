@@ -18,6 +18,7 @@ import { categoryEvidence, sourceDiversity, templateClusters } from "../src/serv
  *   pnpm structures --tools           # stored tool references + decision rules per category (Doc 7 P0)
  *   pnpm structures --probe 300 --tools   # the same table, DRY, from real bundles — the answer today
  *   pnpm structures --probe 300 --tools --samples npx   # read the lines behind one token
+ *   pnpm structures --repair-tools    # hand back fingerprints whose tool counts are not numbers
  *   pnpm structures --templates       # structural monoculture: the number that gates mining
  *
  * `--force` is the re-extract campaign: bump EXTRACTOR_VERSION first if the *rules*
@@ -213,6 +214,21 @@ if (args.includes("--blocks")) {
   process.exit(0);
 }
 
+if (args.includes("--repair-tools")) {
+  /**
+   * Delete fingerprints whose stored tool counts are not numbers, so `--extract` re-derives
+   * them. Idempotent, and a no-op unless something wrote a count through a plain object — see
+   * `repairToolRefs`. `verify:tool-refs` is what finds the need for this.
+   */
+  const { repairToolRefs } = await import("../src/server/analytics/tools-run");
+  const { deleted, versions } = await repairToolRefs();
+  console.info(`\nRepair: ${deleted} fingerprint(s) handed back to the extractor`);
+  for (const id of versions.slice(0, 20)) console.info(`  ${id}`);
+  if (deleted > 0) console.info("\nNow run: pnpm structures --extract 500\n");
+  else console.info("  nothing to repair\n");
+  process.exit(0);
+}
+
 if (args.includes("--tools")) {
   /**
    * Tool references and decision rules — the measurement Doc 7 starts from (step P0).
@@ -281,17 +297,33 @@ if (args.includes("--tools")) {
    * a window where this runs against a table that cannot answer. Say so and carry on to the
    * decision-rule half, which needs neither.
    */
+  let missingColumns = false;
+  let corrupt = false;
   const summary = await toolRefSummary().catch((error: unknown) => {
     const cause = (error as { cause?: { code?: string } }).cause;
-    if (cause?.code === "42703") return null;
+    if (cause?.code === "42703") {
+      missingColumns = true;
+      return null;
+    }
+    // 22P02: a stored count is not an integer. Name the repair rather than print a stack.
+    if (cause?.code === "22P02") {
+      corrupt = true;
+      return null;
+    }
     throw error;
   });
-  if (!summary) {
+  if (missingColumns) {
     console.info(
       `\nTool references, stored — columns absent: the 2.1.0 migration is not applied yet` +
         ` (pnpm db:generate, read the SQL, pnpm db:migrate). \`--probe 300 --tools\` answers now.`,
     );
-  } else {
+  } else if (corrupt) {
+    console.info(
+      `\nTool references, stored — a stored count is not a number, so the table cannot be summed.` +
+        `\n  pnpm structures --repair-tools     # hands the affected fingerprints back to the extractor` +
+        `\n  pnpm structures --extract 500      # re-derives them`,
+    );
+  } else if (summary) {
     const covered = summary.eligible > 0 ? (summary.fingerprinted / summary.eligible) * 100 : 0;
     console.info(`\nTool references, stored (extractor ${summary.extractorVersion})`);
     console.info(

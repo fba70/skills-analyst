@@ -282,6 +282,35 @@ export async function toolRefSummary(limit = 60) {
 }
 
 /**
+ * Hand a corrupt fingerprint back to the extractor, by deleting it.
+ *
+ * A count that is not a number cannot be repaired by patching the value: the true count is
+ * whatever the document says, and reasoning it out of the corruption string ("it ends in 1, so
+ * it was one occurrence") is the guess this codebase re-derives instead of making. The selector
+ * already picks up any version with **no** fingerprint at the current extractor version, so the
+ * repair is to remove the row and let `--extract` do what it does.
+ *
+ * Idempotent, and a no-op once the cause is fixed: `extractToolRefs` counts in a `Map`, so
+ * nothing can write a non-numeric count again. `verify:tool-refs` asserts zero such rows, which
+ * is what makes this command findable when it is next needed.
+ *
+ * The version's `skill_blocks` rows are left in place and are briefly orphaned — the extractor
+ * deletes and re-inserts them in the same transaction as the fingerprint, so run `--extract`
+ * straight afterwards.
+ */
+export async function repairToolRefs(): Promise<{ deleted: number; versions: string[] }> {
+  const { rows } = await db.execute<{ skill_version_id: string }>(sql`
+    delete from skill_structures s
+     where s.extractor_version = ${EXTRACTOR_VERSION}
+       and exists (
+         select 1 from jsonb_each(s.tool_refs) t where jsonb_typeof(t.value) <> 'number'
+       )
+    returning s.skill_version_id
+  `);
+  return { deleted: rows.length, versions: rows.map((r) => r.skill_version_id) };
+}
+
+/**
  * How many skills in each function category carry a decision rule at all.
  *
  * Reads `block_counts`, which every fingerprint since 2.0.0 carries, at the **newest extractor

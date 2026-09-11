@@ -470,8 +470,25 @@ export function extractToolRefs(input: {
     }
   }
 
-  const counts: Record<string, number> = {};
-  for (const ref of refs) counts[ref.token] = (counts[ref.token] ?? 0) + 1;
+  /*
+   * A `Map`, and not a plain object, because **the keys come from the corpus**.
+   *
+   * `counts[token] = (counts[token] ?? 0) + 1` on an object literal reads through the
+   * prototype, so a skill whose fence contains the line `constructor` hits
+   * `Object.prototype.constructor` — not null, so `??` does not fire — and the count becomes
+   * the string `"function Object() { [native code] }1"`. One document in the corpus does
+   * exactly that, and it was stored as a jsonb string in an integer's place; the summary query
+   * died on `invalid input syntax for type integer` a whole re-extract later.
+   *
+   * `constructor` is the only token that can do it — `__proto__` cannot match `COMMAND_SHAPE`,
+   * and `toString`/`valueOf` survive lower-casing as `tostring`/`valueof`, which inherit
+   * nothing. A blocklist of one word would therefore be enough and would be the wrong fix: the
+   * hazard is the accumulator, not the word. A `Map` has no prototype chain to read through,
+   * and `Object.fromEntries` defines own properties, so neither half can be poisoned.
+   */
+  const tally = new Map<string, number>();
+  for (const ref of refs) tally.set(ref.token, (tally.get(ref.token) ?? 0) + 1);
+  const counts = Object.fromEntries(tally);
 
   return { refs, counts, allowedTools };
 }

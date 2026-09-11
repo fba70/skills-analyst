@@ -201,6 +201,36 @@ check(
 );
 check("while a span with an argument still is", snippets.counts.gh === 1);
 
+console.info("\nA token is corpus text, so it may be named after a prototype property");
+
+const naiveTally: Record<string, number> = {};
+for (const token of ["constructor"]) naiveTally[token] = (naiveTally[token] ?? 0) + 1;
+check(
+  "the naive object accumulator turns `constructor` into a string",
+  typeof naiveTally.constructor !== "number",
+  `${String(naiveTally.constructor).slice(0, 40)} — stored as jsonb where an integer belongs`,
+);
+const poison = extractToolRefs({
+  frontmatter: {},
+  segments: [{ kind: "code", language: "bash", text: "constructor\nconstructor\nkubectl get pods" }],
+});
+/*
+ * Read through the index signature, not the dot: `counts.constructor` is typed `Function` even
+ * on a `Record<string, number>`, which is TypeScript pointing at this exact bug in the one
+ * place it can see it.
+ */
+const counted = poison.counts["constructor"] as unknown;
+check(
+  "the real one counts it",
+  counted === 2 && poison.counts["kubectl"] === 1,
+  `constructor=${JSON.stringify(counted)}`,
+);
+check(
+  "and every count is a number, whatever the token is called",
+  Object.values(poison.counts).every((n) => typeof n === "number" && Number.isInteger(n)),
+  "the hazard is the accumulator, not the word — a blocklist of one would be the wrong fix",
+);
+
 console.info("\nFrontmatter: allowed-tools");
 
 check(
@@ -341,6 +371,25 @@ if (connected) {
       );
     } else {
       check(`rows at ${EXTRACTOR_VERSION} carry tool references`, Number(stored[0].n) > 0, `${stored[0].n} rows`);
+      /*
+       * Every stored count is an integer. Asserted against the table rather than trusted from
+       * the function above, because the one document that broke this was found by a summary
+       * query failing a whole re-extract later — not by any check, and not by reading.
+       */
+      const { rows: bad } = await c.query<{ token: string; value: string; n: string }>(
+        `select t.key as token, t.value::text as value, count(*)::text as n
+           from skill_structures s, jsonb_each(s.tool_refs) t
+          where s.extractor_version = $1 and jsonb_typeof(t.value) <> 'number'
+          group by 1, 2 order by 3 desc limit 5`,
+        [EXTRACTOR_VERSION],
+      );
+      check(
+        "and every stored count is a number",
+        bad.length === 0,
+        bad.length === 0
+          ? "no prototype key reached the ledger"
+          : `${bad.map((r) => `${r.token}=${r.value.slice(0, 40)} (${r.n})`).join(", ")} — run pnpm structures --repair-tools, then --extract`,
+      );
     }
   }
   await c.end();
