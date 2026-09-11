@@ -15,6 +15,7 @@ import { RelationsCard } from "@/components/registry/relations-card";
 import { DownloadCard } from "@/components/registry/download-card";
 import { EndorsementCard } from "@/components/registry/endorsement-card";
 import { ProvenanceCard } from "@/components/registry/provenance-card";
+import { ToolChips } from "@/components/registry/tool-chips";
 import {
   OverallVerdict,
   VerdictBadge,
@@ -32,6 +33,7 @@ import { isWatching } from "@/server/notifications/watch";
 import { withdrawalNotice } from "@/server/compliance/takedown";
 import { getSession } from "@/server/dal/session";
 import { getSkillBySlug } from "@/server/dal/skills";
+import { toolViewForVersion } from "@/server/skills/tools-read";
 import { labelFor } from "@/server/taxonomy/vocabulary";
 
 export async function generateMetadata(
@@ -75,7 +77,7 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
    */
   const session = await getSession();
 
-  const [outcomes, collectionStart, relations, endorsement, affordance, watching] =
+  const [outcomes, collectionStart, relations, endorsement, affordance, watching, toolView] =
     await Promise.all([
     outcomesForSkill(skill.id),
     outcomeCollectionStart(),
@@ -105,6 +107,12 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
      * exists only to say you cannot use it is worse than the space it takes.
      */
     session ? isWatching(session.user.id, "skill", skill.id) : Promise.resolve(false),
+    /*
+     * Which tools this skill's prose and frontmatter name (Doc 7 RD.7). A `FREE_FOREVER`
+     * surface, like the capability surface it sits beside, and keyed on the *version* rather
+     * than the skill — a re-sync produces a new document that may run different commands.
+     */
+    toolViewForVersion(skill.versionId),
   ]);
 
   const mined = await minedCategories();
@@ -368,6 +376,22 @@ export default async function SkillPage(props: PageProps<"/skills/[slug]">) {
         </CardHeader>
         <CardContent>
           <CapabilitySurface surface={skill.surface} undocumented={skill.undocumented} />
+        </CardContent>
+      </Card>
+
+      {/*
+        Its own card, immediately after the capability surface, because the two are halves of
+        one question and answer it from different evidence: that one reads bundled code, this
+        one reads the document. Separate cards rather than one, so a reader can tell which
+        half a fact came from — a `kubectl` that appears only in prose is a different claim
+        from a socket opened by a bundled script.
+      */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Tools it tells an agent to run</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ToolChips tools={toolView.tools} resolved={toolView.resolved} />
         </CardContent>
       </Card>
 

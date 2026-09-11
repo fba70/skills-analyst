@@ -8,6 +8,7 @@ import { BLOCK_TYPES } from "@/lib/block-types";
 import type { McpServer } from "@modelcontextprotocol/server";
 
 import { CAPABILITY_META } from "@/lib/capabilities";
+import { TOOL_IDS } from "@/lib/tools";
 import { archetypeDetail, archetypeIndex } from "@/server/analytics/archetype-read";
 import { getSkillBySlug, listSkills, PAGE_SIZES, SORTS } from "@/server/dal/skills";
 import { platformStats } from "@/server/dal/stats";
@@ -124,6 +125,24 @@ export function registerFreeTools(server: McpServer) {
           .enum(CAPABILITY_KEYS)
           .optional()
           .describe("Only skills whose bundled code touches this capability."),
+        /*
+         * The filter an agent wants most and the web sidebar can only half offer (Doc 7 RD.7).
+         * *I have these tools — what can I run?* is any-of, so a caller lists what it has
+         * rather than being forced to ask once per tool.
+         *
+         * An enum, not a string: a caller guessing `"github"` gets the schema's list back
+         * instead of an empty result it would read as "the corpus has none" — the same
+         * argument the category enums make, and the reason this endpoint takes structured
+         * input at all.
+         */
+        tools: z
+          .array(z.enum(TOOL_IDS as [string, ...string[]]))
+          .max(20)
+          .optional()
+          .describe(
+            "Only skills naming at least one of these tools. Agent built-ins are prefixed " +
+              "`agent:` — `agent:bash` is the Claude Code grant, `bash` is the program.",
+          ),
         licence_posture: z
           .enum(POSTURES)
           .optional()
@@ -149,6 +168,7 @@ export function registerFreeTools(server: McpServer) {
         query: args.query,
         categories,
         capability: args.capability,
+        tools: args.tools,
         posture: args.licence_posture,
         minQuality: args.min_quality,
         sort: args.sort as never,
@@ -225,7 +245,16 @@ export function registerFreeTools(server: McpServer) {
        * response it uses to decide, and a second round trip is a round trip an agent will skip.
        */
       const { conflictsFor } = await import("@/server/analytics/relations");
-      const conflicts = await conflictsFor(skill.id);
+      /*
+       * The same reader the skill page uses (RM.2), so the two cannot disagree about which
+       * tools a document names — and it carries the *resolved* flag, because an agent needs
+       * "not measured" and "names none" to be different answers just as much as a reader does.
+       */
+      const { toolViewForVersion } = await import("@/server/skills/tools-read");
+      const [conflicts, toolView] = await Promise.all([
+        conflictsFor(skill.id),
+        toolViewForVersion(skill.versionId),
+      ]);
 
       return result(
         {
@@ -253,6 +282,25 @@ export function registerFreeTools(server: McpServer) {
             declared: skill.capabilities,
             undocumented: skill.undocumented,
             surface: skill.surface,
+          },
+          /**
+           * What the skill's text tells an agent to run (Doc 7 RD.7).
+           *
+           * The other half of `capabilities` above, from different evidence: that is scanned
+           * from bundled code, and 93% of this corpus ships none — so for most skills this is
+           * the only field that can answer *what will it make me do*. An agent about to take a
+           * skill can check it against what it is actually allowed to run.
+           *
+           * `measured: false` is not an empty list. A version nothing has resolved yet and a
+           * version that genuinely names no tools are opposite facts, and collapsing them
+           * would have an agent conclude a skill is inert when nobody has looked.
+           */
+          tools: {
+            measured: toolView.resolved,
+            names: toolView.tools.map((entry) => ({
+              tool: entry.tool,
+              evidence: entry.evidence,
+            })),
           },
           verdicts: skill.verdicts.map((verdict) => ({
             analyzer: verdict.analyzer,

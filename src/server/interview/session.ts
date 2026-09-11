@@ -211,13 +211,20 @@ export async function listSessions(draftId: string, orgId: string) {
         technique: interviewSessions.technique,
         status: interviewSessions.status,
         createdAt: interviewSessions.createdAt,
+        /*
+         * Prefixes spelled out, never interpolated. Drizzle drops qualification on a
+         * single-table select, so `${interviewSessions.id}` renders a bare `"id"` — which
+         * Postgres resolves to the *inner* table, making this `t.session_id = t.id` and the
+         * count silently zero. Not an error: measured at 0 against a correct 1 on a populated
+         * pair. `latestSignal` in `dal/skills.ts` warns about exactly this.
+         */
         turns: sql<number>`(
           select count(*)::int from interview_turns t
-          where t.session_id = ${interviewSessions.id} and t.role = 'assistant'
+          where t.session_id = "interview_sessions"."id" and t.role = 'assistant'
         )`,
         accepted: sql<number>`(
           select count(*)::int from interview_candidates c
-          where c.session_id = ${interviewSessions.id} and c.decision in ('accepted', 'edited')
+          where c.session_id = "interview_sessions"."id" and c.decision in ('accepted', 'edited')
         )`,
       })
       .from(interviewSessions)

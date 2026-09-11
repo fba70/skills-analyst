@@ -295,7 +295,13 @@ export async function planRoster(): Promise<PlanRosterRow[]> {
       plan: orgEntitlements.plan,
       note: orgEntitlements.note,
       validUntil: orgEntitlements.validUntil,
-      members: sql<number>`(select count(*)::int from member m where m.organization_id = ${organization.id})`,
+      /*
+       * Qualified by hand, though the outer join happens to make drizzle qualify it too.
+       * That is the accident `latestSignal` names: it works until somebody removes the join,
+       * and then the count binds to `member.id` and silently reads zero. Three siblings were
+       * found doing exactly that.
+       */
+      members: sql<number>`(select count(*)::int from member m where m.organization_id = "organization"."id")`,
     })
     .from(organization)
     .leftJoin(orgEntitlements, eq(orgEntitlements.organizationId, organization.id))

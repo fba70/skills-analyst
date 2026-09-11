@@ -21,10 +21,14 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // `/skills`, `/archetypes`, `/faq` and `/submit` are deliberately absent: all four are
-  // public (R8.1, and Doc 1 licenses archetype snapshots CC BY-SA). Adding any of them back
-  // would redirect anonymous visitors away from the pages that exist to be read by anyone —
-  // and the FAQ is what makes the other two legible.
+  // `/skills`, `/archetypes`, `/tools`, `/faq` and `/submit` are deliberately absent: all
+  // five are public (R8.1, and Doc 1 licenses archetype snapshots CC BY-SA). Adding any of
+  // them back would redirect anonymous visitors away from the pages that exist to be read by
+  // anyone — and the FAQ is what makes the others legible.
+  //
+  // `/tools` is Doc 7 RD.7's decision surface and sits on `FREE_FOREVER` as `tool-surface`:
+  // which commands a skill will tell an agent to run is something a reader weighs before
+  // installing, so gating it would be selling the warning.
   //
   // `/submit` is R1.8's public half, so gating it would defeat the requirement outright: the
   // people who know which repositories we have missed are mostly people without an account.

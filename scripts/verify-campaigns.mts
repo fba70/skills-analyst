@@ -158,7 +158,7 @@ if (connected) {
     } else {
       const orgId = org[0].id;
       const userId = who[0].id;
-      const { addTopic, createCampaign, getCampaign, linkTopicToDraft, setCampaignStatus } =
+      const { addTopic, createCampaign, getCampaign, linkTopicToDraft, listCampaigns, setCampaignStatus } =
         await import("../src/server/campaigns/run");
       const { skillDrafts } = await import("../src/server/db/schema");
       const { withExplicitOrgScope } = await import("../src/server/dal/scope");
@@ -241,6 +241,24 @@ if (connected) {
           "publishing the draft moves the campaign, with nothing told to update",
           published?.progress.published === 1 && capturedShare(published.progress) === 50,
           `${capturedShare(published?.progress ?? { topics: 0, drafting: 0, published: 0, interviews: 0, distillRuns: 0, accepted: 0 })}% captured`,
+        );
+
+        /*
+         * The listing, executed — not merely exported.
+         *
+         * `/capture` calls `listCampaigns` and this suite did not, so its correlated subqueries
+         * were never run: they interpolated `${captureCampaigns.id}`, drizzle dropped the table
+         * qualification on a single-table select, and Postgres refused the whole query with
+         * *column reference "id" is ambiguous*. The page 500'd on first render while 22 checks
+         * stayed green. Same lesson as C5 exporting `pendingScopeVersions` so the suite executes
+         * the selector rather than asserting the SQL exists.
+         */
+        const listed = await listCampaigns(orgId);
+        const mine = listed.find((row) => row.id === campaignId);
+        check(
+          "the listing the page renders actually runs, and counts the same things",
+          mine?.topics === 2 && mine?.published === 1,
+          `${mine?.topics} topic(s), ${mine?.published} captured — must match getCampaign's 2 and 1`,
         );
 
         await setCampaignStatus({ orgId, userId, campaignId, status: "closed" });

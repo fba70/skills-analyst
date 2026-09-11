@@ -18,6 +18,8 @@ import { categoryEvidence, sourceDiversity, templateClusters } from "../src/serv
  *   pnpm structures --tools           # stored tool references + decision rules per category (Doc 7 P0)
  *   pnpm structures --probe 300 --tools   # the same table, DRY, from real bundles — the answer today
  *   pnpm structures --probe 300 --tools --samples npx   # read the lines behind one token
+ *   pnpm structures --resolve-tools --drain   # token counts -> skill_tools rows (Doc 7 P1); free, no bundles
+ *   pnpm structures --resolve-tools --drain --force   # after widening the vocabulary: re-resolve all
  *   pnpm structures --repair-tools    # hand back fingerprints whose tool counts are not numbers
  *   pnpm structures --templates       # structural monoculture: the number that gates mining
  *
@@ -211,6 +213,86 @@ if (args.includes("--blocks")) {
     }
   }
   console.info("");
+  process.exit(0);
+}
+
+if (args.includes("--resolve-tools")) {
+  /**
+   * Turn the stored token counts into `skill_tools` rows (Doc 7 RD.7, step P1).
+   *
+   * Free, bounded, resumable, and **no bundle is read** — extraction already did that half, so
+   * widening `src/lib/tools.ts` costs this command and a minute rather than another 2.5-hour
+   * pass. `--drain` repeats until nothing is left, which is what anyone widening the
+   * vocabulary actually wants; `--force` re-resolves rows that already exist, which is what a
+   * vocabulary change needs.
+   */
+  const { clearToolResolution, resolveStoredTools, toolCoverage } = await import(
+    "../src/server/analytics/tool-index"
+  );
+  const drain = args.includes("--drain");
+  const limit = value("resolve-tools") ?? 2000;
+  if (args.includes("--force")) {
+    const cleared = await clearToolResolution();
+    console.info(`\ncleared the resolution marker on ${cleared} fingerprint(s)`);
+  }
+  let totals = { versions: 0, rows: 0, unrecognised: 0, remaining: 0 };
+  let pass = 0;
+  let previousRemaining = Number.POSITIVE_INFINITY;
+
+  for (;;) {
+    pass += 1;
+    const report = await resolveStoredTools({ limit });
+    totals = {
+      versions: totals.versions + report.versions,
+      rows: totals.rows + report.rows,
+      unrecognised: totals.unrecognised + report.unrecognised,
+      remaining: report.remaining,
+    };
+    console.info(
+      `${drain ? `pass ${pass}: ` : "\n"}resolved ${report.versions} version(s) · ${report.rows} tool row(s) · ` +
+        `remaining ${report.remaining}`,
+    );
+    if (!drain) break;
+    if (report.remaining === 0) break;
+    if (report.versions === 0) {
+      console.info(`\nstopping: a pass resolved nothing while ${report.remaining} remain`);
+      break;
+    }
+    /*
+     * The guard that matters, and the one this loop shipped without: **stop when the queue
+     * does not shrink.** `versions === 0` cannot see a pass that processes its whole slice
+     * and marks none of it — which is exactly what happened when resolution was keyed on the
+     * absence of `skill_tools` rows, because a version naming no recognised tool legitimately
+     * produces none. It ran 776 identical passes. A drain loop needs a condition tied to
+     * progress, not to activity.
+     */
+    if (report.remaining >= previousRemaining) {
+      console.info(
+        `\nstopping: a pass resolved ${report.versions} version(s) and the queue did not shrink` +
+          ` (${report.remaining} remaining, was ${previousRemaining}) — something is being` +
+          ` re-selected rather than completed`,
+      );
+      break;
+    }
+    previousRemaining = report.remaining;
+  }
+
+  const coverage = await toolCoverage();
+  console.info(
+    `\nresolved ${coverage.resolved} of ${coverage.withRefs} version(s) that reference a tool` +
+      ` (${coverage.fingerprinted} fingerprinted at ${coverage.extractorVersion})`,
+  );
+  /*
+   * The unrecognised share is printed every time and is not a defect to drive to zero. The
+   * vocabulary names the head of a 9,442-token distribution; the tail is real corpus text that
+   * no tool list should pretend to cover, and a zero here would mean the list had started
+   * guessing. Same posture as the unclassified block share.
+   */
+  console.info(
+    `  the vocabulary resolves ${coverage.refShare}% of all ${coverage.totalRefs} references` +
+      ` — ${coverage.namedTokens} of ${coverage.distinctTokens} distinct tokens (${coverage.unrecognisedShare}%` +
+      ` unrecognised), which is the long tail and is meant to stay\n`,
+  );
   process.exit(0);
 }
 

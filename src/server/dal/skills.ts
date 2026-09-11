@@ -9,11 +9,13 @@ import {
   skillDuplicates,
   skills,
   skillStructures,
+  skillTools,
   skillVersions,
   sources,
   verdicts,
 } from "@/server/db/schema";
 import { capabilityLabel } from "@/lib/capabilities";
+import { toolLabel } from "@/lib/tools";
 import type { LifecycleState } from "@/lib/lifecycle";
 import { EXTRACTOR_VERSION } from "@/server/analytics/structure";
 import { lifecycleExpression } from "@/server/skills/lifecycle";
@@ -73,6 +75,14 @@ export type SkillFilters = {
   posture?: string;
   /** Only skills whose bundled code touches this capability. */
   capability?: string;
+  /**
+   * Only skills naming one of these tools (Doc 7 RD.7) — **any-of**, not all-of.
+   *
+   * Any-of because the consumer question is *"I have these tools, what can I run?"*, and a
+   * reader who has `gh` and `jq` wants skills needing either. All-of would answer a question
+   * nobody asks and would return almost nothing, since the median skill names two tools.
+   */
+  tools?: string[];
   /** A category slug from either axis (R3.1) — `function:review`, `domain:marketing`. */
   category?: string;
   /**
@@ -122,6 +132,14 @@ export type FilterOptions = {
   dialects: Array<{ value: string; label: string; count: number }>;
   postures: Array<{ value: string; label: string; count: number }>;
   capabilities: Array<{ value: string; label: string; count: number }>;
+  /**
+   * Tools named by the served version of each skill (Doc 7 RD.7).
+   *
+   * Empty until `pnpm structures --resolve-tools` has run, and empty is also what a database
+   * without `skill_tools` yet produces — see `toolFacetRows`. The control hides itself on an
+   * empty facet, which is the honest behaviour for both.
+   */
+  tools: Array<{ value: string; label: string; count: number }>;
   /** Both axes, each entry keyed `axis:value` so one control can serve both. */
   functions: Array<{ value: string; label: string; count: number }>;
   domains: Array<{ value: string; label: string; count: number }>;
@@ -297,8 +315,86 @@ function whereFor(filters: SkillFilters): SQL | undefined {
         and cs.surface -> ${filters.capability} ->> 'present' = 'true'
     )`);
   }
+  if (filters.tools && filters.tools.length > 0) {
+    clauses.push(namesOneOf(filters.tools));
+  }
 
   return and(...clauses.filter(Boolean));
+}
+
+/**
+ * The tool condition, written once and used by both the filter and the sidebar count.
+ *
+ * `getFilterOptions` joins the same table on the same two columns to produce the number, so
+ * the control cannot advertise 214 skills and then return 190 — the property CLAUDE.md states
+ * about the capability facet, whose count and filter share `cs.surface -> key ->> 'present'`.
+ *
+ * `skill_version_id = skillVersions.id` is doing real work: the surrounding query joins
+ * `skillVersions` on `skills.currentVersionId`, so this is implicitly *the version the registry
+ * serves*. Without it a skill would match on the tools of a superseded document nobody can read.
+ *
+ * `any(array[…])` and never `= any(${jsArray})` — drizzle renders a bare JS array in a template
+ * as a row constructor, which Postgres rejects at runtime with *op ANY/ALL (array) requires
+ * array on right side*. Four call sites in this repository have shipped that bug.
+ */
+function namesOneOf(tools: readonly string[]): SQL {
+  return sql`exists (
+    select 1 from ${skillTools} st
+    where st.skill_version_id = ${skillVersions.id}
+      and st.extractor_version = ${EXTRACTOR_VERSION}
+      and st.tool = any(${sql`array[${sql.join(
+        tools.map((tool) => sql`${tool}`),
+        sql`, `,
+      )}]::text[]`})
+  )`;
+}
+
+/**
+ * Per-tool skill counts for the sidebar, in their own scoped transaction.
+ *
+ * Separate from `getFilterOptions`'s transaction on purpose. `skill_tools` arrives with a
+ * migration, and a missing relation inside a transaction **aborts the whole transaction** —
+ * every other facet would fail with `25P02` for a table that has nothing to do with them. Its
+ * own scope means a database without the table loses the tools control and keeps the rest.
+ *
+ * Only `42P01` is swallowed, and only into an empty facet, which renders as *the control is
+ * absent* rather than as *no skill uses any tool*. Any other error is the caller's to see.
+ */
+export async function toolFacetRows(): Promise<Array<{ value: string; label: string; count: number }>> {
+  try {
+    return await withOrgScope(async (tx) => {
+      const rows = await tx
+        .select({
+          value: skillTools.tool,
+          count: sql<number>`count(distinct ${skills.id})::int`,
+        })
+        .from(skills)
+        .innerJoin(skillVersions, eq(skillVersions.id, skills.currentVersionId))
+        // The same two join columns `namesOneOf` matches on, so the number and the filtered
+        // result are answers to one question.
+        .innerJoin(
+          skillTools,
+          and(
+            eq(skillTools.skillVersionId, skillVersions.id),
+            eq(skillTools.extractorVersion, EXTRACTOR_VERSION),
+          ),
+        )
+        .where(and(eq(skills.status, "indexed"), isNull(skills.canonicalSkillId)))
+        .groupBy(skillTools.tool)
+        .orderBy(desc(sql`count(distinct ${skills.id})`));
+
+      return rows.map((row) => ({
+        value: row.value,
+        // Shared with the skill page's chips and `/tools`, so the filter and the detail page
+        // cannot disagree about what `agent:read` is called.
+        label: toolLabel(row.value),
+        count: row.count,
+      }));
+    });
+  } catch (error) {
+    if ((error as { cause?: { code?: string } }).cause?.code === "42P01") return [];
+    throw error;
+  }
 }
 
 function orderFor(sort: SortKey | undefined, search: string | undefined) {
@@ -349,6 +445,34 @@ export async function listSkills(filters: SkillFilters = {}): Promise<SkillListP
     : DEFAULT_PAGE_SIZE;
   const where = whereFor(filters);
 
+  /*
+   * A tools filter reads `skill_tools`, which arrives with a migration. Until it is applied
+   * the sidebar control is absent — `toolFacetRows` returns nothing and the select hides —
+   * but a hand-typed `?tool=git` would still reach here and 500 a public page.
+   *
+   * So `42P01` becomes an **empty result**, which is the truthful answer: the registry cannot
+   * currently say which skills use that tool. Narrow on purpose — only when a tools filter was
+   * actually asked for, and only that one code. Every other error, and every unfiltered
+   * listing, is unaffected.
+   */
+  if (filters.tools && filters.tools.length > 0) {
+    try {
+      return await listSkillsIn(where, filters, pageSize);
+    } catch (error) {
+      if ((error as { cause?: { code?: string } }).cause?.code === "42P01") {
+        return { items: [], total: 0, page: 1, pageSize, pageCount: 1 };
+      }
+      throw error;
+    }
+  }
+  return listSkillsIn(where, filters, pageSize);
+}
+
+async function listSkillsIn(
+  where: SQL | undefined,
+  filters: SkillFilters,
+  pageSize: PageSize,
+): Promise<SkillListPage> {
   return withOrgScope(async (tx) => {
     const [{ total }] = await tx
       .select({ total: sql<number>`count(*)::int` })
@@ -455,6 +579,10 @@ export async function listSkills(filters: SkillFilters = {}): Promise<SkillListP
  * model the rest now follows. The rows never leave the database; only the tallies do.
  */
 export async function getFilterOptions(): Promise<FilterOptions> {
+  // Its own transaction, so a database without `skill_tools` loses one control rather than
+  // every facet on the page. See `toolFacetRows`.
+  const toolRows = await toolFacetRows();
+
   return withOrgScope(async (tx) => {
     // The population every facet is counted over: canonical, indexed, servable.
     const servable = and(eq(skills.status, "indexed"), isNull(skills.canonicalSkillId));
@@ -574,6 +702,7 @@ export async function getFilterOptions(): Promise<FilterOptions> {
         // skill page cannot disagree about what `fs_read` is called.
         .map(([value, count]) => ({ value, label: capabilityLabel(value), count }))
         .sort((a, b) => b.count - a.count),
+      tools: toolRows,
       functions: facet("function"),
       domains: facet("domain"),
       total: totals?.total ?? 0,

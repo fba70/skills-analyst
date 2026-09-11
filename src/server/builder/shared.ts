@@ -51,7 +51,7 @@ export async function listSharedBlocks(
          */
         usedByDrafts: sql<number>`(
           select count(distinct b.draft_id)::int from draft_blocks b
-           where b.shared_block_id = ${sharedBlocks.id}
+           where b.shared_block_id = "shared_blocks"."id"
         )`,
       })
       .from(sharedBlocks)

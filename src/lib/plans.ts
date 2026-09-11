@@ -118,6 +118,19 @@ export const FREE_FOREVER = [
    * on the write side either.
    */
   "endorsements",
+  /**
+   * Which tools a skill will tell an agent to run (Doc 7 RD.7).
+   *
+   * The same class of fact as the capability surface one entry above, and it belongs here for
+   * the same reason: *this skill's steps run `kubectl` and `rm`* is something a reader weighs
+   * before installing, not a feature. The capability surface reads bundled **code**; this reads
+   * the **prose**, which is where most skills actually tell an agent what to do — so gating it
+   * would sell the half of R2.4 that covers the majority of the corpus.
+   *
+   * And the absence is again the part that matters: *this skill names no tools* is what a
+   * cautious reader is hoping to see, so charging for it is charging for the warning.
+   */
+  "tool-surface",
 ] as const;
 
 export type FreeForever = (typeof FREE_FOREVER)[number];

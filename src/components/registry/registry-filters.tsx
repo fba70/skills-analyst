@@ -111,6 +111,15 @@ export function RegistryFilters({ options, pageSizes, sorts }: RegistryFiltersPr
     { key: "source", label: "All sources", items: options.sources },
     { key: "posture", label: "Any licence", items: options.postures },
     { key: "capability", label: "Any capability", items: options.capabilities },
+    /*
+     * Tools (Doc 7 RD.7). One select writes one `tool`, which is any-of over a list of one —
+     * the URL parameter is a list because `listSkills` takes one and MCP callers send several,
+     * and widening this control to multi-select later needs no change anywhere else.
+     *
+     * After capability, because the two answer the same shape of question about running a
+     * skill and capability is the one the trust surface already established.
+     */
+    { key: "tool", label: "Any tool", items: options.tools },
     { key: "dialect", label: "Any dialect", items: options.dialects },
   ].filter((facet) => {
     /**

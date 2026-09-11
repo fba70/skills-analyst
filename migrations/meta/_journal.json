@@ -358,6 +358,20 @@
       "when": 1789039563602,
       "tag": "0050_zippy_snowbird",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1789105919375,
+      "tag": "0051_safe_shockwave",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1789108086227,
+      "tag": "0052_neat_rockslide",
+      "breakpoints": true
     }
   ]
 }

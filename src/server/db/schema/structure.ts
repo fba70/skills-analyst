@@ -119,6 +119,21 @@ export const skillStructures = pgTable(
       .$type<Array<{ tool: string; version: string }>>()
       .notNull()
       .default(sql`'[]'::jsonb`),
+    /**
+     * When the tokens above were last resolved against the vocabulary (Doc 7 RD.7).
+     *
+     * **A column, because absence of `skill_tools` rows cannot mean "not done".** 28,035 of
+     * 50,965 versions name no tool this vocabulary recognises, and that is a legitimate answer
+     * — so a selector keyed on *no rows exist* re-selects them for ever, writes nothing, and
+     * reports a remaining count that no amount of work can clear. It did exactly that, for 776
+     * passes, before anything noticed.
+     *
+     * The same shape E1 hit with `metadata_only` skills sorting to the front of the link queue
+     * every pass. There the fix was to exclude them, because a row saying "looked, found
+     * nothing" would have been a claim about a document we cannot open. Here we *can* look, so
+     * the honest fix is to record that we did.
+     */
+    toolsResolvedAt: timestamp("tools_resolved_at", { withTimezone: true }),
 
     // ---- Blocks (Doc 6 RW.1) -----------------------------------------------
     /**
@@ -286,6 +301,81 @@ export const skillBlocks = pgTable(
      * 0006 created `skill_structures` with no grant and mining has read it ever since, which
      * is the proof. The explicit grants in 0018–0020 are redundant belt-and-braces.
      */
+    pgPolicy("org_scope", {
+      for: "all",
+      to: "app_runtime",
+      using: sql`org_id is null or org_id = current_setting('app.org_id', true)`,
+      withCheck: sql`org_id is null or org_id = current_setting('app.org_id', true)`,
+    }),
+  ],
+);
+
+/**
+ * Which tools a skill tells an agent to run (Doc 7 RD.7, plan step P1).
+ *
+ * ## Why a table and not the jsonb already on the fingerprint
+ *
+ * `skill_structures.tool_refs` holds the raw token counts extraction produced — every
+ * candidate, 9,442 distinct across the corpus, most of them noise. That is the right shape for
+ * *writing the vocabulary from* and the wrong one for serving: the registry facet asks "how
+ * many indexed skills use `gh`" across fifty thousand rows, and answering it by unnesting jsonb
+ * per query is the shape that made `/skills` take 2.3 seconds.
+ *
+ * So this table holds only what the **vocabulary recognises**, one row per `(version, tool)`,
+ * resolved and indexed. The jsonb stays as the evidence the resolution was made from — and as
+ * the thing a widened vocabulary is re-resolved against without re-reading fifty thousand
+ * bundles.
+ *
+ * ## Evidence, kept apart rather than collapsed
+ *
+ * `frontmatter` is a declaration, `code` an invocation, `prose` a confirmed mention. P2's whole
+ * finding is the *disagreement* between the first two — steps that run `kubectl` while
+ * `allowed-tools` does not list it — so a single boolean here would erase the feature one step
+ * before it is built.
+ *
+ * ## Derived, so replaced rather than versioned
+ *
+ * Same as the blocks above: re-resolution at one extractor version deletes the version's rows
+ * and re-inserts them, because widening the vocabulary changes the row *count* and no upsert
+ * can express that. A new extractor version writes new rows and leaves the old, which is what
+ * makes a bump comparable.
+ *
+ * **No free-text column, ever.** A tool id comes from a closed vocabulary and an evidence kind
+ * from a three-value one; `verify:tools` asserts both against `information_schema` rather than
+ * against today's data, the line `verify:blocks` already holds for `skill_blocks`.
+ */
+export const skillTools = pgTable(
+  "skill_tools",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: text("org_id").references(() => organization.id, { onDelete: "cascade" }),
+
+    /** Denormalised from the version so the facet counts without a second join. */
+    skillId: uuid("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "cascade" }),
+    skillVersionId: uuid("skill_version_id")
+      .notNull()
+      .references(() => skillVersions.id, { onDelete: "cascade" }),
+
+    extractorVersion: text("extractor_version").notNull(),
+
+    /** One of `TOOL_IDS`. A closed vocabulary, which is what makes the facet aggregable. */
+    tool: text("tool").notNull(),
+    /** `frontmatter` | `code` | `prose` — the strongest evidence seen for this pair. */
+    evidence: text("evidence").notNull(),
+    /** How many references produced it. Descriptive; the facet counts skills, never refs. */
+    refCount: integer("ref_count").notNull().default(1),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("skill_tools_uq").on(t.skillVersionId, t.extractorVersion, t.tool),
+    /** The facet and the tool page: every skill naming one tool at the current version. */
+    index("skill_tools_tool_idx").on(t.extractorVersion, t.tool),
+    index("skill_tools_skill_idx").on(t.skillId),
+
+    /** Same clause and the same reasoning as `skill_blocks` above, including `FOR ALL`. */
     pgPolicy("org_scope", {
       for: "all",
       to: "app_runtime",

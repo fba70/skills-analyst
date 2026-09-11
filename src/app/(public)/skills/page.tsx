@@ -1,15 +1,10 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import Link from "next/link";
-import { Star } from "lucide-react";
 
-import { qualityBand } from "@/lib/quality";
 import { ExplainLink } from "@/components/registry/explain";
-import { LicenseBadge } from "@/components/registry/license-badge";
-import { labelFor } from "@/server/taxonomy/vocabulary";
+import { SkillRow } from "@/components/registry/skill-row";
 import { RegistryFilters } from "@/components/registry/registry-filters";
 import { Paginator } from "@/components/common/paginator";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   getFilterOptions,
@@ -49,6 +44,9 @@ export default async function RegistryPage(props: PageProps<"/skills">) {
     dialect: single("dialect"),
     posture: single("posture"),
     capability: single("capability"),
+    // One value from the sidebar select, handed over as the list `listSkills` takes — the
+    // filter is any-of, and an MCP caller sends several through the same parameter.
+    tools: single("tool") ? [single("tool") as string] : undefined,
     category: single("category"),
     sort,
     page: Number(single("page")) || 1,
@@ -146,88 +144,7 @@ export default async function RegistryPage(props: PageProps<"/skills">) {
           <ul className="grid gap-3">
             {result.items.map((skill) => (
               <li key={skill.id}>
-                <Link
-                  href={`/skills/${skill.slug}`}
-                  className="hover:border-primary/50 focus-visible:ring-ring block rounded-xl outline-hidden focus-visible:ring-2"
-                >
-                  <Card className="transition-colors">
-                    <CardContent className="grid gap-2">
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                        <span className="font-medium">{skill.name}</span>
-                        <QualityScore score={skill.qualityScore} />
-                        <LicenseBadge
-                          redistribution={skill.redistribution}
-                          spdx={skill.licenseSpdx}
-                        />
-                        {skill.categories
-                          .filter((c) => c.axis === "function")
-                          .slice(0, 1)
-                          .map((c) => (
-                            <Badge key={c.value} variant="secondary">
-                              {labelFor("function", c.value)}
-                            </Badge>
-                          ))}
-                        {skill.categories
-                          .filter((c) => c.axis === "domain")
-                          .slice(0, 1)
-                          .map((c) => (
-                            <Badge key={c.value} variant="outline">
-                              {labelFor("domain", c.value)}
-                            </Badge>
-                          ))}
-                        {skill.variantCount > 0 ? (
-                          <Badge variant="outline" className="text-muted-foreground text-xs">
-                            +{skill.variantCount} near-duplicate
-                            {skill.variantCount === 1 ? "" : "s"}
-                          </Badge>
-                        ) : null}
-                        {skill.stars !== null ? (
-                          /*
-                            Upstream stars, as a badge like every other fact on the card.
-                            `fill-current` is what makes the icon read as a star rather
-                            than an outline — a stroke-only star at 12px is mush.
-
-                            Amber, not the primary colour: this is the one number on the
-                            card that is *not* ours. Doc 2 R2.9 is explicit that popularity
-                            must never outrank a failed or unscored skill, so it should look
-                            like what it is — an upstream signal sitting alongside our
-                            verdict, not competing with it.
-
-                            It is the *repository's* star count, not the skill's, and every
-                            skill in a repo carries the same number. That reads as a bug
-                            when ten cards in a row show 279,495, so the tooltip names the
-                            repository rather than leaving the number to be misread as a
-                            property of the skill.
-                          */
-                          <Badge
-                            variant="outline"
-                            className="gap-1 text-xs font-normal"
-                            title={
-                              skill.sourceName
-                                ? `${skill.sourceName} has ${skill.stars.toLocaleString()} stars on GitHub — a property of the repository, shared by every skill in it`
-                                : `${skill.stars.toLocaleString()} stars on GitHub`
-                            }
-                          >
-                            <Star
-                              aria-hidden
-                              className="size-3 fill-current text-amber-500 dark:text-amber-400"
-                            />
-                            {skill.stars.toLocaleString()}
-                          </Badge>
-                        ) : null}
-                      </div>
-                      {skill.summary ? (
-                        <p className="text-muted-foreground line-clamp-2 text-sm">
-                          {skill.summary}
-                        </p>
-                      ) : null}
-                      <div className="text-muted-foreground flex flex-wrap gap-x-3 text-xs">
-                        <span>{skill.sourceName}</span>
-                        <span>{skill.dialect.replace(/_/g, " ")}</span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </Link>
+                <SkillRow skill={skill} />
               </li>
             ))}
           </ul>
@@ -241,33 +158,5 @@ export default async function RegistryPage(props: PageProps<"/skills">) {
         </>
       )}
     </div>
-  );
-}
-
-/**
- * Quality leads the default sort and appears on every row (Doc 2 R2.9): popularity must
- * never outrank a failed or unscored skill, so stars stay the quietest element here.
- */
-function QualityScore({ score }: { score: number | null }) {
-  if (score === null) {
-    return (
-      <Badge variant="outline" className="text-muted-foreground text-xs">
-        unscored
-      </Badge>
-    );
-  }
-  // Bands come from `lib/quality.ts`, shared with the scorer and the reference page — a
-  // legend that disagrees with the badge it explains is worse than no legend.
-  const band = qualityBand(score);
-  const tone =
-    band === "strong"
-      ? "text-primary border-primary/40 bg-primary/10"
-      : band === "fair"
-        ? "text-amber-600 border-amber-500/40 bg-amber-500/10 dark:text-amber-400"
-        : "text-destructive border-destructive/40 bg-destructive/10";
-  return (
-    <Badge variant="outline" className={`text-xs font-medium ${tone}`}>
-      {score}/100
-    </Badge>
   );
 }

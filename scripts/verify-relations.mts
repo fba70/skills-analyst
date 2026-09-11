@@ -260,6 +260,63 @@ console.info("\nA trap this codebase has now hit four times");
     readdirSync("src").length > 3,
     `${readdirSync("src").length} entries under src`,
   );
+
+  /**
+   * The sibling trap: an **outer column interpolated into a correlated subquery**.
+   *
+   * Drizzle drops table qualification on a single-table select, so `${captureCampaigns.id}`
+   * inside `sql` renders a bare `"id"`. Postgres resolves an unqualified name against the
+   * *innermost* scope first, so it binds to the subquery's own table and the two failure modes
+   * are opposite in visibility:
+   *
+   * - the inner FROM names **one** relation → `t.session_id = t.id`, **no error, silently
+   *   zero**. Measured: 0 against a correct 1 on a populated pair.
+   * - the inner FROM names **two** → *column reference "id" is ambiguous*, and the page 500s.
+   *
+   * Four sites. `listCampaigns` crashed `/capture` on first render; `listSharedBlocks` and
+   * `listSessions` had been quietly reporting zero; `planRoster` was correct only because its
+   * outer query has a join and drizzle therefore qualifies — the accident `latestSignal`
+   * predicted in as many words, *"which is exactly the kind of accident that breaks the moment
+   * a join is removed"*.
+   *
+   * The fix is always the same: spell the prefix out, `"capture_campaigns"."id"`.
+   */
+  const correlated: string[] = [];
+  const walkCorrelated = (dir: string): void => {
+    for (const entry of readdirSync(dir)) {
+      const path = join(dir, entry);
+      if (statSync(path).isDirectory()) {
+        walkCorrelated(path);
+        continue;
+      }
+      if (!/\.(ts|tsx|mts)$/.test(entry)) continue;
+      const source = readFileSync(path, "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/(^|[^:])\/\/.*$/gm, "$1");
+      for (const block of source.match(/sql<[^>]*>`\(\s*select[\s\S]{0,500}?`/g) ?? []) {
+        // An alias on the inner FROM is what puts a second `id` in scope.
+        if (!/\bfrom\s+"?\w+"?\s+(?:as\s+)?[a-z]\w?\b/.test(block)) continue;
+        // A value is fine; a *column* reference is the hazard. Columns are `table.column`.
+        if (/\$\{[A-Za-z_$][\w$]*\.[a-z][\w$]*\}/.test(block)) correlated.push(path);
+      }
+    }
+  };
+  walkCorrelated("src");
+
+  check(
+    "no correlated subquery interpolates an outer column",
+    correlated.length === 0,
+    correlated.length === 0
+      ? 'spell the prefix out: "table"."column"'
+      : [...new Set(correlated)].join(", "),
+  );
+  check(
+    "and the scan can see one",
+    /\$\{[A-Za-z_$][\w$]*\.[a-z][\w$]*\}/.test(
+      ["sql<number>`( select count(*) from t x where x.a = $", "{tbl.id} )`"].join(""),
+    ),
+    "assembled at runtime, so the control is not a literal this very scan would report",
+  );
 }
 
 // ---------------------------------------------------------------------------------------

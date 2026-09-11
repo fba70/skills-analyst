@@ -1,0 +1,1 @@
+ALTER TABLE "skill_structures" ADD COLUMN "tools_resolved_at" timestamp with time zone;

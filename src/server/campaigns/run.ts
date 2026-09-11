@@ -282,7 +282,19 @@ export async function getCampaign(
   });
 }
 
-/** Every campaign in the workspace, newest first, each with its headline counts. */
+/**
+ * Every campaign in the workspace, newest first, each with its headline counts.
+ *
+ * **The table prefixes are spelled out rather than interpolated**, and that is not a style
+ * choice. Drizzle drops qualification on a single-table select, so `${captureCampaigns.id}`
+ * renders as a bare `"id"` inside the correlated subquery — where `campaign_topics t` also has
+ * an `id`, and Postgres refuses the whole query with *column reference "id" is ambiguous*.
+ *
+ * `latestSignal` in `dal/skills.ts` carries this warning verbatim and ends with the sentence
+ * this function then proved: *"It happens to work there because the outer query has joins and
+ * is therefore qualified — which is exactly the kind of accident that breaks the moment a join
+ * is removed."* Here there was never a join, so it was broken from the first render.
+ */
 export async function listCampaigns(orgId: string) {
   return withExplicitOrgScope(orgId, async (tx) => {
     const rows = await tx
@@ -292,12 +304,13 @@ export async function listCampaigns(orgId: string) {
         status: captureCampaigns.status,
         dueOn: captureCampaigns.dueOn,
         topics: sql<number>`(
-          select count(*)::int from campaign_topics t where t.campaign_id = ${captureCampaigns.id}
+          select count(*)::int from campaign_topics t
+           where t.campaign_id = "capture_campaigns"."id"
         )`,
         published: sql<number>`(
           select count(*)::int from campaign_topics t
             join skill_drafts d on d.id = t.draft_id
-           where t.campaign_id = ${captureCampaigns.id} and d.published_skill_id is not null
+           where t.campaign_id = "capture_campaigns"."id" and d.published_skill_id is not null
         )`,
       })
       .from(captureCampaigns)

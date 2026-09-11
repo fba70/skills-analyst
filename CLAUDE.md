@@ -2171,6 +2171,150 @@ would be enforcing an untested mean.
 > draft.
 
 
+### Tools are a third taxonomy, and the list was written from a count (Doc 7 RD.6–RD.7, step P1)
+
+`src/lib/tools.ts` · `src/server/analytics/tool-index.ts` · migration 0051
+`pnpm structures --resolve-tools --drain` · `pnpm verify:tools` (free)
+
+Beside `function` and `domain`, the axis consumers already think in: *I have these tools, which
+skills can I run?* 103 entries, a derived `skill_tools` relation, a registry facet, `/tools/<id>`,
+an MCP filter, and `tool-surface` on `FREE_FOREVER`.
+
+#### The list is the head of a measured distribution, and nothing else
+
+P0 counted first: 50,965 fingerprints, **9,442 distinct candidate tokens**, 51% of skills
+referencing at least one, 4,611 declaring `allowed-tools`. The vocabulary is the head of that
+table **by distinct repositories** — `git` 325, `bash` 293, `npm` 290, `grep` 278, `npx` 275,
+`curl` 240, `python3` 238, `cat` 191, `gh` 161 — read and curated. Sorted by repositories rather
+than references, because a generator shipping eighteen skills that call one CLI is one data
+point about the corpus and eighteen about the generator: R3.4's argument at token scale.
+
+> **Coreutils are in, and deciding that was the whole judgement.** The tempting line is *a tool
+> earns a place if knowing about it changes a decision* — nobody lacks `cat`, nobody is careful
+> about `wc`. Drawn that way the list excludes `cat` at **191 repositories** while keeping
+> `qpdf` at 19, which is not a defensible reading of the table it was supposedly written from,
+> and it inflates the unrecognised share with tokens the list had recognised and declined.
+> Noise in a facet is a presentation problem; curating by taste is the written-from-memory
+> failure this step exists to avoid. `verify:tools` caught it by asserting `cat` is not
+> destructive and finding it absent entirely.
+
+**The unrecognised share is printed every time and must never reach zero.** A list naming all
+9,442 tokens would be guessing rather than recognising — the line `verify:blocks` holds for
+unclassified passages, for the same Doc 6 §7 reason — and the suite fails if it does.
+
+> **One coverage number, printed alone, was a lie about the vocabulary.** The first report said
+> *98.7% unrecognised*, which reads as a list that has failed. It is true of **distinct
+> tokens** — the tail is 9,316 strings appearing once or twice each — and the number a reader
+> experiences is the **reference** share, because a token in 300 repositories counts 300 times
+> there and once here: **52.3% of 345,598 references resolve**, over 103 entries. Both are
+> reported now and the reference share leads. A rate whose denominator answers a different
+> question from the one being asked is the label-*share*-against-labels-per-skill mistake, and
+> that one inverted a conclusion.
+
+#### The same token means two things, so resolution takes the evidence
+
+`read`, `grep` and `bash` are Claude Code tools *and* shell words. `resolveTool(token, evidence)`
+therefore resolves a name in `allowed-tools` to `agent:read` and the same name on a command line
+to the program; resolving on the string alone would file **3,438 `Read` declarations** under a
+shell builtin nobody invokes. Three evidence kinds are stored rather than one flag — `frontmatter`
+is a declaration, `code` an invocation, `prose` a confirmed mention — because **P2's whole finding
+is the disagreement between the first two**, and a boolean would erase the next step before it is
+built.
+
+#### Widening the list costs a query, not a re-extract
+
+`skill_tools` holds only what the vocabulary recognises. `skill_structures.tool_refs` keeps every
+candidate token, and that is why: `resolveStoredTools` re-resolves the stored counts with no
+bundle read and no model call, so adding an entry is `pnpm structures --resolve-tools --drain`
+and a minute rather than another 2.5-hour pass. Bounded, resumable and idempotent like every
+other derived stage.
+
+Two smaller decisions the data forced. Counts are summed **per resolved id, not per token**, or
+an alias loses them — `python3` is 238 repositories against `python`'s 199, and keying on the
+token would file the larger half under a name the table does not store. And the facet counts
+**distinct skills at the skill's current version**: a superseded version's tools would otherwise
+be counted against a document nobody can read.
+
+#### `destructive` is narrow on purpose
+
+24 of 103. RD.8 will read it to tell an author *"you name a destructive tool and carry no
+guardrail"*, and a flag true of everything is an alarm nobody can silence — the lesson
+`ROT_THRESHOLD` and the marker threshold both paid for. True only where a common invocation
+deletes data (`rm`, `git reset --hard`), mutates production (`kubectl delete`,
+`terraform apply`), or runs arbitrary code elsewhere (`ssh`). **Installing a package is not
+destructive; deleting a cluster is.** `verify:tools` asserts both halves and that the share
+stays a minority.
+
+> **The fifth scanner to accuse itself.** `verify:tools` checks the tree for a second
+> hand-written list of tool ids, and its first run reported **itself** — the positive control
+> `["kubectl", "helm"]` is a literal in the file the scan reads. The control is assembled at
+> runtime now. The running list: `verify:relations` matching prose about `= any(${array})`,
+> `verify:improve` matching licence-posture vocabularies, `verify:mcp-usage`, the
+> `no-db-in-api` hook matching a comment promising compliance, and `verify:parameters` reading
+> `shared_block_id` as a stored share.
+
+#### Where it is read, and the scope bug the facet nearly shipped with
+
+A **Tools** control on `/skills`, chips on the skill page, `/tools` and `/tools/<id>` in the
+`(public)` group, and `search_skills.tools` over MCP — the last validated against `TOOL_IDS`,
+so an agent guessing gets the schema's list rather than zero results it would read as *the
+corpus has none*. Web and MCP call one reader, which is RM.2.
+
+> **The first facet count was unscoped and would have contradicted the page it filters.** It
+> ran on the plain `db` handle with a hard-coded `skills.org_id is null`, while
+> `getFilterOptions` builds every other facet inside `withOrgScope`. A signed-in visitor would
+> therefore have had their own workspace's skills **in the filtered list and missing from the
+> number beside it** — precisely what the capability facet's shared expression exists to
+> prevent, arriving through a new door. The same bug `archetype-read` shipped when it pinned
+> `org_id is null` and then resolved exemplars through `withOrgScope`.
+>
+> The fix is the one that was made then: **one function, and the scope resolved where scope
+> belongs.** `toolFacetRows` lives in the DAL beside the facets it must agree with, joins on
+> the same two columns the filter predicate matches, and `/tools` reads it too — so a
+> visitor sees the same population on both pages, which is the whole argument for the
+> `(public)` group reading through the DAL at all. `verify:tools` asserts **exactly one**
+> function in the tree groups by `skill_tools.tool`.
+
+**Every surface degrades honestly while the table is absent** — a missing relation (`42P01`) is
+caught at three narrow readers and renders *not measured yet*, never *names no tools*. The
+facet's catch runs in its own transaction, because an undefined relation aborts the surrounding
+one and every other facet on the page would have died with it.
+
+#### The resolver ran 776 identical passes, and the drain guard could not see it
+
+> **"Has this been resolved" was keyed on the absence of `skill_tools` rows.** That reads as
+> obviously right and is wrong for one reason: **28,035 of 50,965 versions name no tool the
+> vocabulary recognises, and that is the answer, not the absence of one.** So they stayed
+> selectable for ever — every pass took the same 2,000, wrote nothing, and `remaining` sat at
+> 28,035 while the loop printed `resolved 2000 version(s) · 0 tool row(s)` seven hundred and
+> seventy-six times. The real work had finished in the first dozen passes.
+>
+> This is E1's `metadata_only` bug wearing new clothes: those skills "produced nothing, sorted
+> to the front as never-checked, and **sorted to the front again next pass** — starving the
+> queue behind them". There the fix was to exclude them, because a row saying *looked, found
+> nothing* would have been a claim about a document we cannot open. Here we can look, so the
+> honest fix is to record that we did: `skill_structures.tools_resolved_at` (migration 0052),
+> written in the same transaction as the rows and for **every** version in the batch, with or
+> without any.
+>
+> **The guard is the more transferable half.** The loop stopped on `versions === 0` — activity,
+> not progress — which cannot see a pass that processes its whole slice and completes none of
+> it. It now stops when **`remaining` fails to fall**, and says which condition tripped. Every
+> drain loop in this codebase should be read against that: `--extract` stops on
+> `extracted === 0`, which is the same shape and is only safe because a fingerprint row is
+> written unconditionally.
+>
+> `verify:tools` asserts the invariant as a **number rather than a description**: how many
+> examined versions have no tool rows — exactly the population the old selector re-read for
+> ever — and that the pending queue can reach zero.
+
+Two consequences worth knowing. `toolCoverage().resolved` now counts versions **examined**, and
+`withTools` counts versions that produced a row; conflating them is what made the skill page
+liable to say *not measured yet* about a document it had measured and found nothing in. And
+`--force` **clears the marker first** rather than passing a flag down each pass — a flag only
+works on pass one, after which everything it touched is marked and the drain stops having done
+a single batch.
+
 ### A skill's own parameters, and the rule that stays prose until somebody confirms it (Doc 7 RD.1–RD.3, step P4)
 
 `src/lib/parameters.ts` · `src/server/builder/parameters.ts` · `components/builder/parameters-panel.tsx`
@@ -3472,6 +3616,37 @@ finishes and one that does not.
 > is worth recording: it matched the *warnings* about the trap, so three of five hits were prose in
 > the files that had already been fixed — a scanner shouting loudest where the problem is least. It
 > strips comments now and allows the correct `any(${sql`array[…]`})` form.
+
+> **The sibling trap, found when `/capture` 500'd: an outer column interpolated into a
+> correlated subquery.** Drizzle drops table qualification on a single-table select, so
+> `${captureCampaigns.id}` inside `sql` renders a bare `"id"` — and Postgres resolves an
+> unqualified name against the **innermost** scope first. The two failure modes are opposite
+> in visibility, which is why this went unnoticed:
+>
+> | inner FROM | what happens |
+> |---|---|
+> | one relation | binds to *its* id — `t.session_id = t.id` — **no error, silently zero** |
+> | two relations | *column reference "id" is ambiguous*, and the page 500s |
+>
+> Measured rather than reasoned: against a populated pair, the bare form returned **0** and the
+> qualified form **1**. Four sites. `listCampaigns` crashed on first render because its second
+> subquery joins two tables. `listSharedBlocks.usedByDrafts` and `listSessions.turns` had been
+> quietly reporting **zero since they were written**. `planRoster.members` was correct only
+> because its outer query has a join and drizzle therefore qualifies — precisely the accident
+> `latestSignal` predicted in as many words: *"which is exactly the kind of accident that breaks
+> the moment a join is removed."* That warning had been in the tree for weeks and did not stop
+> four more.
+>
+> So `verify:relations` scans for this one too, beside the array trap, with its control
+> assembled at runtime so the scan does not report itself. **The fix is always to spell the
+> prefix out** — `"capture_campaigns"."id"`.
+>
+> **And the reason none of the suites caught it: none of them called the function.**
+> `verify:campaigns` passed 22 checks while the page it describes could not render, because it
+> exercised `getCampaign` and never `listCampaigns`. `verify:shared` and `verify:interview` pass
+> today for the same reason. The suites now execute the listing, which is C5's lesson —
+> `pendingScopeVersions` was exported precisely so the suite would run the selector rather than
+> assert that the SQL exists.
 
 > **The prompt spends most of its length on what is *not* a conflict, and the first version of it
 > did not work.** The first real mine returned **0 conflicts across 13 pairs** — which is either an
@@ -5864,6 +6039,7 @@ pnpm structures --probe 250          # block detection, DRY: reads bundles, writ
 pnpm structures --blocks             # stored block coverage (Doc 6 RW.1)
 pnpm structures --probe 400 --tools  # tool references and decision rules, DRY, from real bundles (Doc 7 P0)
 pnpm structures --tools              # the stored table, after the 2.1.0 re-extract
+pnpm structures --resolve-tools --drain  # token counts -> skill_tools (Doc 7 P1); free, no bundles
 pnpm structures --repair-tools       # hand back fingerprints whose tool counts are not numbers
 pnpm archetypes --blocks             # does the block grain discriminate? (RW.2) — free
 pnpm blocks --library review         # read real fragments per block type (RW.3) — free
@@ -5903,6 +6079,7 @@ pnpm verify:watch                        # R8.7 the feed resolves versions to sk
 pnpm verify:campaigns                    # RK.8 progress is derived, never stored; free
 pnpm verify:parameters                   # RD.1–RD.3 parameters, rules, coverage that says which zero; free
 pnpm verify:tool-refs                    # RD.6 tool tokens: the naive reading fails first; free
+pnpm verify:tools                        # RD.6/RD.7 the vocabulary, and the tail it refuses to name; free
 pnpm verify:improve                      # R5.6 a fork carries its licence; free, no network
 pnpm verify:scope                        # RW.10/RW.11 scope and disclosure; free, no network
 pnpm scope --status                      # coverage first, then the finding; free
