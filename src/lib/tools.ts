@@ -84,6 +84,14 @@ export type Tool = {
   destructive: boolean;
   /** Other tokens that mean this tool. Compared case-insensitively, like a repository name. */
   aliases?: readonly string[];
+  /**
+   * How Claude Code's `allowed-tools` spells it, for the built-ins only.
+   *
+   * Not derivable from the id — `agent:ask` is written `AskUserQuestion` and `agent:webfetch`
+   * is `WebFetch` — and P2 generates that list, so a guess would emit a grant the harness does
+   * not recognise and the call would be refused at the moment it mattered.
+   */
+  declaredAs?: string;
 };
 
 /*
@@ -101,16 +109,16 @@ const AGENT_BUILTIN: readonly Tool[] = [
    * through frontmatter — `read` and `grep` are also shell words, and `resolveTool` uses the
    * evidence to tell them apart.
    */
-  { id: "agent:read", label: "Read", blurb: "Reads a file the harness grants access to.", kind: "agent-builtin", capabilities: ["fs_read"], destructive: false }, // 170 repos
-  { id: "agent:write", label: "Write", blurb: "Creates a file through the harness.", kind: "agent-builtin", capabilities: ["fs_write"], destructive: false }, // 134
-  { id: "agent:edit", label: "Edit", blurb: "Edits a file in place through the harness.", kind: "agent-builtin", capabilities: ["fs_write"], destructive: false }, // 106
-  { id: "agent:glob", label: "Glob", blurb: "Finds files by pattern.", kind: "agent-builtin", capabilities: ["fs_read"], destructive: false }, // 125
-  { id: "agent:grep", label: "Grep (built-in)", blurb: "Searches file contents through the harness.", kind: "agent-builtin", capabilities: ["fs_read"], destructive: false },
-  { id: "agent:bash", label: "Bash (built-in)", blurb: "Runs shell commands through the harness — the grant every CLI below needs.", kind: "agent-builtin", capabilities: ["shell"], destructive: true },
-  { id: "agent:webfetch", label: "WebFetch", blurb: "Fetches a URL.", kind: "agent-builtin", capabilities: ["network"], destructive: false }, // 59
-  { id: "agent:websearch", label: "WebSearch", blurb: "Searches the web.", kind: "agent-builtin", capabilities: ["network"], destructive: false }, // 42
-  { id: "agent:ask", label: "AskUserQuestion", blurb: "Puts a question to the person.", kind: "agent-builtin", capabilities: [], destructive: false }, // 53
-  { id: "agent:task", label: "Task", blurb: "Delegates to a sub-agent.", kind: "agent-builtin", capabilities: [], destructive: false }, // 39
+  { id: "agent:read", label: "Read", blurb: "Reads a file the harness grants access to.", kind: "agent-builtin", capabilities: ["fs_read"], destructive: false , declaredAs: "Read" }, // 170 repos
+  { id: "agent:write", label: "Write", blurb: "Creates a file through the harness.", kind: "agent-builtin", capabilities: ["fs_write"], destructive: false , declaredAs: "Write" }, // 134
+  { id: "agent:edit", label: "Edit", blurb: "Edits a file in place through the harness.", kind: "agent-builtin", capabilities: ["fs_write"], destructive: false , declaredAs: "Edit" }, // 106
+  { id: "agent:glob", label: "Glob", blurb: "Finds files by pattern.", kind: "agent-builtin", capabilities: ["fs_read"], destructive: false , declaredAs: "Glob" }, // 125
+  { id: "agent:grep", label: "Grep (built-in)", blurb: "Searches file contents through the harness.", kind: "agent-builtin", capabilities: ["fs_read"], destructive: false , declaredAs: "Grep" },
+  { id: "agent:bash", label: "Bash (built-in)", blurb: "Runs shell commands through the harness — the grant every CLI below needs.", kind: "agent-builtin", capabilities: ["shell"], destructive: true , declaredAs: "Bash" },
+  { id: "agent:webfetch", label: "WebFetch", blurb: "Fetches a URL.", kind: "agent-builtin", capabilities: ["network"], destructive: false , declaredAs: "WebFetch" }, // 59
+  { id: "agent:websearch", label: "WebSearch", blurb: "Searches the web.", kind: "agent-builtin", capabilities: ["network"], destructive: false , declaredAs: "WebSearch" }, // 42
+  { id: "agent:ask", label: "AskUserQuestion", blurb: "Puts a question to the person.", kind: "agent-builtin", capabilities: [], destructive: false , declaredAs: "AskUserQuestion" }, // 53
+  { id: "agent:task", label: "Task", blurb: "Delegates to a sub-agent.", kind: "agent-builtin", capabilities: [], destructive: false , declaredAs: "Task" }, // 39
 ];
 
 const VERSION_CONTROL: readonly Tool[] = [

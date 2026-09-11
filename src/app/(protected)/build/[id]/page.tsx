@@ -21,6 +21,7 @@ import { getDraftBlocks, listDraftRevisions } from "@/server/builder/blocks";
 import { coverageFor } from "@/server/builder/parameters";
 import { contentHashOf, evalParentFor, evalStates } from "@/server/evals/store";
 import { getSession, listSessions } from "@/server/interview/session";
+import { alignmentForDraft } from "@/server/builder/alignment";
 import { blockDeviations } from "@/server/builder/deviation";
 import { getDraft } from "@/server/builder/drafts";
 import { listDistillRuns } from "@/server/distill/run";
@@ -77,7 +78,7 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
    * page nobody was asking to change anything on.
    */
   const orgId = session.session.activeOrganizationId;
-  const [blocks, revisions, sessions, distillRunRows, distillEntitled, evalCases] = orgId
+  const [blocks, revisions, sessions, distillRunRows, distillEntitled, evalCases, alignment] = orgId
     ? await Promise.all([
         getDraftBlocks(draft.id, orgId),
         listDraftRevisions(draft.id, orgId),
@@ -91,8 +92,14 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
          * loss. One helper decides, at every call site that needs it.
          */
         evalStates(evalParentFor(draft), orgId),
+        /*
+         * RD.8's three-source comparison, derived on read like the deviation marks above. Free:
+         * the extractor is rules over a string, and the capability surface is rules over files
+         * already stored on the draft. Nothing here gates publishing.
+         */
+        alignmentForDraft(draft.id, orgId),
       ])
-    : [[], [], [], [], false, []];
+    : [[], [], [], [], false, [], null];
 
   /*
    * `hasEntitlement`, not `requireEntitlement`. A free-tier author is not doing anything wrong
@@ -233,6 +240,7 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
           draftId={draft.id}
           blocks={blocks}
           deviations={deviations}
+          alignment={alignment}
           disabled={draft.status === "generating"}
         />
       ) : (

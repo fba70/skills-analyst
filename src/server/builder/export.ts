@@ -5,6 +5,7 @@ import { zipSync, type Zippable } from "fflate";
 import { sha256 } from "@/server/storage/keys";
 
 import { EXPORT_DIALECTS, type DialectId } from "@/lib/dialects";
+import { declaredOrDerivedTools } from "./alignment";
 import { renderDialect } from "./dialects";
 import { getDraft, type DraftDetail } from "./drafts";
 
@@ -84,7 +85,22 @@ export function buildDraftArchive(
 ): DraftExport {
   const description = String(draft.frontmatter.description ?? draft.summary ?? "");
   const name = String(draft.frontmatter.name ?? draft.slug);
-  const source = { name: draft.name, slug: name, description, body: draft.body ?? "" };
+  /*
+   * What the SKILL.md export declares it may run (Doc 7 RD.8): the author's own `allowed-tools`
+   * when they wrote one, otherwise the tools their steps actually name. Computed from the same
+   * function the designer's alignment panel reads, so the sentence that panel prints —
+   * *this is what your export will carry* — is true rather than a proposal.
+   *
+   * Pure, and therefore still byte-identical across two downloads of an unchanged draft.
+   */
+  const { ids: allowedTools } = declaredOrDerivedTools(draft.body ?? "", draft.frontmatter ?? {});
+  const source = {
+    name: draft.name,
+    slug: name,
+    description,
+    body: draft.body ?? "",
+    allowedTools,
+  };
 
   const entries: Zippable = {};
   const rendered: Array<{ dialect: string; path: string; sha256: string }> = [];

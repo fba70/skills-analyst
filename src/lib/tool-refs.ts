@@ -271,6 +271,20 @@ export function proseToolCandidates(
 const ALLOWED_TOOLS_KEYS = ["allowed-tools", "allowedTools", "allowed_tools", "tools"];
 
 /**
+ * Whether the document declares a grant list **at all**.
+ *
+ * Separate from `allowedToolsOf`, which cannot answer it: an absent key and an empty list both
+ * yield `[]`, and they are opposite facts. *No list* means the author has not written one, so
+ * there is nothing to disagree with; *an empty list* grants nothing and every step that runs
+ * something is refused. RD.8's panel says different sentences for the two.
+ */
+export function declaresAllowedTools(frontmatter: Record<string, unknown>): boolean {
+  return ALLOWED_TOOLS_KEYS.some(
+    (key) => frontmatter[key] !== undefined && frontmatter[key] !== null,
+  );
+}
+
+/**
  * `allowed-tools` from a Claude Code skill's frontmatter, as tool tokens.
  *
  * Accepts the string form (`Bash(git:*) Read Edit`, `Bash(npm run *), Grep`) and the list form.

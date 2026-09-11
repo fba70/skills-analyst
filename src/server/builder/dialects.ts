@@ -1,7 +1,8 @@
 import "server-only";
 
-import type { BundleFile } from "@/server/storage";
+import { renderAllowedTools } from "@/lib/alignment";
 import type { DialectId } from "@/lib/dialects";
+import type { BundleFile } from "@/server/storage";
 
 export type { DialectId };
 
@@ -33,6 +34,21 @@ export type DraftSource = {
   slug: string;
   description: string;
   body: string;
+  /**
+   * Tool ids to declare in `allowed-tools` (Doc 7 RD.8). Omit to emit no grant at all.
+   *
+   * **Only the SKILL.md dialect carries it**, because `allowed-tools` is Claude Code's key:
+   * AGENTS.md has no frontmatter by specification, and a Cursor rule uses Cursor's own keys.
+   * Putting it in the canonical draft instead would make one tool's vocabulary the shape of
+   * every export, which is the thing this renderer exists to avoid.
+   *
+   * Passed in rather than derived here so the function stays what it is — facts in, bytes out
+   * — and so **publish does not emit it**. A published skill's bytes are what a verdict covers
+   * and what R6.1 puts through the same pipeline as a synced one; quietly adding a frontmatter
+   * key to every skill authored here is a change to the corpus, not to an export, and Doc 7
+   * asks for the export.
+   */
+  allowedTools?: readonly string[];
 };
 
 /** The single file a dialect renders to, with the path a consumer expects. */
@@ -74,14 +90,19 @@ export function renderDialect(draft: DraftSource, dialect: DialectId): BundleFil
       };
 
     case "anthropic_skill":
-    default:
+    default: {
+      const grant = renderAllowedTools(draft.allowedTools ?? []);
+      // Sorted and deduplicated by `renderAllowedTools`, so two exports of one draft stay
+      // byte-identical — the property R8.2 had to redesign a receipt to keep.
+      const allowed = grant ? `allowed-tools: ${grant}\n` : "";
       return {
         path: "SKILL.md",
         content: Buffer.from(
-          `---\nname: ${draft.slug}\ndescription: ${yamlString(draft.description)}\n---\n\n${draft.body}\n`,
+          `---\nname: ${draft.slug}\ndescription: ${yamlString(draft.description)}\n${allowed}---\n\n${draft.body}\n`,
           "utf8",
         ),
       };
+    }
   }
 }
 

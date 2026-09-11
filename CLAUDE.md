@@ -2171,6 +2171,74 @@ would be enforcing an untested mean.
 > draft.
 
 
+### Three places a skill says what it runs, and nothing had compared them (Doc 7 RD.8, step P2)
+
+`src/lib/alignment.ts` · `src/server/builder/alignment.ts` · `components/builder/alignment-panel.tsx`
+`pnpm verify:tool-alignment` (37 checks, free) · no migration
+
+A skill declares what it runs three times over: the **steps**, which is what an agent acts on;
+**`allowed-tools`**, which is what the harness enforces; and the **bundled code**, which is what
+R2.4 measures. A step that runs `kubectl` against an `allowed-tools` that does not grant it is a
+call Claude Code refuses at the moment it matters, and until now nothing looked.
+
+#### Not a gate, and the suite proves it rather than promising it
+
+R4.5's analyzers decide whether a draft may publish and are not consulted here. A deployment
+skill that runs `kubectl delete` is doing its job; a designer that refused it would convert
+advice into a prohibition nobody asked for — the line deprecation already holds against the
+download route. `verify:tool-alignment` builds the loudest finding this module can produce and
+asserts the publish path has never heard of it.
+
+#### Absent and empty are different facts, and the whole feature turns on it
+
+`allowedToolsOf` returns `[]` both for a draft that grants nothing and for one that declares no
+list at all — and those are opposite. An empty list means every step is refused; **no list means
+the author has not written one**, so there is nothing to disagree with and reporting a dozen
+refusals would be a panel about nothing. `declaresAllowedTools` asks about the key rather than
+counting the list, and the suite drives both.
+
+Three more calls in the same spirit, each collapsing rows an author could not act on:
+
+- **A blanket `Bash` grant answers for every CLI.** Reporting `git`, `jq` and `sed` separately
+  under one shell grant is three rows and no decision.
+- **One `unguarded-destructive` finding for the whole draft**, naming the tools inside the
+  sentence. Six identical rows would read as six problems when there is one thing to do.
+- **A capability a named tool already implies is not reported.** An author who documents `curl`
+  has documented network reach; asking them to also name the library their script imports is a
+  checklist, not a finding.
+
+#### The panel's promise had to be made true, not merely written
+
+It prints *this is what your export will carry*, so the line it shows and the bytes
+`renderDialect` produces are one string from one function — `declaredOrDerivedTools`, read by
+both, asserted equal against a real draft. Two definitions of one sentence is how they begin to
+disagree, and a panel showing a proposal the export then ignored is worse than showing none.
+
+**`allowed-tools` leaves only through Claude Code's file.** AGENTS.md has no frontmatter by
+specification — the contract that once quarantined all 121 of them — and a Cursor rule uses
+Cursor's keys. **And publish does not emit it**: a published skill's bytes are what a verdict
+covers and what R6.1 puts through the same pipeline as a synced skill, so quietly adding a
+frontmatter key to every skill authored here would be a change to the corpus rather than to an
+export. `renderDialect` takes the list as a fact and never derives it, which is what keeps the
+two apart. The grant is sorted and deduplicated, so R4.4's byte-identical-repeat still holds.
+
+No bare `Bash` is emitted beside the scoped grants, either: a blanket shell grant is broader
+than the document asked for, and quietly widening what a consumer's agent may run is the
+opposite of what this feature is for.
+
+> **One instrument, again.** The tools a draft names are read by `extractStructure` itself —
+> the function that produced all 1.6M corpus blocks and all 50,965 tool-reference rows — over a
+> synthetic bundle of the body plus `draft_resources`. `blockDeviations` takes the same shape
+> for the same reason: a second, lighter reader drifts, and every drift surfaces as a finding
+> the author cannot act on because the panel is describing a document the extractor does not
+> see. It also means a draft showing `kubectl` here shows `kubectl` on its skill page once
+> published.
+
+> **The sixth scanner to accuse itself**, and it is becoming a checklist item. The check that
+> `alignment.ts` reaches no database matched the module's own doc comment explaining that the
+> analysis is `server-only`. Comments are stripped now and the control is assembled at runtime.
+> Every source scan in this codebase needs both, and five of the six learned it the same way.
+
 ### Tools are a third taxonomy, and the list was written from a count (Doc 7 RD.6–RD.7, step P1)
 
 `src/lib/tools.ts` · `src/server/analytics/tool-index.ts` · migration 0051
@@ -6080,6 +6148,7 @@ pnpm verify:campaigns                    # RK.8 progress is derived, never store
 pnpm verify:parameters                   # RD.1–RD.3 parameters, rules, coverage that says which zero; free
 pnpm verify:tool-refs                    # RD.6 tool tokens: the naive reading fails first; free
 pnpm verify:tools                        # RD.6/RD.7 the vocabulary, and the tail it refuses to name; free
+pnpm verify:tool-alignment               # RD.8 steps vs allowed-tools vs the bundle; free, never a gate
 pnpm verify:improve                      # R5.6 a fork carries its licence; free, no network
 pnpm verify:scope                        # RW.10/RW.11 scope and disclosure; free, no network
 pnpm scope --status                      # coverage first, then the finding; free

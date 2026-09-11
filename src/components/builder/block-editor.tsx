@@ -16,11 +16,13 @@ import {
 import { toast } from "sonner";
 
 import { saveDraftBlocksAction } from "@/app/(protected)/build/actions";
+import { AlignmentPanel } from "@/components/builder/alignment-panel";
 import { DeviationCard } from "@/components/builder/deviation-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import type { AlignmentReport } from "@/lib/alignment";
 import type { BlockType } from "@/lib/block-types";
 import {
   DRAFT_BLOCK_TYPE_OPTIONS,
@@ -79,11 +81,14 @@ export function BlockEditor({
   draftId,
   blocks: initial,
   deviations,
+  alignment,
   disabled,
 }: {
   draftId: string;
   blocks: DraftBlock[];
   deviations: DeviationReport | null;
+  /** RD.8's three-source comparison. Null before the first save, like the deviation marks. */
+  alignment: AlignmentReport | null;
   /** True while a generation is in flight — the body is about to be replaced wholesale. */
   disabled: boolean;
 }) {
@@ -397,6 +402,14 @@ export function BlockEditor({
         wants to append to live in two React trees with nothing between them.
       */}
       {deviations ? <DeviationCard report={deviations} onAdd={addTyped} /> : null}
+
+      {/*
+        Here for the same reason, and it is the reason there is no `addEmptyBlockAction`: the
+        "add one here" this panel needs already exists as `addTyped`, and reaching for a server
+        action instead would put a second writer beside `setDraftBlocks` to do what one
+        callback already does locally.
+      */}
+      {alignment ? <AlignmentPanel report={alignment} onAdd={addTyped} /> : null}
     </div>
   );
 }
