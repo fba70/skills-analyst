@@ -66,6 +66,7 @@ function state(over: Partial<EvalCaseState> = {}): EvalCaseState {
     prompt: "p",
     expectation: "e",
     source: "authored",
+    sourceRule: null,
     latest: null,
     previous: null,
     ...over,

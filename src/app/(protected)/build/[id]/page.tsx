@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getDraftBlocks, listDraftRevisions } from "@/server/builder/blocks";
 import { coverageFor } from "@/server/builder/parameters";
+import { proposalsFor } from "@/server/evals/rule-cases";
 import { contentHashOf, evalParentFor, evalStates } from "@/server/evals/store";
 import { getSession, listSessions } from "@/server/interview/session";
 import { alignmentForDraft } from "@/server/builder/alignment";
@@ -134,6 +135,13 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
    * Free — arithmetic over rows already fetched for the editor.
    */
   const designer = orgId ? await coverageFor(draft.id, orgId) : null;
+
+  /*
+   * What those rules would test (Doc 7 RD.4). Derived like everything else on this page, and
+   * free: a proposal is a render of a row the editor already loaded, so it calls no model and
+   * costs nothing until somebody accepts one and runs it.
+   */
+  const ruleCases = orgId ? await proposalsFor(draft, orgId) : null;
 
   return (
     <div className="grid min-w-0 gap-6">
@@ -324,6 +332,7 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
       <EvalPanel
         draftId={draft.id}
         cases={evalCases}
+        proposals={ruleCases}
         contentHash={contentHashOf(draft.body ?? "")}
         entitled={evalEntitled}
         canRun={Boolean(draft.body)}

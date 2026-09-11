@@ -61,8 +61,25 @@ export const skillEvals = pgTable(
     /** What makes the answer right. Golden tasks only; null for the trigger probes. */
     expectation: text("expectation"),
 
-    /** `authored` or `interview` — see `EVAL_SOURCES`. */
+    /** `authored`, `interview` or `rule` — see `EVAL_SOURCES`. */
     source: text("source").notNull().default("authored"),
+
+    /**
+     * The decision-rule row this case was proposed from (Doc 7 RD.4).
+     *
+     * A **content key**, not a pointer: rule rows live in a jsonb array on a draft block and have
+     * no identity of their own, so the stable thing about a row is the claim it makes. `ruleCaseKey`
+     * folds the conditions and the action into it and deliberately leaves the block out, because
+     * "make this a table" moves rows between blocks and a link that broke on a merge would tell an
+     * author who had just tidied their rules that every case had come loose.
+     *
+     * What it buys is that a proposal disappears when its case exists and comes back when the case
+     * is deleted, with nothing to sweep. What it costs is deliberate: **edit the rule and the key
+     * no longer matches**, so the row proposes again — which is right, because the expectation has
+     * changed — while the case already written stays exactly where it is. It is the author's test,
+     * not ours to withdraw.
+     */
+    sourceRule: text("source_rule"),
     /**
      * The captured worked example this came from (RW.4).
      *

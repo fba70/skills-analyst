@@ -85,6 +85,7 @@
     "verify:scope": "tsx --conditions=react-server scripts/verify-scope.mts",
     "verify:shared": "tsx --conditions=react-server scripts/verify-shared.mts",
     "verify:parameters": "tsx --conditions=react-server scripts/verify-parameters.mts",
+    "verify:rule-cases": "tsx --conditions=react-server scripts/verify-rule-cases.mts",
     "verify:demand": "tsx --conditions=react-server scripts/verify-demand.mts",
     "verify:freshness": "tsx --conditions=react-server scripts/verify-freshness.mts",
     "verify:impact": "tsx --conditions=react-server scripts/verify-impact.mts",

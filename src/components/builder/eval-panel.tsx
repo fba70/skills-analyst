@@ -2,10 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { AlertTriangle, FlaskConical, Loader2, Play, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, FlaskConical, ListChecks, Loader2, Play, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import {
+  acceptRuleCasesAction,
   createEvalAction,
   deleteEvalAction,
   runEvalsAction,
@@ -18,12 +19,14 @@ import { formatConversationSpend } from "@/lib/conversation";
 import {
   EVAL_KIND_META,
   EVAL_KINDS,
+  EVAL_SOURCE_LABEL,
   isRegression,
   isStale,
   summarise,
   type EvalCaseState,
   type EvalKind,
 } from "@/lib/evals";
+import { RULE_CASE_SKIP_MESSAGE, type RuleCaseReport } from "@/lib/rule-cases";
 
 /**
  * Skill CI on a draft (Doc 2 R2.11, Doc 6 RW.6, plan step D1).
@@ -54,12 +57,15 @@ import {
 export function EvalPanel({
   draftId,
   cases,
+  proposals,
   contentHash,
   entitled,
   canRun,
 }: {
   draftId: string;
   cases: EvalCaseState[];
+  /** What the draft's decision rules would test (Doc 7 RD.4). Null before any block exists. */
+  proposals: RuleCaseReport | null;
   /** The document the results are compared against. */
   contentHash: string;
   /** Whether this workspace has the Eval Lab. Writing cases is free; running is not. */
@@ -86,6 +92,25 @@ export function EvalPanel({
       setPrompt("");
       setExpectation("");
       setAdding(false);
+      router.refresh();
+    });
+  }
+
+  function accept(keys: string[]) {
+    startTransition(async () => {
+      const result = await acceptRuleCasesAction(draftId, keys);
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+      const { created, missed } = result.data;
+      toast.success(
+        missed > 0
+          ? `${created} case${created === 1 ? "" : "s"} added · ${missed} offer${
+              missed === 1 ? "" : "s"
+            } had already moved on`
+          : `${created} case${created === 1 ? "" : "s"} added`,
+      );
       router.refresh();
     });
   }
@@ -142,6 +167,87 @@ export function EvalPanel({
           </div>
         ) : null}
 
+        {/*
+          Offers from the decision rules (Doc 7 RD.4, plan step P6).
+
+          Framed as an offer and never as a finding. Coverage below already says which cases the
+          document leaves open; this says which of the cases it *does* make have nothing checking
+          them, and an author is entitled to answer "none of them, thank you". So there is no
+          warning colour, no count in the card title, and nothing here reaches the publish gate.
+
+          The skipped rows are printed rather than dropped, because "my rules are still prose" and
+          "every row already has a case" produce the same empty list and mean opposite things.
+        */}
+        {proposals && proposals.proposals.length > 0 ? (
+          <div className="grid gap-2 rounded-md border p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <ListChecks className="size-4" />
+              <p className="text-sm font-medium">
+                {proposals.proposals.length} rule
+                {proposals.proposals.length === 1 ? "" : "s"} with no case yet
+              </p>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="ml-auto"
+                disabled={isPending}
+                onClick={() => accept(proposals.proposals.map((p) => p.key))}
+              >
+                Add all
+              </Button>
+            </div>
+            <p className="text-muted-foreground text-xs">
+              A row of a decision table is a golden task waiting to be accepted: the conditions
+              frame the request, and your own action is what makes the answer right. Nothing is
+              rewritten, and nothing is added until you say so.
+            </p>
+            <ul className="grid gap-2">
+              {proposals.proposals.map((proposal) => (
+                <li key={proposal.key} className="grid gap-1 border-t pt-2">
+                  <div className="flex min-w-0 flex-wrap items-start gap-2">
+                    <p className="min-w-0 flex-1 text-sm">{proposal.prompt}</p>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={isPending}
+                      onClick={() => accept([proposal.key])}
+                    >
+                      <Plus className="size-3.5" />
+                      Add
+                    </Button>
+                  </div>
+                  <p className="text-muted-foreground text-xs">
+                    Right when: {proposal.expectation}
+                  </p>
+                </li>
+              ))}
+            </ul>
+            {proposals.more > 0 ? (
+              <p className="text-muted-foreground text-xs">
+                {proposals.more} more after these. Accept a batch and the rest appear.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {proposals && proposals.proposals.length === 0 && proposals.covered > 0 ? (
+          <p className="text-muted-foreground text-xs">
+            Every structured rule on this draft has a case. {proposals.covered} of them.
+          </p>
+        ) : null}
+
+        {proposals && proposals.skipped.length > 0 ? (
+          <p className="text-muted-foreground text-xs">
+            {proposals.skipped.length} row
+            {proposals.skipped.length === 1 ? "" : "s"} propose nothing:{" "}
+            {[...new Set(proposals.skipped.map((row) => RULE_CASE_SKIP_MESSAGE[row.reason]))].join(
+              " ",
+            )}
+          </p>
+        ) : null}
+
         {cases.length === 0 ? (
           <p className="text-muted-foreground text-sm">
             No cases yet. Two or three requests the skill should fire on, one it should stay out
@@ -185,9 +291,14 @@ export function EvalPanel({
                         regression
                       </Badge>
                     ) : null}
-                    {testCase.source === "interview" ? (
+                    {/*
+                      Read from the vocabulary rather than compared against one of its values.
+                      The panel showed "from an interview" and nothing else, so a third source
+                      would have rendered as though the author had typed the case themselves.
+                    */}
+                    {testCase.source !== "authored" ? (
                       <Badge variant="outline" className="text-muted-foreground">
-                        from an interview
+                        {EVAL_SOURCE_LABEL[testCase.source].toLowerCase()}
                       </Badge>
                     ) : null}
                     <Button

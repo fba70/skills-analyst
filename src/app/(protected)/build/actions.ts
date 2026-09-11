@@ -608,6 +608,44 @@ export async function createEvalAction(
   }
 }
 
+/**
+ * Accept eval cases proposed by the draft's decision rules (Doc 7 RD.4, plan step P6).
+ *
+ * Free, like writing any other case: this writes rows and calls no model. What it costs is paid
+ * when somebody runs them, which is where the Eval Lab's gate already sits.
+ *
+ * **Only keys cross the wire.** The prompt and the expectation are re-derived on the server from
+ * the rule the key names, so the caller chooses which offer to take and never what the case says
+ * — an action is a POST endpoint, and a case is the thing a judge will grade a document against.
+ */
+export async function acceptRuleCasesAction(
+  draftId: string,
+  keys: string[],
+): Promise<ActionResult<{ created: number; missed: number }>> {
+  try {
+    const session = await requireSession();
+    const orgId = session.session.activeOrganizationId;
+    if (!orgId) return { ok: false, message: "No active workspace." };
+
+    const { getDraft } = await import("@/server/builder/drafts");
+    const draft = await getDraft(draftId, orgId);
+    if (!draft) return { ok: false, message: "Draft not found." };
+
+    const { acceptRuleCases } = await import("@/server/evals/rule-cases");
+    const result = await acceptRuleCases({
+      draft,
+      orgId,
+      userId: session.user.id,
+      keys,
+    });
+
+    revalidatePath(`/build/${draftId}`);
+    return { ok: true, data: { created: result.created, missed: result.missed } };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
 export async function deleteEvalAction(
   draftId: string,
   evalId: string,

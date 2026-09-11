@@ -69,10 +69,28 @@ export function isEvalVerdict(value: unknown): value is EvalVerdict {
   return typeof value === "string" && (EVAL_VERDICTS as readonly string[]).includes(value);
 }
 
-/** Where a case came from. `interview` is a worked example an author captured (RW.4). */
-export const EVAL_SOURCES = ["authored", "interview"] as const;
+/**
+ * Where a case came from. `interview` is a worked example an author captured (RW.4); `rule` is a
+ * row of a decision table they accepted (Doc 7 RD.4).
+ *
+ * Three values rather than a boolean, because the three answer a question an author actually
+ * asks — *did I write this, or did the platform?* — and because the accept rate per source is
+ * the only evidence that would ever justify pruning one of the two generators, exactly as the
+ * interview keeps its rejections so a technique can be dropped on evidence.
+ */
+export const EVAL_SOURCES = ["authored", "interview", "rule"] as const;
 
 export type EvalSource = (typeof EVAL_SOURCES)[number];
+
+export function isEvalSource(value: unknown): value is EvalSource {
+  return typeof value === "string" && (EVAL_SOURCES as readonly string[]).includes(value);
+}
+
+export const EVAL_SOURCE_LABEL: Record<EvalSource, string> = {
+  authored: "Written here",
+  interview: "From the interview",
+  rule: "From a rule",
+};
 
 export type EvalCaseState = {
   id: string;
@@ -80,6 +98,8 @@ export type EvalCaseState = {
   prompt: string;
   expectation: string | null;
   source: EvalSource;
+  /** The rule row's content key, when RD.4 proposed this case. Null otherwise. */
+  sourceRule: string | null;
   /** The newest run, or null when the case has never been run. */
   latest: { verdict: EvalVerdict; detail: string | null; contentHash: string } | null;
   /** The newest run against a *different*, earlier document. Null when there is none. */

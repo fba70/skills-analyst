@@ -2171,6 +2171,97 @@ would be enforcing an untested mean.
 > draft.
 
 
+### A rule row is a test case, and the whole step is a render (Doc 7 RD.4, step P6)
+
+`src/lib/rule-cases.ts` · `src/server/evals/rule-cases.ts` · migration 0054
+`pnpm verify:rule-cases` (36 pure checks plus a stored probe, free)
+
+P4 made a decision rule into rows and gave the draft a **coverage** figure. That figure is a claim
+about the *document*: this many declared values have a rule. Coverage with a passing golden task per
+row is a claim about **behaviour**, and RD.4 is the step that turns the first into the second.
+
+It costs nothing, and that is structural rather than lucky. A golden task from a structured row is a
+**render** — the conditions frame the request, the author's action is the expectation — so the
+module calls no model, touches no bundle and returns the same bytes every time. The Eval Lab's price
+is paid when somebody runs the case, which is where it already sits.
+
+#### The expectation is the author's sentence, verbatim
+
+No model rewrites it into test-shaped prose and no heuristic tidies it — not even a full stop, which
+the suite checks. The action is what the author said should happen, and grading a skill against our
+paraphrase of that would be the line the interview holds when it refuses to infer the two halves of
+a worked example, and the reason `purpose` is not filled from an imported description.
+
+#### Proposals are derived, and the key is the claim rather than the row
+
+There is no proposals table. An offer is a render of a row the editor already loaded, and the only
+stored thing is a **content key** on the case that was accepted — `skill_evals.source_rule`, one
+nullable column. So an offer disappears when its case exists and comes back if that case is deleted,
+with nothing to sweep and nothing to go stale.
+
+Three decisions inside that key, each about what should and should not re-propose:
+
+- **The block id is not in it.** P4's "make this a table" moves rows from several blocks into one,
+  and a key carrying the block would break every link the merge touched — an author who had just
+  consolidated their rules would be told every case had come loose. The suite merges a real table
+  and asserts the accepted case stays linked.
+- **Conditions are sorted and the action is folded.** Reordering `when` changes the sentence and not
+  the claim; fixing a capital letter is not a new expectation.
+- **Rewriting the action re-proposes, on purpose, and the case already written is left alone.** The
+  rule now says something else, so it deserves a test; the old case is the author's and deleting
+  somebody's test because they edited the rule it came from is the worst available reading of
+  "derived".
+
+#### Three rows propose nothing, and the naive reading is shown getting each wrong
+
+`verify:rule-cases` opens by building *every row becomes a golden task* and watching it produce an
+unjudgeable case. An **empty action** is what "add a rule here" writes — a golden task with nothing
+for a judge to check, which would fail every run for our reason rather than the skill's, the exact
+distinction `error` exists to keep out of `fail`. An **otherwise row** is defined by what it is not,
+so a request framed from it describes no situation. A row naming no parameter has nothing to put to
+an agent. Each refusal carries a sentence, and the panel prints them: *my rules are still prose* and
+*every row already has a case* are the same empty list and opposite meanings.
+
+#### Golden tasks only, and the prompt never mentions the skill
+
+RD.4's sentence can be read as proposing a should-trigger probe beside each task. It does not. A
+trigger probe tests the **description**, which is what an agent matches on and where D2 already
+measures precision and recall; a rule's condition is about what to do once the skill has fired. One
+offer per row also keeps the list acceptable in one press and runnable in one — `MAX_RULE_CASE_PROPOSALS`
+sits below `MAX_CASES_PER_RUN` for exactly that.
+
+The prompt reads *"Given that environment is prod, what should be done?"* and deliberately does not
+say "this skill". D3 runs the identical words with the document withheld, and that arm is the point
+of having the case at all: **a rule the model reproduces unaided carries no knowledge the agent
+lacked**, which is the finding an author is least likely to look for.
+
+#### Only keys cross the wire
+
+The action takes a list of keys and re-derives the prompt and the expectation on the server. A
+server action is a POST endpoint and a case is what a judge will grade a document against, so the
+caller chooses *which* offer to take and can never choose what the case says. A key that no longer
+matches is counted, not thrown: the author edited the rule while the page was open, and failing a
+batch of ten over one expired offer would lose nine good accepts.
+
+Accepting goes through `createEval` like every other case, so a rule case is an ordinary case the
+moment it exists — the runner, the publish gate, the trigger lab and D3's matrix pick it up with no
+special case anywhere. And nothing here gates: `verify:rule-cases` scans `publish.ts` for any reach
+into this module and asserts the draft is still `ready` with every rule untested.
+
+> **A two-value ternary could not see the third source, and it was on the way out of the database.**
+> `evalStates` mapped `row.source === "interview" ? "interview" : "authored"`, which is correct for
+> exactly as long as there are two sources — so every case proposed from a rule would have read as
+> one the author typed, on the one badge that says where a case came from. The panel had the same
+> shape one layer up. Both ask the vocabulary now (`isEvalSource`, `EVAL_SOURCE_LABEL`), and the
+> suite reproduces the collapse before asserting the fix. No pure check could have found it: the
+> collapse happens when the row is read, so the assertion has to be against a stored case.
+
+> **This makes migration 0054 a hard dependency of four suites.** `createEval` writes `source_rule`,
+> so `verify:evals`, `verify:matrix`, `verify:trigger` and `verify:optimise` fail with
+> *column "source_rule" of relation "skill_evals" does not exist* until it is applied.
+> Migration-before-code, loud rather than silent — the note 0029, 0034, 0035, 0043 and 0050 each
+> carry.
+
 ### Version drift: the half of RK.2 that was never built, and every feed was fetched before it was believed (Doc 7 RD.10, step P5)
 
 `src/lib/versions.ts` · `src/server/skills/versions.ts` · migration 0053
@@ -6380,6 +6471,7 @@ pnpm verify:api                          # R8.6/R3.7/R8.3 metadata, never bodies
 pnpm verify:watch                        # R8.7 the feed resolves versions to skills; free
 pnpm verify:campaigns                    # RK.8 progress is derived, never stored; free
 pnpm verify:parameters                   # RD.1–RD.3 parameters, rules, coverage that says which zero; free
+pnpm verify:rule-cases                   # RD.4 a rule row is a golden task, proposed and never created; free
 pnpm verify:tool-refs                    # RD.6 tool tokens: the naive reading fails first; free
 pnpm verify:tools                        # RD.6/RD.7 the vocabulary, and the tail it refuses to name; free
 pnpm verify:tool-alignment               # RD.8 steps vs allowed-tools vs the bundle; free, never a gate

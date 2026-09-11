@@ -6,6 +6,7 @@ import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import {
   isEvalKind,
+  isEvalSource,
   isEvalVerdict,
   MAX_EXPECTATION_CHARS,
   MAX_PROMPT_CHARS,
@@ -61,6 +62,8 @@ export type CreateEvalInput = EvalParent & {
   expectation?: string | null;
   source?: EvalSource;
   sourceCandidateId?: string | null;
+  /** The rule row's content key, for a case proposed by RD.4. */
+  sourceRule?: string | null;
 };
 
 export async function createEval(
@@ -92,6 +95,7 @@ export async function createEval(
         expectation: input.kind === "golden-task" ? expectation : null,
         source: input.source ?? "authored",
         sourceCandidateId: input.sourceCandidateId ?? null,
+        sourceRule: input.sourceRule ?? null,
         createdBy: input.userId,
       })
       .returning({ id: skillEvals.id });
@@ -185,7 +189,18 @@ export async function evalStates(
         kind: (isEvalKind(row.kind) ? row.kind : "should-trigger") as EvalKind,
         prompt: row.prompt,
         expectation: row.expectation,
-        source: (row.source === "interview" ? "interview" : "authored") as EvalSource,
+        /*
+         * Asked of the vocabulary, not matched against one value of it.
+         *
+         * This read was `row.source === "interview" ? "interview" : "authored"`, which is correct
+         * for exactly as long as there are two sources — and RD.4 adds a third, so every case
+         * proposed from a rule would have come back labelled as one the author typed. A ternary
+         * that collapses an open vocabulary to its two known members is the shape that inferred
+         * resolution from an answer looking different in `verify:embeddings`: it cannot report
+         * the case it does not know about, and it reports a confident wrong value instead.
+         */
+        source: isEvalSource(row.source) ? row.source : "authored",
+        sourceRule: row.sourceRule,
         latest: latest
           ? {
               verdict: isEvalVerdict(latest.verdict) ? latest.verdict : "error",
