@@ -260,8 +260,15 @@ export async function embedCorpus(options: EmbedOptions = {}): Promise<EmbedRepo
        * would mean every remaining batch throwing the same error and the report claiming
        * hundreds of failures when the truth is one refusal. Everything else (a rejected
        * value, a transient gateway error) costs its own batch and no more.
+       *
+       * `LlmDisabledError` is the same shape of fact and ends the run for the same reason —
+       * more so, since nothing about it can change while the process runs. Matched on the name
+       * rather than with `instanceof`, like the line it sits beside: this module reaches the
+       * error through a dynamic import two levels down, and a name comparison cannot be
+       * defeated by two module instances.
        */
-      if ((error as Error).name === "BudgetExceededError") throw error;
+      const name = (error as Error).name;
+      if (name === "BudgetExceededError" || name === "LlmDisabledError") throw error;
       report.failed += batch.length;
     }
   }

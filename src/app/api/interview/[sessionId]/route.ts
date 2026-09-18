@@ -1,6 +1,7 @@
 import { after } from "next/server";
 
 import { ConversationBudgetError } from "@/server/billing/conversation";
+import { LlmDisabledError } from "@/server/billing/spend";
 import { requireSession } from "@/server/dal/session";
 import { endForBudget, takeTurn } from "@/server/interview/turn";
 
@@ -58,6 +59,16 @@ export async function POST(
      * forever or gives up on a soft one. The session is ended here too, so the reason it
      * stopped is on the row rather than inferred from a gap in the transcript.
      */
+    /*
+     * The deployment switch is a 403, not the 402 below and not a 5xx.
+     *
+     * 402 says "pay or wait for the reset" and 503 says "try again shortly"; both send a client
+     * back for an answer that will not arrive. 403 is the honest one — this deployment does not
+     * offer the feature to anybody — and the client stops.
+     */
+    if (error instanceof LlmDisabledError) {
+      return Response.json({ error: (error as Error).message }, { status: 403 });
+    }
     if (error instanceof ConversationBudgetError) {
       await endForBudget(sessionId, orgId, error.block);
       return Response.json(

@@ -61,6 +61,7 @@ export function EvalPanel({
   contentHash,
   entitled,
   canRun,
+  llmEnabled,
 }: {
   draftId: string;
   cases: EvalCaseState[];
@@ -72,6 +73,16 @@ export function EvalPanel({
   entitled: boolean;
   /** False before anything has been written — there is no document to test. */
   canRun: boolean;
+  /**
+   * Whether this deployment calls models at all.
+   *
+   * Separate from `entitled`, and not folded into it, because they are opposite facts with
+   * opposite answers: an unentitled workspace is told what upgrading buys, and there is
+   * nothing here to buy. Writing cases stays open either way — a case is a claim about what
+   * the skill should do, it is worth recording before anything can run it, and the whole
+   * point of `evalStates` is that a verdict is stamped with the document it judged.
+   */
+  llmEnabled: boolean;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -378,21 +389,29 @@ export function EvalPanel({
               <Plus className="size-4" />
               Add a case
             </Button>
-            <Button
-              size="sm"
-              disabled={isPending || !canRun || cases.length === 0 || !entitled}
-              onClick={run}
-            >
-              {isPending ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-              Run stale cases
-            </Button>
+            {llmEnabled ? (
+              <Button
+                size="sm"
+                disabled={isPending || !canRun || cases.length === 0 || !entitled}
+                onClick={run}
+              >
+                {isPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Play className="size-4" />
+                )}
+                Run stale cases
+              </Button>
+            ) : null}
             {/*
               The gate is stated where the button is, and it says what writing still gets you.
               A disabled control with no explanation is the thing people file support tickets
               about — and the free tier really does keep the notepad.
             */}
             <span className="text-muted-foreground text-xs">
-              {!entitled
+              {!llmEnabled
+                ? "Cases are recorded but not run on this deployment. They are worth writing now: a case is a claim about what the skill should do, and a verdict is always stamped with the document it judged, so nothing written here goes stale by waiting."
+                : !entitled
                 ? "Running cases is part of the Eval Lab. Writing them is free, and the interview writes them for you."
                 : cases.length === 0
                   ? "Add a case first."

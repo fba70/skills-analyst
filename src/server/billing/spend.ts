@@ -5,6 +5,7 @@ import { and, eq, gte, isNull, sql } from "drizzle-orm";
 import { events, llmUsage } from "@/server/db/schema";
 import { db, type Db } from "@/server/db";
 import { costMicros, formatMicros, type TokenCounts } from "@/lib/llm-pricing";
+import { LLM_OFF_DETAIL, LLM_OFF_HEADLINE } from "@/lib/llm-mode";
 
 /**
  * Spend caps (Doc 2 RC.2), fail-closed.
@@ -55,6 +56,87 @@ function readMicros(key: string, fallbackDollars: number): number {
   const raw = Number(process.env[key]);
   const dollars = Number.isFinite(raw) && raw > 0 ? raw : fallbackDollars;
   return Math.round(dollars * 1_000_000);
+}
+
+/**
+ * The deployment-wide kill switch: may this deployment call a model at all?
+ *
+ * ## Why it is not a budget, an entitlement, or a setting
+ *
+ * The two budgets answer *how much*, per organisation and per platform, and both are sums
+ * over the ledger. This answers a different question — *at all* — and a cap of zero would be
+ * the wrong way to say it. `budgetState` would report a workspace that has spent its
+ * allowance, which is a sentence about money and about a reset next month, and the reader
+ * would be told to wait for something that will not change anything. Same mistake as
+ * measuring a gate with something that is not the gate.
+ *
+ * It is not an **entitlement** either. Entitlements are per organisation, stored in a table,
+ * and describe a customer. This describes a *deployment*, and a switch that lives in the
+ * database can be turned back on by anything that reaches the database — including a
+ * migration, a backfill, or an admin surface nobody meant to give that power to.
+ *
+ * ## Unset means off, for the reason `CRON_SECRET` fails closed
+ *
+ * The alternative — on by default, switched off by a variable somebody has to remember —
+ * spends real money in exactly the case the flag exists for: a deployment somebody forgot to
+ * configure. Off-by-default fails in the direction whose symptom is a refusal carrying a
+ * sentence. A local shell that wants the metered scripts sets `LLM_ENABLED=1` in `.env` once,
+ * and the three suites that spend say so already.
+ *
+ * ## It gates every purpose, including the platform ones
+ *
+ * Corpus taxonomy, embeddings and the decision surface run from a local terminal on a local
+ * `.env`, so switching a *deployment* off does not stop them. Exempting them here would mean
+ * the deployed cron route could still spend — and "nothing that costs money is scheduled" is a
+ * convention, while this is meant to be the mechanism.
+ *
+ * ## Read per call, not captured at module load
+ *
+ * The caps above are module-level constants and this is a function, and the difference is
+ * deliberate. A constant is captured when the module is first imported, and ESM hoists
+ * imports — so a caller that sets `process.env.LLM_ENABLED` above a static import sets it
+ * *after* the module already read it. That is the exact trap this codebase has paid for
+ * twice, and the consequence here is worse than a wrong number: **a suite could not observe
+ * the switch working**, which by the house rule is not evidence of anything.
+ *
+ * Reading an environment variable is a property lookup. There is nothing to cache.
+ */
+export function llmEnabled(): boolean {
+  const raw = (process.env.LLM_ENABLED ?? "").trim().toLowerCase();
+  /* Truthy spellings only. Anything else — including an empty string — is off. */
+  return raw === "1" || raw === "true" || raw === "on" || raw === "yes";
+}
+
+/**
+ * Thrown instead of calling a model, when this deployment has models switched off.
+ *
+ * Its own type rather than a `BudgetExceededError` with a different message, for the reason
+ * `UngateableError` is not an `EntitlementError`: *you have spent your allowance* and *this
+ * deployment does not call models* are facts about different subjects with different answers,
+ * and a `catch` that treats them alike gives the reader the wrong one.
+ */
+export class LlmDisabledError extends Error {
+  constructor() {
+    super(`${LLM_OFF_HEADLINE} ${LLM_OFF_DETAIL}`);
+    this.name = "LlmDisabledError";
+  }
+}
+
+/**
+ * Refuses before any budget is read, and before any model is reached.
+ *
+ * Called by `assertWithinBudget` and by `assertConversationBudget`, which between them are the
+ * two gates every model call in this codebase already passes. Putting the switch here rather
+ * than at each of the twelve call sites means a new one inherits it for free, and one that
+ * forgets the gate is the same missing line that already fails review — `verify:llm-off` scans
+ * for exactly that.
+ *
+ * Ordered *before* the budget read on purpose: a deployment with models off should not be
+ * running a sum over `llm_usage` to find that out, and the refusal must not depend on the
+ * database being reachable.
+ */
+export function assertLlmEnabled(): void {
+  if (!llmEnabled()) throw new LlmDisabledError();
 }
 
 /**
@@ -166,6 +248,7 @@ export async function assertWithinBudget(
   purpose: LlmPurpose,
   orgId: string | null,
 ): Promise<BudgetState> {
+  assertLlmEnabled();
   const state = await budgetState(purpose, orgId);
   if (state.remainingMicros <= 0) throw new BudgetExceededError(state);
   return state;

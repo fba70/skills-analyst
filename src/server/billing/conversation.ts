@@ -13,7 +13,7 @@ import {
 import { db } from "@/server/db";
 import { llmUsage } from "@/server/db/schema";
 
-import { budgetState } from "./spend";
+import { assertLlmEnabled, budgetState, llmEnabled, LlmDisabledError } from "./spend";
 
 /**
  * What one conversation has spent, and whether it may take another turn (plan step C2a).
@@ -146,6 +146,17 @@ export class ConversationBudgetError extends Error {
 export async function assertConversationBudget(
   input: ConversationBudgetInput,
 ): Promise<ConversationBudget> {
+  /*
+   * The deployment switch first, and before the three budget conditions rather than as a
+   * fourth `blockedBy`.
+   *
+   * `ConversationBlock` names three things an author can do something about — spend less,
+   * start a new conversation, take fewer turns. "This deployment does not call models" is
+   * none of those, and adding it to that union would put a sentence in the fuel gauge that no
+   * amount of fuel fixes. It is a different refusal, so it is a different error.
+   */
+  assertLlmEnabled();
+
   const budget = await conversationBudget(input);
   if (budget.blockedBy) {
     const org = await budgetState("builder", input.orgId);
@@ -165,6 +176,13 @@ export async function assertConversationBudget(
 export async function canStartConversation(
   orgId: string,
 ): Promise<{ ok: true; budget: ConversationBudget } | { ok: false; message: string }> {
+  /*
+   * Declined on the button, not at the first turn — which is the whole point of this function,
+   * and it applies more strongly here than to a thin budget: a conversation that cannot happen
+   * at all should never open, and opening one would cost a greeting that could not be sent.
+   */
+  if (!llmEnabled()) return { ok: false, message: new LlmDisabledError().message };
+
   const budget = await conversationBudget({ conversationId: "", orgId, turns: 0 });
   if (budget.remainingMicros < CONVERSATION_MIN_START_MICROS) {
     const org = await budgetState("builder", orgId);

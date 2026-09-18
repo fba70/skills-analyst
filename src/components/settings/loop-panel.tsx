@@ -1,3 +1,4 @@
+import { FIRST_PASS_TARGET, SUGGESTION_USE_TARGET } from "@/lib/gates";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -87,14 +88,17 @@ export function LoopPanel({
         <Metric
           label="First-pass valid"
           value={metrics.firstPassRate === null ? "—" : `${metrics.firstPassRate}%`}
-          detail="G3 target: 80%"
-          good={metrics.firstPassRate !== null && metrics.firstPassRate >= 80}
+          detail={`G3 target: ${FIRST_PASS_TARGET}%`}
+          good={metrics.firstPassRate !== null && metrics.firstPassRate >= FIRST_PASS_TARGET}
         />
         <Metric
           label="Used a suggestion"
           value={metrics.suggestionUseRate === null ? "—" : `${metrics.suggestionUseRate}%`}
-          detail="G4 target: 60%"
-          good={metrics.suggestionUseRate !== null && metrics.suggestionUseRate >= 60}
+          detail={`G4 target: ${SUGGESTION_USE_TARGET}%`}
+          good={
+            metrics.suggestionUseRate !== null &&
+            metrics.suggestionUseRate >= SUGGESTION_USE_TARGET
+          }
         />
       </div>
 

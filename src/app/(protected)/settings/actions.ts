@@ -31,6 +31,7 @@ import {
 import { setRateLimits, type RateLimitSettings } from "@/server/settings/rate-limits";
 import {
   approveRepo,
+  confirmQuarantine,
   rejectRepo,
   releaseFromQuarantine,
 } from "@/server/dal/curation";
@@ -310,6 +311,26 @@ export async function releaseAction(
     revalidatePath("/settings");
     revalidatePath("/skills");
     return { ok: true, message: "Released — the original verdicts are kept as history." };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * The other half of the spot-check: the curator looked, and the quarantine stands.
+ *
+ * Without it, agreeing with the analyzer writes nothing, so Doc 3's precision gate can only
+ * ever be computed as a lower bound that reads best when nobody is checking. This is the row
+ * that makes it a real measurement. It changes no status — the version stays quarantined.
+ */
+export async function confirmQuarantineAction(
+  versionId: string,
+  reason: string,
+): Promise<ActionResult> {
+  try {
+    await confirmQuarantine(versionId, reason);
+    revalidatePath("/settings");
+    return { ok: true, message: "Recorded — this one counts towards the precision gate." };
   } catch (error) {
     return failure(error);
   }

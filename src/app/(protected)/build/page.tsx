@@ -3,11 +3,12 @@ import Link from "next/link";
 
 import { BuilderWizard } from "@/components/builder/wizard";
 import { ImportPanel } from "@/components/builder/import-panel";
+import { LlmOffNotice } from "@/components/builder/llm-off-notice";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { builderCategories } from "@/server/builder/scaffold";
 import { listDrafts } from "@/server/builder/drafts";
-import { budgetState } from "@/server/billing/spend";
+import { budgetState, llmEnabled } from "@/server/billing/spend";
 import { formatMicros } from "@/lib/llm-pricing";
 import { requireSession } from "@/server/dal/session";
 import { labelFor } from "@/server/taxonomy/vocabulary";
@@ -27,6 +28,9 @@ export const metadata: Metadata = { title: "Build a skill" };
  */
 export default async function BuildPage() {
   const session = await requireSession();
+  // Resolved once per render and passed down, so the page and the wizard cannot disagree —
+  // and a client component could not read it at all without a second, public copy.
+  const aiOn = llmEnabled();
   const orgId = session.session.activeOrganizationId ?? null;
   const [categories, drafts, budget] = await Promise.all([
     builderCategories(),
@@ -43,13 +47,30 @@ export default async function BuildPage() {
         {/* The measure belongs on the prose, never on the page frame — every route in the
             app fills its shell, and a form is not a reason for this one to be the exception. */}
         <p className="text-muted-foreground max-w-3xl">
-          Start from what the corpus shows works in your category, add what is specific to
-          you, and let the assistant write the first draft. It is validated by the same
-          analyzers the registry uses before you see it.
+          {aiOn ? (
+            <>
+              Start from what the corpus shows works in your category, add what is specific to
+              you, and let the assistant write the first draft. It is validated by the same
+              analyzers the registry uses before you see it.
+            </>
+          ) : (
+            <>
+              Start from what the corpus shows works in your category, add what is specific to
+              you, and get a scaffold of the sections and blocks it recommends to fill in. It
+              is validated by the same analyzers the registry uses.
+            </>
+          )}
         </p>
       </div>
 
-      {budget.usedPercent >= 60 ? (
+      {/*
+        One notice or the other, never both. A budget is a statement about how much is left to
+        spend, and on a deployment that spends nothing it is an answer to a question nobody is
+        asking — worse, it implies the feature is there and merely rationed.
+      */}
+      {!aiOn ? <LlmOffNotice /> : null}
+
+      {aiOn && budget.usedPercent >= 60 ? (
         <Card className={budget.remainingMicros <= 0 ? "border-destructive/40" : undefined}>
           <CardContent className="py-3 text-sm">
             {budget.remainingMicros <= 0 ? (
@@ -108,7 +129,7 @@ export default async function BuildPage() {
         </div>
       ) : null}
 
-      <BuilderWizard categories={categories} />
+      <BuilderWizard categories={categories} llmEnabled={aiOn} />
 
       {/*
         Below the wizard, not beside it.

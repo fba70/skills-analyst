@@ -46,6 +46,7 @@ import { readHeartbeat } from "@/server/pipeline/heartbeat";
 import { staleSlices } from "@/server/validation/rescan";
 import { planRoster as listPlanRoster } from "@/server/dal/entitlements";
 import { outcomeSummary } from "@/server/analytics/outcomes";
+import { quarantinePrecision } from "@/server/analytics/precision";
 import { flagQueue, flagSummary } from "@/server/curation/flags";
 import { listMaintainers, maintainerSummary } from "@/server/curation/maintainers";
 import { isAdmin, listPlatformUsers, platformCounts } from "@/server/dal/admin";
@@ -155,7 +156,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
   );
 
   // Only the visible tab's data is loaded.
-  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, flags, platformBudget, breakdown, mcpUsage, metrics, activity, loopLog, linkRot, linkCoverage, trackedVersions, schedule, rateLimits, models, maintainerRoster, maintainerCounts] =
+  const [held, quarantined, sourceHealth, users, taxonomy, queue, diversity, freshness, backlog, runs, heartbeat, archetypeList, takedownList, planRoster, outcomes, flags, platformBudget, breakdown, mcpUsage, metrics, activity, loopLog, linkRot, linkCoverage, trackedVersions, schedule, rateLimits, models, maintainerRoster, maintainerCounts, precision] =
     await Promise.all([
     tab === "review" ? listHeldRepos(query) : null,
     tab === "quarantine" ? listQuarantined(query) : null,
@@ -187,6 +188,7 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
     tab === "models" ? getModelSettings() : null,
     tab === "maintainers" ? listMaintainers({ includeRevoked: true }) : null,
     tab === "maintainers" ? maintainerSummary() : null,
+    tab === "quarantine" ? quarantinePrecision() : null,
   ]);
 
   // Every tab except Ingestion is a paginated list.
@@ -429,8 +431,8 @@ export default async function SettingsPage(props: PageProps<"/settings">) {
           />
         ) : null}
         {tab === "review" && held ? <ReviewPanel repos={held.items} /> : null}
-        {tab === "quarantine" && quarantined ? (
-          <QuarantinePanel versions={quarantined.items} />
+        {tab === "quarantine" && quarantined && precision ? (
+          <QuarantinePanel versions={quarantined.items} precision={precision} />
         ) : null}
         {tab === "sources" && sourceHealth ? (
           <SourcesPanel

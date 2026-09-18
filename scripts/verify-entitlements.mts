@@ -1,5 +1,8 @@
 import "dotenv/config";
 
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+
 import { Client } from "pg";
 
 import {
@@ -263,6 +266,79 @@ if (connected) {
     );
   }
   await c.end();
+}
+
+// ---------------------------------------------------------------------------------------
+console.info("\nThe panel's \"live\" list, checked against the tree");
+// ---------------------------------------------------------------------------------------
+
+/**
+ * `LIVE_FEATURES` says which entitlement keys have a call site, and it cannot be derived at
+ * render time — "is there code that gates on this" is a question about the tree, not about
+ * the database. So it is a hand-written list, and a hand-written list goes stale silently.
+ *
+ * This one did. It named a single feature through a whole milestone in which Distill, the
+ * Eval Lab, the trigger lab, MCP authoring, shared blocks and capture campaigns all gained
+ * gates, so the admin panel reported six built features as "not built yet" — the same shape
+ * as the Loop panel telling an operator that `flagged` was uncollected while recording it.
+ *
+ * The fix is the one `UNIMPLEMENTED_KINDS` uses: assert the list against reality, in **both**
+ * directions, and name what to change. A key on the list with no call site is a claim that
+ * something is wired when it is not; a key off the list with one is the failure that happened.
+ */
+{
+  const panel = readFileSync("src/components/settings/plans-panel.tsx", "utf8");
+  /**
+   * Bounded to the array literal. The first version sliced to the end of the file and
+   * collected every quoted string after the declaration — Tailwind class names included —
+   * so it reported nine "features" to remove. A scanner that reads more than it means to
+   * is the same fault as one that reads its own prose.
+   */
+  const start = panel.indexOf("const LIVE_FEATURES");
+  const literal = panel.slice(start, panel.indexOf("]);", start));
+  const declared = new Set((literal.match(/"[a-z-]+"/g) ?? []).map((m) => m.slice(1, -1)));
+
+  const every = [...new Set(Object.values(PLAN_FEATURES).flat())].sort();
+  const referenced = new Set<string>();
+  for (const feature of every) {
+    /**
+     * `git grep` rather than a directory walk, so a key referenced only in an uncommitted
+     * file does not count as wired — the distinction `verify:tree` exists to make.
+     */
+    const hits = execFileSync("git", ["grep", "-l", `"${feature}"`, "--", "src"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .split("\n")
+      .filter((line) => line && line !== "src/lib/plans.ts" && !line.includes("plans-panel"));
+    if (hits.length > 0) referenced.add(feature);
+  }
+
+  const claimedNotWired = [...declared].filter((f) => !referenced.has(f));
+  const wiredNotClaimed = [...referenced].filter((f) => !declared.has(f));
+
+  check(
+    "every feature the panel calls live has a call site",
+    claimedNotWired.length === 0,
+    claimedNotWired.length === 0 ? `${declared.size} live` : `remove: ${claimedNotWired.join(", ")}`,
+  );
+  check(
+    "and every feature with a call site is called live",
+    wiredNotClaimed.length === 0,
+    wiredNotClaimed.length === 0
+      ? `${referenced.size} of ${every.length} wired`
+      : `add to LIVE_FEATURES: ${wiredNotClaimed.join(", ")}`,
+  );
+  check(
+    "the panel still says which features are not built",
+    /not built yet/.test(panel),
+    "a plan that silently unlocks nothing is a control that does nothing",
+  );
+  check(
+    "and it says billing is not live",
+    /Billing is not live/.test(panel) && /no checkout flow and no provider account/.test(panel),
+    "a Plans screen with three tiers reads as a commercial surface that works",
+  );
 }
 
 console.info(`\n${pass} passed, ${fail} failed\n`);

@@ -75,12 +75,20 @@ export function ParametersPanel({
   rules,
   coverage,
   disabled,
+  llmEnabled,
 }: {
   draftId: string;
   parameters: PanelParameter[];
   rules: PanelRule[];
   coverage: CoverageReport;
   disabled: boolean;
+  /**
+   * Whether this deployment calls models at all. Two of the controls here do and the rest do
+   * not, which is why the panel takes a flag rather than being hidden wholesale: declaring a
+   * parameter, editing its values, confirming a rule and rendering a table are deterministic,
+   * and they are what coverage is actually measured from.
+   */
+  llmEnabled: boolean;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -126,20 +134,22 @@ export function ParametersPanel({
         <section className="grid gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-medium">Parameters</h3>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={() => run(() => detectParametersAction(draftId))}
-            >
-              Detect from decision rules
-            </Button>
+            {llmEnabled ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => run(() => detectParametersAction(draftId))}
+              >
+                Detect from decision rules
+              </Button>
+            ) : null}
           </div>
           <p className="text-muted-foreground text-xs">
-            Detection reads each decision-rule block once with a small model and proposes what it
-            branches on. One metered call per block, against your workspace cap. Everything it
-            proposes waits for you.
+            {llmEnabled
+              ? "Detection reads each decision-rule block once with a small model and proposes what it branches on. One metered call per block, against your workspace cap. Everything it proposes waits for you."
+              : "Declare each parameter and the values it takes. Coverage counts a rule as covered when every value it branches on is declared, including an explicit otherwise — so a rule can reach full coverage entirely by hand."}
           </p>
 
           {accepted.length === 0 && pending.length === 0 ? (
@@ -371,57 +381,63 @@ export function ParametersPanel({
           </p>
         </section>
 
-        {/* ------------------------------------------------------------ consistency */}
-        <section className="grid gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-medium">Consistency</h3>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={busy || inStep.length < 2}
-              onClick={() =>
-                startTransition(async () => {
-                  const result = await consistencyAction(draftId);
-                  if (!result.ok) {
-                    toast.error(result.message);
-                    return;
-                  }
-                  setConsistency(result.data);
-                })
-              }
-            >
-              Check for contradictions
-            </Button>
-          </div>
-          <p className="text-muted-foreground text-xs">
-            Pairs of confirmed rules that can both fire and share a parameter, each judged once by a
-            small model: is there any one action that satisfies both? One metered call per pair.
-            Rules on different parameters are not compared.
-          </p>
-          {consistency ? (
-            consistency.pairsConsidered === 0 ? (
-              <p className="text-sm">No two confirmed rules can fire together on a shared parameter. Nothing to compare.</p>
-            ) : consistency.conflicts.length === 0 ? (
-              <p className="text-sm">
-                {consistency.pairsAsked} of {consistency.pairsConsidered} pairs checked, none contradict.
-                {consistency.stopped ? " Stopped early — the workspace budget refused." : ""}
-              </p>
-            ) : (
-              <ul className="grid gap-2">
-                {consistency.conflicts.map((f, i) => (
-                  <li key={i} className="border-destructive/40 grid gap-1 rounded-md border p-2 text-sm">
-                    <p>
-                      <span className="font-medium">&ldquo;{f.a.text}&rdquo;</span> against{" "}
-                      <span className="font-medium">&ldquo;{f.b.text}&rdquo;</span>
-                    </p>
-                    <p className="text-muted-foreground text-xs">{f.why}</p>
-                  </li>
-                ))}
-              </ul>
-            )
-          ) : null}
-        </section>
+        {/* ------------------------------------------------------------ consistency
+          The whole section, not just its button, when the deployment has models off: the blurb
+          below describes a metered call and the result area has nothing to hold. A heading
+          explaining a feature that is not there reads as a broken panel, not a configured one.
+        */}
+        {llmEnabled ? (
+          <section className="grid gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-medium">Consistency</h3>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy || inStep.length < 2}
+                onClick={() =>
+                  startTransition(async () => {
+                    const result = await consistencyAction(draftId);
+                    if (!result.ok) {
+                      toast.error(result.message);
+                      return;
+                    }
+                    setConsistency(result.data);
+                  })
+                }
+              >
+                Check for contradictions
+              </Button>
+            </div>
+            <p className="text-muted-foreground text-xs">
+              Pairs of confirmed rules that can both fire and share a parameter, each judged once by a
+              small model: is there any one action that satisfies both? One metered call per pair.
+              Rules on different parameters are not compared.
+            </p>
+            {consistency ? (
+              consistency.pairsConsidered === 0 ? (
+                <p className="text-sm">No two confirmed rules can fire together on a shared parameter. Nothing to compare.</p>
+              ) : consistency.conflicts.length === 0 ? (
+                <p className="text-sm">
+                  {consistency.pairsAsked} of {consistency.pairsConsidered} pairs checked, none contradict.
+                  {consistency.stopped ? " Stopped early — the workspace budget refused." : ""}
+                </p>
+              ) : (
+                <ul className="grid gap-2">
+                  {consistency.conflicts.map((f, i) => (
+                    <li key={i} className="border-destructive/40 grid gap-1 rounded-md border p-2 text-sm">
+                      <p>
+                        <span className="font-medium">&ldquo;{f.a.text}&rdquo;</span> against{" "}
+                        <span className="font-medium">&ldquo;{f.b.text}&rdquo;</span>
+                      </p>
+                      <p className="text-muted-foreground text-xs">{f.why}</p>
+                    </li>
+                  ))}
+                </ul>
+              )
+            ) : null}
+          </section>
+        ) : null}
       </CardContent>
     </Card>
   );

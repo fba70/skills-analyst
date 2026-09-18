@@ -55,8 +55,28 @@ export type PlanRow = {
   members: number;
 };
 
-/** The one feature with a live call site. Everything else is schema waiting for a build. */
-const LIVE_FEATURES = new Set(["mcp-elevated-limits"]);
+/**
+ * The features with a live call site, as of 2026-09-11.
+ *
+ * It is hand-written because it cannot be derived at render time — "is there code that gates
+ * on this key" is a question about the tree, not about the database — and a hand-written list
+ * goes stale silently. This one did: it named one feature for a milestone in which Distill,
+ * the Eval Lab, the trigger lab, MCP authoring, shared blocks and capture campaigns all
+ * gained gates, so the panel reported six built features as "not built yet".
+ *
+ * So it is **checked** rather than trusted, exactly as `UNIMPLEMENTED_KINDS` is:
+ * `verify:entitlements` scans `src/` for each key and fails when this list and the tree
+ * disagree in either direction, naming the feature to add or remove.
+ */
+const LIVE_FEATURES = new Set([
+  "distill",
+  "eval-lab",
+  "trigger-lab-full",
+  "mcp-create-skill",
+  "mcp-elevated-limits",
+  "shared-blocks",
+  "capture-campaigns",
+]);
 
 export function PlansPanel({ rows }: { rows: PlanRow[] }) {
   return (
@@ -136,6 +156,30 @@ export function PlansPanel({ rows }: { rows: PlanRow[] }) {
               )}
             </div>
           ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Billing is not live</CardTitle>
+          <CardDescription>
+            A plan is set here, by hand, and that is the only way a workspace changes tier.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="text-muted-foreground grid gap-2 text-sm">
+          <p>
+            The webhook receiver is built and verified — it checks the signature, refuses a
+            replay, and orders deliveries by the provider&rsquo;s own timestamp so a late
+            cancellation cannot downgrade a paying customer. What does not exist is
+            everything upstream of it: <strong>no checkout flow and no provider account</strong>,
+            so nothing links a customer id to a workspace and every delivery would land
+            unmapped for an admin to resolve.
+          </p>
+          <p>
+            Said here rather than left to be discovered, because a Plans screen with three
+            tiers on it reads as a commercial surface that works. Until a checkout exists,
+            setting a plan in this table is the product.
+          </p>
         </CardContent>
       </Card>
 

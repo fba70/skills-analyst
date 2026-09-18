@@ -333,16 +333,23 @@ async function applyGenerate(draftId: string, orgId: string): Promise<GenerateRe
     return { ok: true, refused: false, draftId };
   } catch (error) {
     /**
-     * A budget refusal is not a failure of the draft (RC.2).
+     * A budget refusal is not a failure of the draft (RC.2), and neither is a deployment with
+     * models switched off.
      *
-     * The inputs are fine and will work next month or after the cap is raised, so the draft
-     * stays `collecting` rather than being marked `failed` — a red "not written" card with
-     * a billing message underneath would tell the author to fix something that is not
-     * broken. The message is passed through verbatim because it already carries the cap,
-     * the spend and the reset date, which is the clear UX the requirement asks for.
+     * The inputs are fine and will work next month, or after the cap is raised, or on a
+     * deployment that calls models, so the draft stays `collecting` rather than being marked
+     * `failed` — a red "not written" card with a billing message underneath would tell the
+     * author to fix something that is not broken. The message is passed through verbatim
+     * because it already carries the cap, the spend and the reset date, which is the clear UX
+     * the requirement asks for; the switch's message says what still works instead.
+     *
+     * `LlmDisabledError` is listed here rather than left to the generic branch because the
+     * generic branch is for *this draft is broken*. The button that reaches this path is not
+     * rendered when the switch is off, but a server action is a POST endpoint and the page
+     * guard is not the operation's guard — so the path is reachable and has to be right.
      */
-    const { BudgetExceededError } = await import("@/server/billing/spend");
-    if (error instanceof BudgetExceededError) {
+    const { BudgetExceededError, LlmDisabledError } = await import("@/server/billing/spend");
+    if (error instanceof BudgetExceededError || error instanceof LlmDisabledError) {
       await withExplicitOrgScope(orgId, async (tx) => {
         await tx
           .update(skillDrafts)

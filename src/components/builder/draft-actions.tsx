@@ -30,6 +30,7 @@ export function DraftActions({
   canPublish,
   blocked,
   publishedSlug,
+  llmEnabled,
 }: {
   draftId: string;
   slug: string;
@@ -37,6 +38,8 @@ export function DraftActions({
   canPublish: boolean;
   blocked: boolean;
   publishedSlug: string | null;
+  /** False hides the rewrite. Export and publish are server compute and are unaffected. */
+  llmEnabled: boolean;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -180,19 +183,26 @@ export function DraftActions({
         </CardContent>
       </Card>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button variant="ghost" size="sm" onClick={regenerate} disabled={isPending || busy}>
-          {isPending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <RefreshCw className="size-4" />
-          )}
-          Write it again
-        </Button>
-        <span className="text-muted-foreground text-xs">
-          Uses the inputs already saved on this draft. One model call.
-        </span>
-      </div>
+      {/*
+        Rewriting is the only model call on this card, and it is the only thing hidden when the
+        deployment has models off. Export and publish are the two that matter most to somebody
+        who wrote the document themselves, and neither of them spends a token.
+      */}
+      {llmEnabled ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={regenerate} disabled={isPending || busy}>
+            {isPending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <RefreshCw className="size-4" />
+            )}
+            Write it again
+          </Button>
+          <span className="text-muted-foreground text-xs">
+            Uses the inputs already saved on this draft. One model call.
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }

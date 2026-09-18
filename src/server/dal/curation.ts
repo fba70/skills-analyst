@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray, or, sql } from "drizzle-orm";
 
 import { contentSourceAt, DISCOVERY_ONLY_KINDS } from "@/server/crawl/repo-identity";
 import { requireAdmin } from "@/server/dal/admin";
@@ -194,6 +194,22 @@ export async function rejectRepo(repoId: string, reason: string): Promise<void> 
   });
 }
 
+/**
+ * The two analyzer identities a **person** writes, and the only stored judgement about
+ * whether a quarantine was right.
+ *
+ * They are verdict rows rather than a column, for the reason `releaseFromQuarantine`
+ * already gives: the original verdicts are never edited, so a decision has to be a new
+ * append-only row that supersedes them. Reusing the table also means no migration and no
+ * second place to look for "what happened to this version".
+ *
+ * Neither affects the quality score: `scoreOf` sums the findings an analyzer *returned
+ * during a run*, never the stored rows, so recording a spot-check cannot move the number
+ * the spot-check is about.
+ */
+export const CURATOR_OVERRIDE = "curator-override";
+export const CURATOR_REVIEW = "curator-review";
+
 export type QuarantinedVersion = {
   versionId: string;
   skillId: string;
@@ -202,6 +218,8 @@ export type QuarantinedVersion = {
   sourceName: string | null;
   reasons: string[] | null;
   syncedAt: Date;
+  /** A curator has already spot-checked this one and let the quarantine stand. */
+  reviewed: boolean;
   findings: Array<{
     analyzer: string;
     reason: string;
@@ -274,12 +292,27 @@ export async function listQuarantined(
           verdicts.skillVersionId,
           rows.map((row) => row.versionId),
         ),
-        inArray(verdicts.result, ["fail", "error"]),
+        /**
+         * The findings, **and** the curator's own review row.
+         *
+         * Spelled out rather than relying on the review row's `result` happening to fall
+         * inside the first clause. It does today, and a later change to that value would
+         * silently empty the reviewed set while every finding still rendered — the failure
+         * this codebase keeps finding, where the check passes for a reason nobody chose.
+         */
+        or(inArray(verdicts.result, ["fail", "error"]), eq(verdicts.analyzer, CURATOR_REVIEW)),
       ),
     );
 
+  const reviewed = new Set(
+    verdictRows
+      .filter((verdict) => verdict.analyzer === CURATOR_REVIEW)
+      .map((verdict) => verdict.skillVersionId),
+  );
+
   const byVersion = new Map<string, QuarantinedVersion["findings"]>();
   for (const verdict of verdictRows) {
+    if (verdict.analyzer === CURATOR_REVIEW) continue;
     const evidence = (verdict.evidence ?? {}) as {
       findings?: Array<{
         reason: string;
@@ -298,8 +331,88 @@ export async function listQuarantined(
 
   return {
     ...empty,
-    items: rows.map((row) => ({ ...row, findings: byVersion.get(row.versionId) ?? [] })),
+    items: rows.map((row) => ({
+      ...row,
+      reviewed: reviewed.has(row.versionId),
+      findings: byVersion.get(row.versionId) ?? [],
+    })),
   };
+}
+
+/**
+ * Records that a curator looked at a quarantine and let it stand — the half of the spot-check
+ * that was never built.
+ *
+ * Doc 3 gates a rollout stage on **quarantine precision ≥90% on spot-check**, and three files
+ * said so while nothing computed it. The reason it could not be computed is that the schema
+ * only ever recorded the *disagreements*: `releaseFromQuarantine` writes a row, and agreeing
+ * with the analyzer wrote nothing at all. So "reviewed and correct" and "nobody has opened it"
+ * were the same silence, and the best any query could produce was a lower bound — which reads
+ * as a high precision exactly when nobody is checking.
+ *
+ * This is the other row. Status is deliberately unchanged: the version stays quarantined,
+ * because confirming a quarantine is a statement about the decision rather than a new decision.
+ *
+ * Idempotent by design. A second press is a no-op rather than a second row, so a double click
+ * cannot make one curator's judgement count twice in the denominator.
+ */
+export async function confirmQuarantine(versionId: string, reason: string): Promise<void> {
+  const actor = await requireAdmin();
+  if (!reason.trim()) {
+    // The same bar the release path sets. A spot-check with no note is not evidence, and
+    // this row is read back as evidence when the gate is reported.
+    throw new Error("A reason is required to confirm a quarantine");
+  }
+
+  await db.transaction(async (tx) => {
+    const [version] = await tx
+      .select({ id: skillVersions.id, orgId: skillVersions.orgId, status: skillVersions.status })
+      .from(skillVersions)
+      .where(eq(skillVersions.id, versionId))
+      .limit(1);
+    if (!version) throw new Error("Version not found");
+    if (version.status !== "quarantined") {
+      throw new Error(`Only a quarantined version can be confirmed (this one is ${version.status})`);
+    }
+
+    const [existing] = await tx
+      .select({ id: verdicts.id })
+      .from(verdicts)
+      .where(
+        and(eq(verdicts.skillVersionId, versionId), eq(verdicts.analyzer, CURATOR_REVIEW)),
+      )
+      .limit(1);
+    if (existing) return;
+
+    await tx.insert(verdicts).values({
+      orgId: version.orgId,
+      skillVersionId: versionId,
+      analyzer: CURATOR_REVIEW,
+      analyzerVersion: "1.0.0",
+      result: "fail",
+      /**
+       * `info`, not the severity of what was found.
+       *
+       * This row is a note about a decision, not a new defect, and the analyzer that found
+       * the defect already carries its own severity. Stamping a second `high` here would
+       * double-count the finding anywhere severities are summed.
+       */
+      severity: "info",
+      reason: "quarantine confirmed by a curator",
+      evidence: { reason, by: actor.email, confirms: "automated quarantine" },
+    });
+
+    await tx.insert(events).values({
+      orgId: version.orgId,
+      actorType: "user",
+      actorId: actor.userId,
+      kind: "skill_version.quarantine_confirmed",
+      subjectType: "skill_versions",
+      subjectId: versionId,
+      reason,
+      payload: { by: actor.email },
+    });
+  });
 }
 
 /**

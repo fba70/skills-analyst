@@ -54,7 +54,23 @@ const DIALECTS = [
   { id: "cursor_rule", label: "Cursor rule" },
 ] as const;
 
-export function BuilderWizard({ categories }: { categories: Category[] }) {
+/**
+ * `llmEnabled` is passed in rather than read here, and it is a prop rather than a
+ * `NEXT_PUBLIC_` variable, because the switch has exactly one definition — `LLM_ENABLED` in
+ * `server/billing/spend.ts`, which is `server-only`. A public copy would be a second source of
+ * truth for a kill switch, and the failure mode is that the page says one thing while the
+ * server does another.
+ *
+ * When it is false the wizard keeps its whole form: the inputs are what a scaffold is built
+ * from, so every step is still worth filling in. Only the model-backed *outcome* changes.
+ */
+export function BuilderWizard({
+  categories,
+  llmEnabled,
+}: {
+  categories: Category[];
+  llmEnabled: boolean;
+}) {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [category, setCategory] = useState<Category | null>(null);
@@ -234,7 +250,8 @@ export function BuilderWizard({ categories }: { categories: Category[] }) {
               Fed the name and the purpose together, because a name alone is too short to
               embed usefully and a purpose alone often omits the subject.
             */}
-            <SimilarSkills text={`${name}\n${purpose}`} />
+            {/* Similarity is an embedding call, so it goes with the rest of the model work. */}
+            {llmEnabled ? <SimilarSkills text={`${name}\n${purpose}`} /> : null}
 
             {/*
               Directly under similarity, because the two answer the same question from opposite
@@ -464,24 +481,51 @@ export function BuilderWizard({ categories }: { categories: Category[] }) {
               <ArrowLeft className="size-4" />
               Back
             </Button>
-            <Button onClick={submit} disabled={isPending}>
-              {isPending ? (
+            {llmEnabled ? (
+              <Button onClick={submit} disabled={isPending}>
+                {isPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Sparkles className="size-4" />
+                )}
+                Write the draft
+              </Button>
+            ) : null}
+            {/*
+              Scaffolding is the primary action when there is no model to call, and it is a
+              real one rather than a consolation: R4.6 exists because an author who knows what
+              they want does not need a draft written for them. Offering the model button
+              disabled would be advertising a feature this deployment does not have.
+            */}
+            <Button
+              variant={llmEnabled ? "outline" : "default"}
+              onClick={startBlank}
+              disabled={isPending}
+            >
+              {/* The spinner only where this is the primary button; otherwise it is beside one. */}
+              {isPending && !llmEnabled ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
-                <Sparkles className="size-4" />
+                <PencilLine className="size-4" />
               )}
-              Write the draft
-            </Button>
-            <Button variant="outline" onClick={startBlank} disabled={isPending}>
-              <PencilLine className="size-4" />
               Scaffold it, I will write it
             </Button>
           </div>
           <p className="text-muted-foreground text-xs">
-            Writing it costs one model call, and your inputs are saved first so a failure
-            costs the draft and not your typing. Scaffolding costs nothing: you get this
-            category&rsquo;s headings and one empty block of each type it recommends, and you
-            fill them in.
+            {llmEnabled ? (
+              <>
+                Writing it costs one model call, and your inputs are saved first so a failure
+                costs the draft and not your typing. Scaffolding costs nothing: you get this
+                category&rsquo;s headings and one empty block of each type it recommends, and
+                you fill them in.
+              </>
+            ) : (
+              <>
+                You get this category&rsquo;s headings and one empty block of each type it
+                recommends, derived from the archetype above, and you fill them in. The draft
+                is validated, versioned, published and exported exactly as a written one is.
+              </>
+            )}
           </p>
         </div>
       ) : null}

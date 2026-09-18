@@ -1,5 +1,17 @@
 import "dotenv/config";
 
+/*
+ * The deployment switch (`LLM_ENABLED`) is pinned on for this suite, because its subject is
+ * something else and it must not be able to pass by not running.
+ *
+ * Unset, the switch refuses every model call before any budget is read — which is what it is
+ * for, and which would turn the checks below into a suite that goes green having exercised
+ * nothing. That is the `verify:dedup` failure one level up: a check that asserted the data was
+ * tidy instead of attempting the insert whose failure was the bug. A suite asserts its own
+ * preconditions.
+ */
+process.env.LLM_ENABLED = "1";
+
 import { and, eq } from "drizzle-orm";
 
 import { db } from "../src/server/db";

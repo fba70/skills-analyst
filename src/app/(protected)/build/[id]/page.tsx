@@ -13,6 +13,7 @@ import { ParametersPanel } from "@/components/builder/parameters-panel";
 import { TriggerLab } from "@/components/builder/trigger-lab";
 import { RevisionHistory } from "@/components/builder/revision-history";
 import { DraftActions } from "@/components/builder/draft-actions";
+import { LlmOffNotice } from "@/components/builder/llm-off-notice";
 import { ActivationCostBadge } from "@/components/registry/activation-cost";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ import { blockDeviations } from "@/server/builder/deviation";
 import { getDraft } from "@/server/builder/drafts";
 import { listDistillRuns } from "@/server/distill/run";
 import { hasEntitlement } from "@/server/dal/entitlements";
+import { llmEnabled } from "@/server/billing/spend";
 import { getSkillsByIds } from "@/server/dal/skills";
 import { requireSession } from "@/server/dal/session";
 import { estimateTokens } from "@/lib/tokens";
@@ -47,6 +49,9 @@ export const metadata: Metadata = { title: "Draft" };
  */
 export default async function DraftPage(props: PageProps<"/build/[id]">) {
   const session = await requireSession();
+  // One read for the whole page: every panel below either spends or does not, and the two
+  // halves of this page must agree about which.
+  const aiOn = llmEnabled();
   const { id } = await props.params;
   // Org-scoped in the DAL: an id from another workspace resolves to nothing, so this is a
   // 404 rather than a permission error — which is also the right thing to leak.
@@ -283,6 +288,7 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
           rules={designer.rules}
           coverage={designer.coverage}
           disabled={draft.status === "generating"}
+          llmEnabled={aiOn}
         />
       ) : null}
 
@@ -336,6 +342,7 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         contentHash={contentHashOf(draft.body ?? "")}
         entitled={evalEntitled}
         canRun={Boolean(draft.body)}
+        llmEnabled={aiOn}
       />
 
       {/*
@@ -343,7 +350,7 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         change to the document rather than reporting on it — and because it needs the cases the
         panels above it exist to accumulate.
       */}
-      {draft.body ? (
+      {aiOn && draft.body ? (
         <OptimiserPanel
           draftId={draft.id}
           hasCases={evalCases.length > 0}
@@ -356,7 +363,7 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         that costs money and the only one that can produce an outcome signal, so it is also the
         last one an author reaches — by the time it is worth pressing, the document is finished.
       */}
-      {evalCases.some((c) => c.kind === "golden-task") ? (
+      {aiOn && evalCases.some((c) => c.kind === "golden-task") ? (
         <MatrixPanel
           draftId={draft.id}
           goldenTasks={evalCases.filter((c) => c.kind === "golden-task").length}
@@ -371,7 +378,9 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         rather than about this document, and folding the two together would suggest a single
         verdict where there are deliberately two.
       */}
-      {evalCases.some(
+      {/* The trigger lab embeds the description and every probe, so it spends like the rest. */}
+      {aiOn &&
+      evalCases.some(
         (c) => c.kind === "should-trigger" || c.kind === "should-not-trigger",
       ) ? (
         <TriggerLab draftId={draft.id} hasProbes />
@@ -393,50 +402,64 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         an author who tries both is not learning two interfaces — and the second is the one that
         costs nothing to attempt on a session that already exists.
       */}
-      <DistillPanel
-        draftId={draft.id}
-        entitled={distillEntitled as boolean}
-        runs={(distillRunRows as Awaited<ReturnType<typeof listDistillRuns>>).map((run) => ({
-          id: run.id,
-          label: run.label,
-          createdAt: run.createdAt.toISOString(),
-          turnsRead: run.turnsRead,
-          humanTurns: run.humanTurns,
-          toolResultsDropped: run.toolResultsDropped,
-          windowsFound: run.windowsFound,
-          windowsSent: run.windowsSent,
-          candidates: run.candidates.map((candidate) => ({
-            id: candidate.id,
-            type: candidate.type,
-            text: candidate.text,
-            decision: candidate.decision,
-          })),
-        }))}
-      />
+      {aiOn ? (
+        <>
+          <DistillPanel
+            draftId={draft.id}
+            entitled={distillEntitled as boolean}
+            runs={(distillRunRows as Awaited<ReturnType<typeof listDistillRuns>>).map((run) => ({
+              id: run.id,
+              label: run.label,
+              createdAt: run.createdAt.toISOString(),
+              turnsRead: run.turnsRead,
+              humanTurns: run.humanTurns,
+              toolResultsDropped: run.toolResultsDropped,
+              windowsFound: run.windowsFound,
+              windowsSent: run.windowsSent,
+              candidates: run.candidates.map((candidate) => ({
+                id: candidate.id,
+                type: candidate.type,
+                text: candidate.text,
+                decision: candidate.decision,
+              })),
+            }))}
+          />
 
-      <Interview
-        draftId={draft.id}
-        sessionId={activeSession?.id ?? null}
-        initialTurns={
-          activeSession
-            ? activeSession.turns.map((turn) =>
-                turn.role === "author"
-                  ? { role: "author" as const, text: turn.text }
-                  : {
-                      role: "assistant" as const,
-                      text: turn.text,
-                      candidates: turn.candidates.map((c) => ({
-                        id: c.id,
-                        type: c.type,
-                        text: c.editedText ?? c.text,
-                        decision: c.decision,
-                      })),
-                    },
-              )
-            : []
-        }
-        budget={activeSession?.budget ?? null}
-      />
+          <Interview
+            draftId={draft.id}
+            sessionId={activeSession?.id ?? null}
+            initialTurns={
+              activeSession
+                ? activeSession.turns.map((turn) =>
+                    turn.role === "author"
+                      ? { role: "author" as const, text: turn.text }
+                      : {
+                          role: "assistant" as const,
+                          text: turn.text,
+                          candidates: turn.candidates.map((c) => ({
+                            id: c.id,
+                            type: c.type,
+                            text: c.editedText ?? c.text,
+                            decision: c.decision,
+                          })),
+                        },
+                  )
+                : []
+            }
+            budget={activeSession?.budget ?? null}
+          />
+        </>
+      ) : (
+        /*
+         * One notice, where the two conversational panels were.
+         *
+         * Placed here rather than at the top of the page because this is the only part of the
+         * draft page that disappears entirely — the editor, validation, parameters, evals,
+         * revisions, export and publish are all still above and below it, and a banner at the
+         * top would read as a verdict on all of them.
+         */
+        <LlmOffNotice />
+      )}
 
       {/*
         History below validation, because that is the order of consequence again: validation
@@ -455,6 +478,7 @@ export default async function DraftPage(props: PageProps<"/build/[id]">) {
         canPublish={draft.status === "ready"}
         blocked={draft.validation?.blocked ?? false}
         publishedSlug={publishedSlug}
+        llmEnabled={aiOn}
       />
     </div>
   );
